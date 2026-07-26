@@ -335,8 +335,8 @@ jobs:
             301|308) ;;
             *) echo "Unexpected HTTP redirect status: ${redirect_status}" >&2; exit 1 ;;
           esac
-          if ! grep -Eiq '^location: https://app\.ci\.internal/healthz\r?$' "${redirect_headers}"; then
-            redirect_location="$(awk 'BEGIN { IGNORECASE=1 } /^location:/ { sub(/\r$/, ""); print; exit }' "${redirect_headers}")"
+          redirect_location="$(awk 'BEGIN { IGNORECASE=1 } /^location:/ { sub(/\r$/, ""); sub(/^[^:]+:[[:space:]]*/, ""); print; exit }' "${redirect_headers}")"
+          if [[ "${redirect_location}" != "https://app.ci.internal/healthz" ]]; then
             echo "Unexpected HTTP redirect location: ${redirect_location:-missing}" >&2
             exit 1
           fi

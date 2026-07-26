@@ -237,6 +237,12 @@ def main() -> None:
             "gateway must map host 80/443 to unprivileged container 8080/8443, "
             f"got {port_map}"
         )
+    if any(
+        str(item.get("host_ip", "")) != "0.0.0.0"
+        for item in gateway_ports
+        if isinstance(item, dict)
+    ):
+        fail("gateway host ports must bind explicitly on all IPv4 interfaces")
     tls_mount = mount_for_target(gateway, "/etc/caddy/tls")
     if (
         not tls_mount

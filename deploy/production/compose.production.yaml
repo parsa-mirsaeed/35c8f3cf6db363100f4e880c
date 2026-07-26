@@ -126,6 +126,7 @@ services:
       kong:
         condition: service_healthy
     networks:
+      - ingress
       - edge
       - supabase_api
       - admin
@@ -342,6 +343,13 @@ services:
       - no-new-privileges:true
 
 networks:
+  # Docker does not create host port bindings for a container attached only to
+  # internal networks. This dedicated bridge exists solely for host ingress;
+  # no backend or data service may attach to it.
+  ingress:
+    name: edutalent-ingress
+    driver: bridge
+    internal: false
   edge:
     name: edutalent-edge
     internal: true

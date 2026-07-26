@@ -5,6 +5,11 @@ complete official self-hosted Supabase Docker topology at the immutable commit
 recorded in `SUPABASE_UPSTREAM`, one authoritative Supabase PostgreSQL database,
 private Qdrant, static TLS, and a single public reverse proxy.
 
+Only the Caddy gateway joins the dedicated non-internal `edutalent-ingress`
+bridge required for Docker host-port publication. Application, Supabase,
+administration, and data traffic remain on separate internal networks; no
+backend or data service joins the ingress bridge.
+
 ## Capacity baseline
 
 The complete stack is substantially larger than the development Compose file.

@@ -94,7 +94,8 @@ Production does **not** use the lightweight standalone PostgreSQL/Supabase arran
 - Supabase PostgreSQL as the single authoritative database;
 - a generated non-superuser backend database role for the long-running app, separated from the migration/bootstrap administrator;
 - private Qdrant with API authentication;
-- separate internal API, data, and administration networks;
+- a gateway-only host-ingress bridge plus separate internal API, data, and
+  administration networks;
 - operator-supplied static TLS staged into a Docker-managed volume;
 - a numeric non-root Caddy gateway with zero effective Linux capabilities;
 - host ports 80/443 mapped to unprivileged container ports 8080/8443;
@@ -117,7 +118,12 @@ make production-qdrant-check
 
 The database check proves the app is not connected as `postgres`, cannot create roles/databases/schema objects or modify migration integrity state, and uses only the documented backend authority. That role intentionally has `BYPASSRLS` because the current Rust repository layer performs server-side authorization without transaction-local PostgreSQL request context; replacing it with a request-scoped `NOBYPASSRLS` role is tracked in issue #8. Supabase client roles remain governed by RLS.
 
-The gateway check proves the long-running proxy is non-root, has no effective capabilities, and reads a mode-600 private key owned by its configured numeric UID/GID. Qdrant readiness is verified separately because temporary vector-service unavailability must not prevent the core school platform and authentication services from starting. Durable ingestion jobs remain retryable.
+The gateway check proves host ports 80/443 are actually published, the
+long-running proxy is non-root with no effective capabilities, and it reads a
+mode-600 private key owned by its configured numeric UID/GID. Qdrant readiness
+is verified separately because temporary vector-service unavailability must not
+prevent the core school platform and authentication services from starting.
+Durable ingestion jobs remain retryable.
 
 See [`deploy/production/README.md`](deploy/production/README.md), the [architecture decision](docs/adr/0001-offline-first-production-architecture.md), and the [production threat model](docs/security/production-threat-model.md).
 

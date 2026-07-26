@@ -61,8 +61,9 @@ bootstrap/application database credentials.
 ### Public exposure of internal services
 
 Controls: rendered-Compose CI verification; only Caddy may publish host ports;
-PostgreSQL, Supavisor, Qdrant, Studio, and internal Supabase services are placed
-on internal networks.
+only Caddy joins the dedicated host-ingress bridge; and PostgreSQL, Supavisor,
+Qdrant, Studio, and internal Supabase services remain exclusively on internal
+networks. The ingress bridge contains no backend or data service.
 
 ### Malicious or malformed PDFs
 

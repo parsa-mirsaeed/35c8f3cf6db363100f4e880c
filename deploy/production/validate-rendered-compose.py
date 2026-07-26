@@ -164,8 +164,13 @@ def main() -> None:
         )
         for network_key in attached_names:
             network = networks.get(network_key)
-            if not isinstance(network, dict) or network.get("internal") is not True:
-                fail(f"service {name} is attached to non-internal network {network_key}")
+            if not isinstance(network, dict):
+                fail(f"service {name} references missing network {network_key}")
+            if network.get("internal") is True:
+                continue
+            if name == "gateway" and network_key == "ingress":
+                continue
+            fail(f"service {name} is attached to non-internal network {network_key}")
 
         if name in {"gateway", "app", "qdrant", "embedding"}:
             limit = service_cpu_limit(service)
@@ -269,6 +274,14 @@ def main() -> None:
         fail("gateway must wait for successful state and TLS initialization")
     if gateway.get("entrypoint") != ["/etc/caddy/tls/caddy"]:
         fail("gateway must execute the capability-free Caddy binary staged by initialization")
+    gateway_networks = gateway.get("networks", {}) or {}
+    gateway_network_names = (
+        set(gateway_networks)
+        if isinstance(gateway_networks, dict)
+        else set(gateway_networks)
+    )
+    if "ingress" not in gateway_network_names:
+        fail("gateway must attach to the dedicated host-ingress network")
 
     for network_name in (
         "edutalent-edge",
@@ -281,6 +294,25 @@ def main() -> None:
         ]
         if len(matches) != 1 or matches[0].get("internal") is not True:
             fail(f"network {network_name} must exist and be internal")
+    non_internal_networks = {
+        key
+        for key, value in networks.items()
+        if not isinstance(value, dict) or value.get("internal") is not True
+    }
+    if non_internal_networks != {"ingress"}:
+        fail(
+            "ingress must be the only non-internal network, "
+            f"got {sorted(non_internal_networks)}"
+        )
+    ingress_matches = [
+        value for value in networks.values() if value.get("name") == "edutalent-ingress"
+    ]
+    if (
+        len(ingress_matches) != 1
+        or ingress_matches[0].get("internal") is not False
+        or ingress_matches[0].get("driver") != "bridge"
+    ):
+        fail("edutalent-ingress must be the single non-internal bridge network")
 
     gateway_env = gateway.get("environment", {}) or {}
     if not str(gateway_env.get("ADMIN_ALLOWED_CIDRS", "")).strip():

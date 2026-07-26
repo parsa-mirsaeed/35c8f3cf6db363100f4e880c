@@ -197,6 +197,16 @@ case "${command}" in
     '
     ;;
   gateway-check)
+    http_binding="$(compose port gateway 8080)"
+    https_binding="$(compose port gateway 8443)"
+    [[ "${http_binding}" == "0.0.0.0:80" ]] || {
+      echo "Gateway HTTP port is not published as 0.0.0.0:80 (got ${http_binding:-none})." >&2
+      exit 1
+    }
+    [[ "${https_binding}" == "0.0.0.0:443" ]] || {
+      echo "Gateway HTTPS port is not published as 0.0.0.0:443 (got ${https_binding:-none})." >&2
+      exit 1
+    }
     compose exec -T gateway sh -eu -s <<'SH'
       key=/etc/caddy/tls/privkey.pem
       cert=/etc/caddy/tls/fullchain.pem
@@ -219,6 +229,7 @@ case "${command}" in
       [ "${cap_eff}" = "0000000000000000" ]
       echo "Non-root capability-free gateway TLS and persistent state verified."
 SH
+    echo "Gateway host bindings 80/443 verified."
     ;;
   qdrant-check)
     compose exec -T app sh -eu -c '

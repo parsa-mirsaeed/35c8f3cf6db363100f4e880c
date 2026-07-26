@@ -335,23 +335,38 @@ jobs:
             301|308) ;;
             *) echo "Unexpected HTTP redirect status: ${redirect_status}" >&2; exit 1 ;;
           esac
-          grep -Eiq '^location: https://app\.ci\.internal/healthz\r?$' "${redirect_headers}"
+          if ! grep -Eiq '^location: https://app\.ci\.internal/healthz\r?$' "${redirect_headers}"; then
+            redirect_location="$(awk 'BEGIN { IGNORECASE=1 } /^location:/ { sub(/\r$/, ""); print; exit }' "${redirect_headers}")"
+            echo "Unexpected HTTP redirect location: ${redirect_location:-missing}" >&2
+            exit 1
+          fi
+          echo "HTTP-to-HTTPS redirect boundary verified."
 
           curl --fail --silent --show-error --insecure \
             --resolve app.ci.internal:443:127.0.0.1 \
             https://app.ci.internal/healthz >/dev/null
+          echo "Application HTTPS health boundary verified."
 
           publishable_key="$(awk -F= '$1 == "SUPABASE_PUBLISHABLE_KEY" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
           secret_key="$(awk -F= '$1 == "SUPABASE_SECRET_KEY" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
+          if [[ -z "${publishable_key}" || -z "${secret_key}" ]]; then
+            echo "Generated Supabase API keys are missing." >&2
+            exit 1
+          fi
           curl --fail --silent --show-error --insecure \
             --resolve supabase.ci.internal:443:127.0.0.1 \
             -H "apikey: ${publishable_key}" \
             https://supabase.ci.internal/auth/v1/health >/dev/null
+          echo "Supabase Auth health boundary verified."
 
           functions_status="$(curl --silent --insecure --output /dev/null --write-out '%{http_code}' \
             --resolve supabase.ci.internal:443:127.0.0.1 \
             https://supabase.ci.internal/functions/v1/health)"
-          test "${functions_status}" = "404"
+          if [[ "${functions_status}" != "404" ]]; then
+            echo "Inactive Edge Functions route returned ${functions_status}, expected 404." >&2
+            exit 1
+          fi
+          echo "Inactive Edge Functions ingress boundary verified."
 
           test_email="ci-$(date +%s)-${RANDOM}@example.invalid"
           test_password="Ci-$(openssl rand -hex 16)-Aa1!"
@@ -363,7 +378,8 @@ jobs:
             -H 'Content-Type: application/json' \
             --data "${create_payload}" \
             https://supabase.ci.internal/auth/v1/admin/users > "${RUNNER_TEMP}/created-user.json"
-          python3 -c 'import json,sys; assert json.load(open(sys.argv[1], encoding="utf-8")).get("id")' "${RUNNER_TEMP}/created-user.json"
+          python3 -c 'import json,sys; assert json.load(open(sys.argv[1], encoding="utf-8")).get("id"), "admin user response is missing an id"' "${RUNNER_TEMP}/created-user.json"
+          echo "Supabase secret-key administrative boundary verified."
 
           login_payload="$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"password":sys.argv[2]}))' "${test_email}" "${test_password}")"
           curl --fail --silent --show-error --insecure \
@@ -395,16 +411,30 @@ jobs:
               and key.get("alg") == "ES256"
               for key in keys
           ), "token kid missing from local ES256 JWKS"
+          print("Supabase password login and local ES256 JWKS boundary verified.")
           PY
 
           admin_status="$(curl --silent --insecure --output /dev/null --write-out '%{http_code}' \
             --resolve admin.ci.internal:443:127.0.0.1 \
             https://admin.ci.internal/)"
-          test "${admin_status}" = "401"
+          if [[ "${admin_status}" != "401" ]]; then
+            echo "Administrative gateway returned ${admin_status}, expected 401." >&2
+            exit 1
+          fi
+          echo "Administrative source-network and Basic Auth boundary verified."
 
-          ! curl --silent --insecure \
+          curl --fail --silent --show-error --insecure \
             --resolve app.ci.internal:443:127.0.0.1 \
-            https://app.ci.internal/ | grep -Fq "${secret_key}"
+            https://app.ci.internal/ > "${RUNNER_TEMP}/app-homepage.html"
+          python3 - "${secret_key}" "${RUNNER_TEMP}/app-homepage.html" <<'PY'
+          import sys
+
+          secret, body_path = sys.argv[1:]
+          body = open(body_path, encoding="utf-8").read()
+          if secret in body:
+              raise SystemExit("Supabase secret key was exposed in the application response")
+          print("Application response secret-exclusion boundary verified.")
+          PY
 
       - name: Show service state on failure
         if: failure()

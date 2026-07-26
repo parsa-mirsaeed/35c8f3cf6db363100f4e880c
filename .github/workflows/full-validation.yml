@@ -1,0 +1,206 @@
+name: Full Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - labeled
+      - synchronize
+      - reopened
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 1 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-validation-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: "1"
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/edutalent_ci
+
+jobs:
+  eligibility:
+    name: Resolve full-validation mode
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_full: ${{ steps.mode.outputs.run_full }}
+    steps:
+      - id: mode
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+
+          run_full=false
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            run_full=true
+          elif [[ ",${LABELS}," == *",full-validation,"* ]]; then
+            run_full=true
+          fi
+
+          echo "run_full=$run_full" >> "$GITHUB_OUTPUT"
+          echo "Full validation selected: $run_full"
+
+  database:
+    name: Full database validation
+    needs: eligibility
+    if: needs.eligibility.outputs.run_full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: edutalent_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d edutalent_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Verify PostgreSQL client tools
+        run: |
+          command -v psql
+          command -v pg_dump
+          command -v pg_restore
+
+      - name: Apply and replay every migration
+        run: |
+          set -o pipefail
+          bash scripts/ci/apply_migrations.sh 2>&1 | tee full-migration.log
+          bash scripts/ci/apply_migrations.sh 2>&1 | tee -a full-migration.log
+
+      - name: Verify governed schema and security
+        run: |
+          set -o pipefail
+          bash scripts/ci/verify_knowledge_schema.sh 2>&1 | tee full-schema-verification.log
+          bash scripts/ci/verify_knowledge_security.sh 2>&1 | tee full-security-verification.log
+
+      - name: Export verified schema
+        run: pg_dump --format=custom --no-owner --no-acl --file=edutalent-full-schema.dump "$DATABASE_URL"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-validation-database
+          path: |
+            full-migration.log
+            full-schema-verification.log
+            full-security-verification.log
+            edutalent-full-schema.dump
+          if-no-files-found: warn
+          retention-days: 7
+
+  rust:
+    name: Full Rust compile, lint, and tests
+    needs:
+      - eligibility
+      - database
+    if: needs.eligibility.outputs.run_full == 'true' && needs.database.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: edutalent_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d edutalent_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: full-validation-rust
+          cache-on-failure: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: full-validation-database
+
+      - name: Restore verified schema
+        run: pg_restore --clean --if-exists --no-owner --no-acl --dbname="$DATABASE_URL" edutalent-full-schema.dump
+
+      - name: Run complete Rust validation
+        run: |
+          set -euo pipefail
+          cargo check --workspace --all-targets --locked --message-format=short
+          cargo check -p api --features server --all-targets --locked --message-format=short
+          cargo clippy -p api --features server --lib --tests --locked --message-format=short -- \
+            -A warnings -D clippy::correctness -D clippy::suspicious
+          cargo test -p api --features server --lib --locked
+          cargo check -p web --features server --all-targets --locked --message-format=short
+          cargo clippy -p web --features server --all-targets --locked --message-format=short -- \
+            -A warnings -D clippy::correctness -D clippy::suspicious
+          cargo test -p web --features server --locked
+
+  gate:
+    name: Full validation gate
+    if: always() && needs.eligibility.outputs.run_full == 'true'
+    needs:
+      - eligibility
+      - database
+      - rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enforce final outcomes
+        shell: bash
+        env:
+          RUN_FULL: ${{ needs.eligibility.outputs.run_full }}
+          ELIGIBILITY_RESULT: ${{ needs.eligibility.result }}
+          DATABASE_RESULT: ${{ needs.database.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          test "$ELIGIBILITY_RESULT" = "success"
+          test "$DATABASE_RESULT" = "success"
+          test "$RUST_RESULT" = "success"
+
+          cat > full-validation-evidence.json <<EOF
+          {
+            "head_sha": "${HEAD_SHA}",
+            "database": "${DATABASE_RESULT}",
+            "rust": "${RUST_RESULT}"
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: full-validation-evidence
+          path: full-validation-evidence.json
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,427 @@
+name: Production Foundation
+
+on:
+  pull_request:
+    paths:
+      - deploy/production/**
+      - docs/adr/**
+      - docs/security/**
+      - packages/api/src/services/supabase_auth.rs
+      - scripts/ci/apply_migrations.sh
+      - scripts/ci/configure_database_role.sh
+      - docker/entrypoint.sh
+      - Dockerfile
+      - edutalent
+      - Makefile
+      - README.md
+      - .github/workflows/production-foundation.yml
+  push:
+    branches:
+      - main
+    paths:
+      - deploy/production/**
+      - packages/api/src/services/supabase_auth.rs
+      - scripts/ci/apply_migrations.sh
+      - scripts/ci/configure_database_role.sh
+      - docker/entrypoint.sh
+      - Dockerfile
+      - edutalent
+      - Makefile
+      - .github/workflows/production-foundation.yml
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Render and verify production topology
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Validate executable syntax
+        shell: bash
+        run: |
+          bash -n \
+            edutalent \
+            docker/entrypoint.sh \
+            scripts/ci/apply_migrations.sh \
+            scripts/ci/configure_database_role.sh \
+            deploy/production/bootstrap-supabase.sh \
+            deploy/production/generate-secrets.sh \
+            deploy/production/preflight.sh \
+            deploy/production/edutalent-production
+          python3 -m py_compile deploy/production/validate-rendered-compose.py
+
+      - name: Materialize pinned official Supabase runtime
+        run: bash edutalent production-bootstrap
+
+      - name: Create non-production validation configuration
+        shell: bash
+        run: |
+          cp deploy/production/.env.edutalent.example deploy/production/.env.edutalent
+          sed -i \
+            -e 's/app.example.invalid/app.ci.internal/' \
+            -e 's/supabase.example.invalid/supabase.ci.internal/' \
+            -e 's/admin.example.invalid/admin.ci.internal/' \
+            -e 's|^ADMIN_ALLOWED_CIDRS=.*|ADMIN_ALLOWED_CIDRS=127.0.0.1/32 172.16.0.0/12|' \
+            -e "s|TLS_CERT_FILE=.*|TLS_CERT_FILE=${RUNNER_TEMP}/tls/fullchain.pem|" \
+            -e "s|TLS_KEY_FILE=.*|TLS_KEY_FILE=${RUNNER_TEMP}/tls/privkey.pem|" \
+            deploy/production/.env.edutalent
+          chmod 600 deploy/production/.env.edutalent
+          mkdir -p "${RUNNER_TEMP}/tls"
+          openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
+            -subj '/CN=app.ci.internal' \
+            -addext 'subjectAltName=DNS:app.ci.internal,DNS:supabase.ci.internal,DNS:admin.ci.internal' \
+            -keyout "${RUNNER_TEMP}/tls/privkey.pem" \
+            -out "${RUNNER_TEMP}/tls/fullchain.pem" >/dev/null 2>&1
+
+      - name: Generate isolated validation secrets
+        run: bash edutalent production-init
+
+      - name: Enforce production security invariants
+        shell: bash
+        run: |
+          set -o pipefail
+          bash edutalent production-validate 2>&1 | tee production-preflight.log
+
+      - name: Confirm strict runtime boundaries
+        shell: bash
+        run: |
+          grep -Fxq 'd863da8680f24ceb4bb6e13134bc8a2d8835bcf4' deploy/production/runtime/supabase/UPSTREAM_COMMIT
+          ! grep -R --line-number --fixed-strings '/var/run/docker.sock' deploy/production/compose.production.yaml
+          ! grep -R --line-number --fixed-strings 'rm -rf "${RUNTIME_DIR}"' deploy/production/bootstrap-supabase.sh
+          grep -Fq 'ports: !reset []' deploy/production/compose.production.yaml
+          grep -Fq 'internal: true' deploy/production/compose.production.yaml
+          grep -Fq 'SUPABASE_JWT_ISSUER' deploy/production/compose.production.yaml
+          grep -Fq 'production-database-check' edutalent
+          grep -Fq 'production-gateway-check' edutalent
+          grep -Fq 'production-qdrant-check' edutalent
+          grep -Fq 'chown -R "$${GATEWAY_UID}:$${GATEWAY_GID}" /data /config' deploy/production/compose.production.yaml
+          grep -Fq 'caddy-data:/data' deploy/production/compose.production.yaml
+          grep -Fq 'caddy-config:/config' deploy/production/compose.production.yaml
+          grep -Fq 'NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS' scripts/ci/configure_database_role.sh
+          grep -Fq 'true|false|false|false|false|false|true' scripts/ci/configure_database_role.sh
+          grep -Fq '[ "${super}" = "false" ]' deploy/production/edutalent-production
+
+      - name: Upload preflight diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-preflight-diagnostics
+          path: production-preflight.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  supabase-migrations:
+    name: Apply migrations and roles on pinned Supabase PostgreSQL 17
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Materialize pinned official Supabase runtime
+        run: bash edutalent production-bootstrap
+
+      - name: Generate isolated Supabase database configuration
+        shell: bash
+        run: |
+          cp deploy/production/.env.edutalent.example deploy/production/.env.edutalent
+          sed -i \
+            -e 's/app.example.invalid/app.ci.internal/' \
+            -e 's/supabase.example.invalid/supabase.ci.internal/' \
+            -e 's/admin.example.invalid/admin.ci.internal/' \
+            deploy/production/.env.edutalent
+          chmod 600 deploy/production/.env.edutalent
+          bash edutalent production-init
+
+      - name: Start pinned Supabase PostgreSQL only
+        shell: bash
+        run: |
+          export EDUTALENT_PRODUCTION_DIR="${GITHUB_WORKSPACE}/deploy/production"
+          docker compose \
+            --project-name edutalent \
+            --project-directory deploy/production/runtime/supabase \
+            --env-file deploy/production/runtime/supabase/.env \
+            --env-file deploy/production/.env.edutalent \
+            -f deploy/production/runtime/supabase/docker-compose.yml \
+            -f deploy/production/compose.production.yaml \
+            up --detach --wait db
+
+      - name: Apply repository migrations twice on Supabase PostgreSQL 17
+        shell: bash
+        run: |
+          set -o pipefail
+          postgres_password="$(awk -F= '$1 == "POSTGRES_PASSWORD" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
+          postgres_db="$(awk -F= '$1 == "POSTGRES_DB" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
+          docker exec supabase-db mkdir -p \
+            /tmp/edutalent/packages/api/migration/migrations \
+            /tmp/edutalent/migrations \
+            /tmp/edutalent/scripts/ci
+          docker cp packages/api/migration/migrations/. supabase-db:/tmp/edutalent/packages/api/migration/migrations/
+          docker cp migrations/. supabase-db:/tmp/edutalent/migrations/
+          docker cp scripts/ci/apply_migrations.sh supabase-db:/tmp/edutalent/scripts/ci/apply_migrations.sh
+          docker cp scripts/ci/configure_database_role.sh supabase-db:/tmp/edutalent/scripts/ci/configure_database_role.sh
+          for pass in 1 2; do
+            echo "Supabase PostgreSQL migration execution ${pass}"
+            docker exec \
+              --workdir /tmp/edutalent \
+              --env "DATABASE_URL=postgresql://postgres:${postgres_password}@127.0.0.1:5432/${postgres_db:-postgres}" \
+              supabase-db \
+              bash scripts/ci/apply_migrations.sh
+          done 2>&1 | tee supabase-migrations.log
+
+      - name: Configure and verify dedicated backend role
+        shell: bash
+        run: |
+          set -o pipefail
+          postgres_password="$(awk -F= '$1 == "POSTGRES_PASSWORD" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
+          postgres_db="$(awk -F= '$1 == "POSTGRES_DB" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
+          app_user="$(awk -F= '$1 == "DATABASE_APP_USER" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/.env.edutalent)"
+          app_password="$(awk -F= '$1 == "DATABASE_APP_PASSWORD" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/.env.edutalent)"
+          docker exec \
+            --workdir /tmp/edutalent \
+            --env "DATABASE_ADMIN_URL=postgresql://postgres:${postgres_password}@127.0.0.1:5432/${postgres_db:-postgres}" \
+            --env "DATABASE_APP_USER=${app_user}" \
+            --env "DATABASE_APP_PASSWORD=${app_password}" \
+            supabase-db \
+            bash scripts/ci/configure_database_role.sh 2>&1 | tee -a supabase-migrations.log
+
+          # PostgreSQL boolean values explicitly cast to text are true/false.
+          role_row="$(docker exec \
+            --env "PGPASSWORD=${app_password}" \
+            supabase-db \
+            psql -h 127.0.0.1 -U "${app_user}" -d "${postgres_db:-postgres}" \
+              --tuples-only --no-align --field-separator='|' \
+              --command="SELECT current_user, rolsuper::text, rolinherit::text, rolcreatedb::text, rolcreaterole::text, rolreplication::text, rolbypassrls::text FROM pg_roles WHERE rolname = current_user")"
+          echo "Observed backend role state: ${role_row}" | tee -a supabase-migrations.log
+          IFS='|' read -r role super inherit createdb createrole replication bypassrls <<<"${role_row}"
+          test "${role}" = "${app_user}"
+          test "${super}" = "false"
+          test "${inherit}" = "false"
+          test "${createdb}" = "false"
+          test "${createrole}" = "false"
+          test "${replication}" = "false"
+          test "${bypassrls}" = "true"
+          test "$(docker exec --env "PGPASSWORD=${app_password}" supabase-db \
+            psql -h 127.0.0.1 -U "${app_user}" -d "${postgres_db:-postgres}" -Atc \
+            "SELECT has_schema_privilege(current_user, 'public', 'CREATE')")" = "f"
+          test "$(docker exec --env "PGPASSWORD=${app_password}" supabase-db \
+            psql -h 127.0.0.1 -U "${app_user}" -d "${postgres_db:-postgres}" -Atc \
+            "SELECT has_table_privilege(current_user, 'public.users', 'SELECT')")" = "t"
+          test "$(docker exec --env "PGPASSWORD=${app_password}" supabase-db \
+            psql -h 127.0.0.1 -U "${app_user}" -d "${postgres_db:-postgres}" -Atc \
+            "SELECT has_table_privilege(current_user, 'public.edutalent_migration_files', 'INSERT')")" = "f"
+          echo "Dedicated backend database role verified." | tee -a supabase-migrations.log
+
+      - name: Upload Supabase migration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-postgres-migration-diagnostics
+          path: supabase-migrations.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop migration database
+        if: always()
+        shell: bash
+        run: |
+          export EDUTALENT_PRODUCTION_DIR="${GITHUB_WORKSPACE}/deploy/production"
+          docker compose \
+            --project-name edutalent \
+            --project-directory deploy/production/runtime/supabase \
+            --env-file deploy/production/runtime/supabase/.env \
+            --env-file deploy/production/.env.edutalent \
+            -f deploy/production/runtime/supabase/docker-compose.yml \
+            -f deploy/production/compose.production.yaml \
+            down --volumes --remove-orphans || true
+
+  smoke:
+    name: Start complete production stack
+    if: github.event_name != 'pull_request'
+    needs:
+      - validate
+      - supabase-migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EDUTALENT_BUILD_CACHE_SCOPE: edutalent-runtime
+      COMPOSE_PARALLEL_LIMIT: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          name: edutalent-builder
+          keep-state: true
+
+      - name: Build the exact EduTalent runtime image
+        run: bash edutalent build local
+
+      - name: Materialize pinned official Supabase runtime
+        run: bash edutalent production-bootstrap
+
+      - name: Create isolated smoke configuration and TLS
+        shell: bash
+        run: |
+          cp deploy/production/.env.edutalent.example deploy/production/.env.edutalent
+          sed -i \
+            -e 's/app.example.invalid/app.ci.internal/' \
+            -e 's/supabase.example.invalid/supabase.ci.internal/' \
+            -e 's/admin.example.invalid/admin.ci.internal/' \
+            -e 's|^ADMIN_ALLOWED_CIDRS=.*|ADMIN_ALLOWED_CIDRS=127.0.0.1/32 172.16.0.0/12|' \
+            -e "s|TLS_CERT_FILE=.*|TLS_CERT_FILE=${RUNNER_TEMP}/tls/fullchain.pem|" \
+            -e "s|TLS_KEY_FILE=.*|TLS_KEY_FILE=${RUNNER_TEMP}/tls/privkey.pem|" \
+            deploy/production/.env.edutalent
+          chmod 600 deploy/production/.env.edutalent
+          mkdir -p "${RUNNER_TEMP}/tls"
+          openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
+            -subj '/CN=app.ci.internal' \
+            -addext 'subjectAltName=DNS:app.ci.internal,DNS:supabase.ci.internal,DNS:admin.ci.internal' \
+            -keyout "${RUNNER_TEMP}/tls/privkey.pem" \
+            -out "${RUNNER_TEMP}/tls/fullchain.pem" >/dev/null 2>&1
+          bash edutalent production-init
+
+      - name: Start complete production topology
+        shell: bash
+        run: |
+          set -o pipefail
+          bash edutalent production-up 2>&1 | tee production-startup.log
+
+      - name: Verify constrained backend database identity
+        shell: bash
+        run: |
+          set -o pipefail
+          bash edutalent production-database-check 2>&1 | tee -a production-startup.log
+
+      - name: Verify non-root capability-free gateway state
+        shell: bash
+        run: |
+          set -o pipefail
+          bash edutalent production-gateway-check 2>&1 | tee -a production-startup.log
+
+      - name: Verify private Qdrant readiness
+        shell: bash
+        run: |
+          set -o pipefail
+          bash edutalent production-qdrant-check 2>&1 | tee -a production-startup.log
+
+      - name: Verify public, authentication, and administrative boundaries
+        shell: bash
+        run: |
+          redirect_headers="${RUNNER_TEMP}/redirect-headers.txt"
+          redirect_status="$(curl --silent --show-error --output /dev/null \
+            --dump-header "${redirect_headers}" --write-out '%{http_code}' \
+            --resolve app.ci.internal:80:127.0.0.1 \
+            http://app.ci.internal/healthz)"
+          case "${redirect_status}" in
+            301|308) ;;
+            *) echo "Unexpected HTTP redirect status: ${redirect_status}" >&2; exit 1 ;;
+          esac
+          grep -Eiq '^location: https://app\.ci\.internal/healthz\r?$' "${redirect_headers}"
+
+          curl --fail --silent --show-error --insecure \
+            --resolve app.ci.internal:443:127.0.0.1 \
+            https://app.ci.internal/healthz >/dev/null
+
+          publishable_key="$(awk -F= '$1 == "SUPABASE_PUBLISHABLE_KEY" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
+          secret_key="$(awk -F= '$1 == "SUPABASE_SECRET_KEY" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
+          curl --fail --silent --show-error --insecure \
+            --resolve supabase.ci.internal:443:127.0.0.1 \
+            -H "apikey: ${publishable_key}" \
+            https://supabase.ci.internal/auth/v1/health >/dev/null
+
+          functions_status="$(curl --silent --insecure --output /dev/null --write-out '%{http_code}' \
+            --resolve supabase.ci.internal:443:127.0.0.1 \
+            https://supabase.ci.internal/functions/v1/health)"
+          test "${functions_status}" = "404"
+
+          test_email="ci-$(date +%s)-${RANDOM}@example.invalid"
+          test_password="Ci-$(openssl rand -hex 16)-Aa1!"
+          create_payload="$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"password":sys.argv[2],"email_confirm":True}))' "${test_email}" "${test_password}")"
+          curl --fail --silent --show-error --insecure \
+            --resolve supabase.ci.internal:443:127.0.0.1 \
+            -H "apikey: ${secret_key}" \
+            -H "Authorization: Bearer ${secret_key}" \
+            -H 'Content-Type: application/json' \
+            --data "${create_payload}" \
+            https://supabase.ci.internal/auth/v1/admin/users > "${RUNNER_TEMP}/created-user.json"
+          python3 -c 'import json,sys; assert json.load(open(sys.argv[1], encoding="utf-8")).get("id")' "${RUNNER_TEMP}/created-user.json"
+
+          login_payload="$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"password":sys.argv[2]}))' "${test_email}" "${test_password}")"
+          curl --fail --silent --show-error --insecure \
+            --resolve supabase.ci.internal:443:127.0.0.1 \
+            -H "apikey: ${publishable_key}" \
+            -H 'Content-Type: application/json' \
+            --data "${login_payload}" \
+            'https://supabase.ci.internal/auth/v1/token?grant_type=password' > "${RUNNER_TEMP}/login.json"
+          access_token="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["access_token"])' "${RUNNER_TEMP}/login.json")"
+          curl --fail --silent --show-error --insecure \
+            --resolve supabase.ci.internal:443:127.0.0.1 \
+            https://supabase.ci.internal/auth/v1/.well-known/jwks.json > "${RUNNER_TEMP}/jwks.json"
+          python3 - "${access_token}" "${RUNNER_TEMP}/jwks.json" <<'PY'
+          import base64
+          import json
+          import sys
+
+          token, jwks_path = sys.argv[1:]
+          encoded_header = token.split(".", 1)[0]
+          encoded_header += "=" * (-len(encoded_header) % 4)
+          header = json.loads(base64.urlsafe_b64decode(encoded_header))
+          assert header.get("alg") == "ES256", header
+          kid = header.get("kid")
+          assert kid, header
+          keys = json.load(open(jwks_path, encoding="utf-8")).get("keys", [])
+          assert any(
+              key.get("kid") == kid
+              and key.get("kty") == "EC"
+              and key.get("alg") == "ES256"
+              for key in keys
+          ), "token kid missing from local ES256 JWKS"
+          PY
+
+          admin_status="$(curl --silent --insecure --output /dev/null --write-out '%{http_code}' \
+            --resolve admin.ci.internal:443:127.0.0.1 \
+            https://admin.ci.internal/)"
+          test "${admin_status}" = "401"
+
+          ! curl --silent --insecure \
+            --resolve app.ci.internal:443:127.0.0.1 \
+            https://app.ci.internal/ | grep -Fq "${secret_key}"
+
+      - name: Show service state on failure
+        if: failure()
+        run: bash edutalent production-ps || true
+
+      - name: Upload startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-startup-diagnostics
+          path: production-startup.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop and remove smoke-test data
+        if: always()
+        shell: bash
+        run: |
+          bash edutalent production-down || true
+          docker volume prune --force >/dev/null 2>&1 || true

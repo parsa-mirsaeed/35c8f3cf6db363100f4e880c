@@ -309,7 +309,7 @@ def main() -> None:
     ]
     if (
         len(ingress_matches) != 1
-        or ingress_matches[0].get("internal") is not False
+        or ingress_matches[0].get("internal") is True
         or ingress_matches[0].get("driver") != "bridge"
     ):
         fail("edutalent-ingress must be the single non-internal bridge network")

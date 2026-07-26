@@ -1,0 +1,14 @@
+{
+  "name": "edutalent-web",
+  "version": "0.1.0",
+  "description": "Web frontend for EduTalent",
+  "scripts": {
+    "build:css": "tailwindcss -i ./input.css -o ./assets/main.css --minify",
+    "watch:css": "tailwindcss -i ./input.css -o ./assets/main.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.1",
+    "@tailwindcss/forms": "^0.5.7",
+    "@tailwindcss/typography": "^0.5.10"
+  }
+}

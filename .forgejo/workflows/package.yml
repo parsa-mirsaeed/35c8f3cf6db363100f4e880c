@@ -1,0 +1,126 @@
+name: Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional package version
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - Dockerfile
+      - compose.yaml
+      - compose.release.yaml
+      - edutalent
+      - Makefile
+      - .dockerignore
+      - .env.example
+      - docker/**
+      - .github/workflows/package.yml
+      - Cargo.toml
+      - Cargo.lock
+      - packages/**
+      - migrations/**
+      - scripts/ci/apply_migrations.sh
+  push:
+    branches:
+      - main
+      - "feature/**"
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Docker image and release bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EDUTALENT_BUILD_CACHE_SCOPE: edutalent-runtime
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Prepare non-secret environment template
+        run: cp .env.example .env
+
+      - name: Validate centralized packaging
+        run: bash edutalent validate
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        run: |
+          requested='${{ inputs.version }}'
+          if [[ -n "$requested" ]]; then
+            version="$requested"
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="${GITHUB_SHA::12}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build release bundle through unified command
+        shell: bash
+        run: |
+          set -o pipefail
+          bash edutalent package '${{ steps.version.outputs.version }}' 2>&1 | tee package-build.log
+
+      - name: Verify packaged migrations are repeatable
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose --env-file .env -f compose.release.yaml up --detach database 2>&1 | tee package-migrations.log
+          docker compose --env-file .env -f compose.release.yaml run --rm migrate 2>&1 | tee -a package-migrations.log
+          docker compose --env-file .env -f compose.release.yaml run --rm migrate 2>&1 | tee -a package-migrations.log
+
+      - name: Upload packaging diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-validation-logs
+          path: |
+            package-build.log
+            package-migrations.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: edutalent-${{ steps.version.outputs.version }}
+          path: |
+            dist/edutalent-${{ steps.version.outputs.version }}.tar.gz
+            dist/edutalent-${{ steps.version.outputs.version }}/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish tagged image
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        shell: bash
+        run: |
+          export IMAGE_REPOSITORY="ghcr.io/${GITHUB_REPOSITORY,,}"
+          bash edutalent publish '${{ steps.version.outputs.version }}'
+
+      - name: Stop packaging services
+        if: always()
+        run: docker compose --env-file .env -f compose.release.yaml down --volumes --remove-orphans

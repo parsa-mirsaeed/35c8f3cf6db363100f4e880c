@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${EDUTALENT_ENV_FILE:-${ROOT_DIR}/.env}"
+DEV_COMPOSE="${ROOT_DIR}/compose.yaml"
+RELEASE_COMPOSE="${ROOT_DIR}/compose.release.yaml"
+
+cd "${ROOT_DIR}"
+
+usage() {
+    cat <<'EOF'
+EduTalent unified developer and packaging command
+
+Usage:
+  make <command>
+  bash edutalent <command>
+
+Commands:
+  init                 Create .env from .env.example when missing
+  dev                  Run the complete hot-reload development stack
+  up                   Build and run the production-like stack in the background
+  down                 Stop development and production-like stacks
+  logs                 Follow application logs
+  ps                   Show stack status
+  migrate              Run all PostgreSQL migrations transactionally
+  build [tag]           Build the final runtime image
+  package [version]     Build a source-free Docker release bundle in dist/
+  publish [version]     Build and push the runtime image to IMAGE_REPOSITORY
+  smoke                 Start the production-like stack and verify /healthz
+  validate              Validate shell and Compose packaging definitions
+  clean                 Stop the stack and remove local stack volumes
+  help                  Show this help
+EOF
+}
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Required command not found: $1" >&2
+        exit 1
+    fi
+}
+
+ensure_docker() {
+    require_command docker
+    docker compose version >/dev/null
+}
+
+ensure_env() {
+    if [[ ! -f "${ENV_FILE}" ]]; then
+        cp "${ROOT_DIR}/.env.example" "${ENV_FILE}"
+        echo "Created ${ENV_FILE} from .env.example."
+        echo "Set real Supabase values before testing login or user provisioning."
+    fi
+}
+
+compose_dev() {
+    docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" "$@"
+}
+
+image_name() {
+    local tag="${1:-local}"
+    echo "${EDUTALENT_IMAGE:-edutalent}:${tag}"
+}
+
+version_name() {
+    if [[ -n "${1:-}" ]]; then
+        echo "$1"
+    elif command -v git >/dev/null 2>&1 && git rev-parse --short=12 HEAD >/dev/null 2>&1; then
+        git rev-parse --short=12 HEAD
+    else
+        date -u +%Y%m%d%H%M%S
+    fi
+}
+
+build_runtime_image() {
+    local -a build_args=(--progress=plain --target runtime)
+    local image
+
+    for image in "$@"; do
+        build_args+=(--tag "${image}")
+    done
+
+    if [[ -n "${EDUTALENT_BUILD_CACHE_SCOPE:-}" ]]; then
+        docker buildx version >/dev/null
+        docker buildx build \
+            --load \
+            --cache-from "type=gha,scope=${EDUTALENT_BUILD_CACHE_SCOPE}" \
+            --cache-to "type=gha,mode=max,scope=${EDUTALENT_BUILD_CACHE_SCOPE}" \
+            "${build_args[@]}" .
+    else
+        docker build "${build_args[@]}" .
+    fi
+}
+
+wait_for_health() {
+    local port="${EDUTALENT_PORT:-8080}"
+    local attempt
+
+    for ((attempt = 1; attempt <= 90; attempt++)); do
+        if curl --fail --silent "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+            echo "EduTalent is healthy at http://127.0.0.1:${port}"
+            return 0
+        fi
+        sleep 2
+    done
+
+    echo "EduTalent did not become healthy." >&2
+    compose_dev --profile app ps >&2 || true
+    compose_dev --profile app logs app >&2 || true
+    return 1
+}
+
+write_checksum() {
+    local directory="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        (cd "${directory}" && sha256sum edutalent-image.tar.gz > SHA256SUMS)
+    else
+        require_command shasum
+        (cd "${directory}" && shasum -a 256 edutalent-image.tar.gz > SHA256SUMS)
+    fi
+}
+
+command="${1:-help}"
+shift || true
+
+case "${command}" in
+    init)
+        ensure_env
+        ;;
+    dev)
+        ensure_docker
+        ensure_env
+        exec docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" --profile dev up --build dev
+        ;;
+    up)
+        ensure_docker
+        ensure_env
+        compose_dev --profile app up --build --detach app
+        require_command curl
+        wait_for_health
+        ;;
+    down)
+        ensure_docker
+        ensure_env
+        compose_dev --profile dev --profile app down --remove-orphans
+        ;;
+    logs)
+        ensure_docker
+        ensure_env
+        if (($# == 0)); then
+            set -- app
+        fi
+        compose_dev --profile dev --profile app logs --follow "$@"
+        ;;
+    ps)
+        ensure_docker
+        ensure_env
+        compose_dev --profile dev --profile app ps
+        ;;
+    migrate)
+        ensure_docker
+        ensure_env
+        compose_dev run --rm migrate
+        ;;
+    build)
+        ensure_docker
+        tag="${1:-local}"
+        build_runtime_image "$(image_name "${tag}")"
+        ;;
+    package)
+        ensure_docker
+        ensure_env
+        require_command gzip
+        require_command tar
+        version="$(version_name "${1:-}")"
+        local_image="$(image_name local)"
+        versioned_image="$(image_name "${version}")"
+        bundle_dir="${ROOT_DIR}/dist/edutalent-${version}"
+
+        rm -rf "${bundle_dir}"
+        mkdir -p "${bundle_dir}"
+
+        build_runtime_image "${local_image}" "${versioned_image}"
+        docker save "${local_image}" "${versioned_image}" | gzip -9 > "${bundle_dir}/edutalent-image.tar.gz"
+        cp "${RELEASE_COMPOSE}" "${bundle_dir}/compose.yaml"
+        cp "${ROOT_DIR}/.env.example" "${bundle_dir}/.env.example"
+        cp "${ROOT_DIR}/README.md" "${bundle_dir}/README.md"
+        write_checksum "${bundle_dir}"
+        tar -C "${ROOT_DIR}/dist" -czf "${ROOT_DIR}/dist/edutalent-${version}.tar.gz" "edutalent-${version}"
+
+        echo "Release bundle: dist/edutalent-${version}.tar.gz"
+        ;;
+    publish)
+        ensure_docker
+        repository="${IMAGE_REPOSITORY:-}"
+        if [[ -z "${repository}" ]]; then
+            echo "IMAGE_REPOSITORY is required, for example ghcr.io/owner/edutalent-dx" >&2
+            exit 1
+        fi
+        version="$(version_name "${1:-}")"
+        cache_scope="${EDUTALENT_BUILD_CACHE_SCOPE:-edutalent-runtime}"
+        docker buildx build \
+            --progress=plain \
+            --target runtime \
+            --platform "${DOCKER_PLATFORMS:-linux/amd64}" \
+            --cache-from "type=gha,scope=${cache_scope}" \
+            --cache-to "type=gha,mode=max,scope=${cache_scope}" \
+            --tag "${repository}:${version}" \
+            --tag "${repository}:latest" \
+            --push .
+        ;;
+    smoke)
+        ensure_docker
+        ensure_env
+        compose_dev --profile app up --build --detach app
+        require_command curl
+        wait_for_health
+        ;;
+    validate)
+        ensure_docker
+        ensure_env
+        bash -n edutalent docker/entrypoint.sh build-for-render.sh scripts/ci/apply_migrations.sh
+        docker compose --env-file "${ENV_FILE}" -f compose.yaml config --quiet
+        docker compose --env-file "${ENV_FILE}" -f compose.release.yaml config --quiet
+        grep -Fq 'cargo chef cook' Dockerfile
+        grep -Fq 'dioxus-cli@${DIOXUS_CLI_VERSION}' Dockerfile
+        grep -Fq 'dx bundle --web --release --package web' Dockerfile
+        grep -Fq 'target/dx/web/release/web' Dockerfile
+        grep -Fq 'bash edutalent package' .github/workflows/package.yml
+        echo "Packaging definitions are valid."
+        ;;
+    clean)
+        ensure_docker
+        ensure_env
+        compose_dev --profile dev --profile app down --volumes --remove-orphans
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        echo "Unknown command: ${command}" >&2
+        usage >&2
+        exit 1
+        ;;
+esac

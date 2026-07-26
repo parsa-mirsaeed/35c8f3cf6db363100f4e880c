@@ -1,0 +1,295 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "feature/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: "1"
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/edutalent_ci
+
+jobs:
+  formatting:
+    name: Rust formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check feature formatting
+        run: |
+          rustfmt --edition 2021 --check --config skip_children=true \
+            packages/api/src/domain/enums.rs \
+            packages/api/src/middleware/auth.rs \
+            packages/api/src/middleware/legacy_teacher_material_guard.rs \
+            packages/api/src/middleware/mod.rs \
+            packages/api/src/repositories/invite_repository.rs \
+            packages/api/src/repositories/knowledge_asset_repository.rs \
+            packages/api/src/repositories/knowledge_asset_repository_tests.rs \
+            packages/api/src/repositories/knowledge_audit_repository.rs \
+            packages/api/src/repositories/knowledge_ingestion_job_repository.rs \
+            packages/api/src/repositories/mod.rs \
+            packages/api/src/server_functions/knowledge_functions.rs \
+            packages/api/src/server_functions/knowledge_audit_functions.rs \
+            packages/api/src/server_functions/mod.rs \
+            packages/api/src/services/knowledge_asset_service.rs \
+            packages/api/src/services/knowledge_ingestion_worker.rs \
+            packages/api/src/services/knowledge_vector_store_service.rs \
+            packages/api/src/services/student_context_service.rs \
+            packages/api/src/services/mod.rs \
+            packages/web/src/application/routing_service.rs \
+            packages/web/src/domain/auth.rs \
+            packages/web/src/domain/roles.rs \
+            packages/web/src/views/role_based/knowledge.rs \
+            packages/web/src/views/role_based/mod.rs \
+            packages/web/src/views/role_based/teacher/classes.rs \
+            packages/web/src/views/role_based/teacher/dashboard_v2.rs \
+            packages/web/src/views/role_based/teacher/mod.rs \
+            packages/web/src/views/role_based/school_manager/dashboard_v2.rs \
+            packages/web/src/views/role_based/school_manager/mod.rs \
+            packages/web/src/main.rs
+
+  migrations:
+    name: PostgreSQL migrations and invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: edutalent_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d edutalent_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install --yes --quiet postgresql-client
+      - name: Inventory database schema sources
+        run: |
+          find . -type f \
+            \( -iname '*.sql' -o -iname '*schema*' -o -iname '*database*' \) \
+            -not -path './target/*' -not -path './.git/*' \
+            | sort | tee database-source-files.log
+          grep -RInE \
+            --include='*.sql' \
+            'CREATE[[:space:]]+(TYPE[[:space:]]+role_name|TABLE([[:space:]]+IF[[:space:]]+NOT[[:space:]]+EXISTS)?[[:space:]]+(public\.)?(users|schools|subjects|class_sections|assignments))' \
+            . > schema-definition-locations.log || true
+      - name: Apply migrations transactionally
+        run: |
+          set -o pipefail
+          bash scripts/ci/apply_migrations.sh 2>&1 | tee migration.log
+      - name: Verify governed knowledge schema and lifecycle
+        run: |
+          set -o pipefail
+          bash scripts/ci/verify_knowledge_schema.sh 2>&1 | tee schema-verification.log
+      - name: Verify governed knowledge security
+        run: |
+          set -o pipefail
+          bash scripts/ci/verify_knowledge_security.sh 2>&1 | tee security-verification.log
+      - name: Upload migration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-validation-logs
+          path: |
+            migration.log
+            schema-verification.log
+            security-verification.log
+            database-source-files.log
+            schema-definition-locations.log
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Export verified schema
+        run: pg_dump --format=custom --no-owner --no-acl --file=edutalent-ci-schema.dump "$DATABASE_URL"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: postgres-schema
+          path: edutalent-ci-schema.dump
+          if-no-files-found: error
+          retention-days: 1
+
+  api:
+    name: API compile, lint, and tests
+    needs: migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: edutalent_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d edutalent_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: api-server
+          cache-on-failure: true
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install --yes --quiet postgresql-client
+      - uses: actions/download-artifact@v4
+        with:
+          name: postgres-schema
+      - name: Restore verified schema
+        run: pg_restore --clean --if-exists --no-owner --no-acl --dbname="$DATABASE_URL" edutalent-ci-schema.dump
+      - name: Check API server targets
+        run: |
+          set +e
+          cargo check -p api --features server --all-targets --locked --message-format=short 2>&1 | tee api-check.log
+          echo "${PIPESTATUS[0]}" > api-check.status
+          exit 0
+      - name: Lint API correctness and suspicious patterns
+        run: |
+          set +e
+          cargo clippy -p api --features server --lib --tests --locked --message-format=short -- \
+            -A warnings -D clippy::correctness -D clippy::suspicious 2>&1 | tee api-clippy.log
+          echo "${PIPESTATUS[0]}" > api-clippy.status
+          exit 0
+      - name: Run API unit tests
+        run: |
+          set +e
+          cargo test -p api --features server --lib --locked -- --nocapture 2>&1 | tee api-tests.log
+          echo "${PIPESTATUS[0]}" > api-tests.status
+          exit 0
+      - name: Upload API diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-validation-logs
+          path: |
+            api-check.log
+            api-clippy.log
+            api-tests.log
+            api-check.status
+            api-clippy.status
+            api-tests.status
+          if-no-files-found: error
+          retention-days: 3
+      - name: Enforce API validation result
+        run: |
+          test "$(cat api-check.status)" -eq 0
+          test "$(cat api-clippy.status)" -eq 0
+          test "$(cat api-tests.status)" -eq 0
+
+  web:
+    name: Web compile, lint, and tests
+    needs: migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: edutalent_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d edutalent_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: web-server
+          cache-on-failure: true
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install --yes --quiet postgresql-client
+      - uses: actions/download-artifact@v4
+        with:
+          name: postgres-schema
+      - name: Restore verified schema
+        run: pg_restore --clean --if-exists --no-owner --no-acl --dbname="$DATABASE_URL" edutalent-ci-schema.dump
+      - name: Check workspace default targets
+        run: |
+          set +e
+          cargo check --workspace --all-targets --locked --message-format=short 2>&1 | tee workspace-check.log
+          echo "${PIPESTATUS[0]}" > workspace-check.status
+          exit 0
+      - name: Check web server targets
+        run: |
+          set +e
+          cargo check -p web --features server --all-targets --locked --message-format=short 2>&1 | tee web-check.log
+          echo "${PIPESTATUS[0]}" > web-check.status
+          exit 0
+      - name: Lint web correctness and suspicious patterns
+        run: |
+          set +e
+          cargo clippy -p web --features server --all-targets --locked --message-format=short -- \
+            -A warnings -D clippy::correctness -D clippy::suspicious 2>&1 | tee web-clippy.log
+          echo "${PIPESTATUS[0]}" > web-clippy.status
+          exit 0
+      - name: Run web tests
+        run: |
+          set +e
+          cargo test -p web --features server --locked -- --nocapture 2>&1 | tee web-tests.log
+          echo "${PIPESTATUS[0]}" > web-tests.status
+          exit 0
+      - name: Upload web diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-validation-logs
+          path: |
+            workspace-check.log
+            web-check.log
+            web-clippy.log
+            web-tests.log
+            workspace-check.status
+            web-check.status
+            web-clippy.status
+            web-tests.status
+          if-no-files-found: error
+          retention-days: 3
+      - name: Enforce web validation result
+        run: |
+          test "$(cat workspace-check.status)" -eq 0
+          test "$(cat web-check.status)" -eq 0
+          test "$(cat web-clippy.status)" -eq 0
+          test "$(cat web-tests.status)" -eq 0

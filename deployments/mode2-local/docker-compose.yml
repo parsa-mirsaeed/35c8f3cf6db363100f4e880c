@@ -1,0 +1,65 @@
+services:
+  app:
+    image: ${EDUTALENT_IMAGE:-edutalent:mode2}
+    restart: unless-stopped
+    depends_on:
+      qdrant:
+        condition: service_started
+      embedding:
+        condition: service_started
+    ports:
+      - "${APP_PORT:-10000}:10000"
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      PORT: 10000
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY is required}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      EMBEDDING_PROVIDER: local
+      EMBEDDING_BASE_URL: http://embedding:8080/v1
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      EMBEDDING_VECTOR_SIZE: ${EMBEDDING_VECTOR_SIZE:-384}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+      EMBEDDING_REQUEST_DELAY_SECONDS: ${EMBEDDING_REQUEST_DELAY_SECONDS:-0}
+      QDRANT_URL: http://qdrant:6334
+      QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
+      QDRANT_COLLECTION_NAME: ${QDRANT_COLLECTION_NAME:-materials}
+      LLM_PROVIDER: ${LLM_PROVIDER:-disabled}
+    networks:
+      - edutalent-private
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    restart: unless-stopped
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    networks:
+      - edutalent-private
+
+  embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    restart: unless-stopped
+    command:
+      - --model-id
+      - ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      - --port
+      - "8080"
+    volumes:
+      - embedding-cache:/data
+    ports:
+      - "${EMBEDDING_HTTP_PORT:-8080}:8080"
+    networks:
+      - edutalent-private
+
+networks:
+  edutalent-private:
+    driver: bridge
+
+volumes:
+  qdrant-storage:
+  embedding-cache:

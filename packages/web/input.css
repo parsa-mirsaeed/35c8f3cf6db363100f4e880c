@@ -1,0 +1,373 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==================== FONTS ==================== */
+
+/* Vazirmatn (Farsi) */
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 100;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn-100.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 200;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn-200.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 300;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn-300.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn-400.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn-500.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn-600.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn-700.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn-800.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Vazirmatn';
+    font-style: normal;
+    font-weight: 900;
+    font-display: swap;
+    src: url('/fonts/Vazirmatn-900.ttf') format('truetype');
+}
+
+/* Poppins (English) */
+@font-face {
+    font-family: 'Poppins';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/fonts/Poppins-400.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Poppins';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/fonts/Poppins-500.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Poppins';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('/fonts/Poppins-600.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Poppins';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('/fonts/Poppins-700.ttf') format('truetype');
+}
+
+/* Material Icons Outlined */
+@font-face {
+    font-family: 'Material Icons Outlined';
+    font-style: normal;
+    font-weight: 400;
+    src: url('/fonts/MaterialIconsOutlined.otf') format('opentype');
+}
+
+.material-icons-outlined {
+    font-family: 'Material Icons Outlined';
+    font-weight: normal;
+    font-style: normal;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+}
+
+
+/* ==================== RTL/LTR & LOCALE SUPPORT ==================== */
+
+/* RTL document setup */
+[dir="rtl"] {
+    direction: rtl;
+    text-align: right;
+}
+
+[dir="ltr"] {
+    direction: ltr;
+    text-align: left;
+}
+
+/* Farsi font - Vazirmatn with weight hierarchy */
+[lang="fa"],
+[dir="rtl"],
+[lang="fa"] body,
+[dir="rtl"] body {
+    font-family: 'Vazirmatn', 'Poppins', system-ui, sans-serif;
+}
+
+/* Vazirmatn weight classes for Farsi UI */
+[lang="fa"] .font-thin {
+    font-weight: 100;
+}
+
+[lang="fa"] .font-extralight {
+    font-weight: 200;
+}
+
+[lang="fa"] .font-light {
+    font-weight: 300;
+}
+
+[lang="fa"] .font-normal {
+    font-weight: 400;
+}
+
+[lang="fa"] .font-medium {
+    font-weight: 500;
+}
+
+[lang="fa"] .font-semibold {
+    font-weight: 600;
+}
+
+[lang="fa"] .font-bold {
+    font-weight: 700;
+}
+
+[lang="fa"] .font-extrabold {
+    font-weight: 800;
+}
+
+[lang="fa"] .font-black {
+    font-weight: 900;
+}
+
+/* RTL-specific adjustments */
+[dir="rtl"] .material-icons-outlined {
+    /* Direction-neutral icons don't need transformation */
+    display: inline-block;
+}
+
+[dir="rtl"] .icon-chevron-right,
+[dir="rtl"] .chevron_right,
+[dir="rtl"] [class*="chevron_right"] {
+    transform: scaleX(-1);
+}
+
+[dir="rtl"] .icon-arrow-right,
+[dir="rtl"] .arrow_forward,
+[dir="rtl"] [class*="arrow_forward"] {
+    transform: scaleX(-1);
+}
+
+[dir="rtl"] .icon-arrow-left,
+[dir="rtl"] .arrow_back,
+[dir="rtl"] [class*="arrow_back"] {
+    transform: scaleX(-1);
+}
+
+/* RTL Flex direction reversal where needed */
+[dir="rtl"] .flex-row-rtl {
+    flex-direction: row-reverse;
+}
+
+/* Margin/Padding RTL adjustments using logical properties */
+.ms-auto {
+    margin-inline-start: auto;
+}
+
+.me-auto {
+    margin-inline-end: auto;
+}
+
+.ps-0 {
+    padding-inline-start: 0;
+}
+
+.pe-0 {
+    padding-inline-end: 0;
+}
+
+/* Language Switcher Styling */
+.language-switcher-toggle {
+    @apply flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-white/10 hover:bg-white/20 dark:bg-gray-800/50 dark:hover:bg-gray-700/50 border border-white/20 dark:border-gray-700 transition-all duration-200;
+}
+
+.language-switcher-dropdown {
+    @apply px-3 py-1.5 rounded-lg text-sm font-medium bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-primary/50;
+}
+
+/* Grade display styling */
+.grade-display {
+    @apply font-semibold tabular-nums;
+}
+
+[lang="fa"] .grade-display {
+    font-feature-settings: "ss01";
+    /* Use Persian numerals if available in font */
+}
+
+/* ==================== BASE STYLES ==================== */
+
+@layer base {
+    body {
+        @apply font-sans bg-background-light dark:bg-background-dark text-gray-900 dark:text-gray-100 antialiased transition-colors duration-200;
+    }
+
+    /* Enhanced line height for Farsi readability */
+    [lang="fa"] body {
+        line-height: 1.8;
+    }
+
+    /* Better letter spacing for Farsi */
+    [lang="fa"] h1,
+    [lang="fa"] h2,
+    [lang="fa"] h3,
+    [lang="fa"] h4,
+    [lang="fa"] h5,
+    [lang="fa"] h6 {
+        letter-spacing: -0.01em;
+    }
+}
+
+/* ==================== COMPONENTS ==================== */
+
+@layer components {
+    .glassmorphism {
+        @apply bg-white/20 dark:bg-gray-900/40 backdrop-blur-lg border border-white/20 dark:border-white/10 shadow-xl;
+    }
+
+    .glass-card {
+        @apply glassmorphism rounded-2xl p-6 transition-all duration-300 hover:shadow-2xl hover:scale-[1.02];
+    }
+
+    .glass-sidebar {
+        @apply bg-white/10 dark:bg-gray-900/60 backdrop-blur-xl border-r border-white/20 dark:border-white/5;
+    }
+
+    /* RTL sidebar border adjustment */
+    [dir="rtl"] .glass-sidebar {
+        @apply border-r-0 border-l border-white/20 dark:border-white/5;
+    }
+
+    .btn-primary {
+        @apply px-4 py-2 rounded-lg bg-primary hover:bg-primary-dark text-white shadow-lg shadow-primary/30 transition-all duration-200 active:scale-95;
+    }
+
+    .btn-secondary {
+        @apply px-4 py-2 rounded-lg bg-secondary hover:bg-secondary-dark text-white shadow-lg shadow-secondary/30 transition-all duration-200 active:scale-95;
+    }
+
+    /* Input fields RTL styling */
+    [dir="rtl"] input,
+    [dir="rtl"] textarea,
+    [dir="rtl"] select {
+        text-align: right;
+    }
+
+    /* Form labels and placeholders */
+    [dir="rtl"] label {
+        text-align: right;
+    }
+
+    /* Table RTL */
+    [dir="rtl"] th,
+    [dir="rtl"] td {
+        text-align: right;
+    }
+}
+
+/* ==================== ANIMATIONS ==================== */
+
+@layer utilities {
+    .animate-fade-in {
+        animation: fadeIn 0.3s ease-out;
+    }
+
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+}
+
+/* ==================== SCROLLBAR ==================== */
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 dark:bg-gray-700 rounded-full hover:bg-gray-400 dark:hover:bg-gray-600;
+}
+
+/* RTL scrollbar position - handled natively by browsers */
+
+/* ==================== LOCALE PROVIDER WRAPPER ==================== */
+
+.locale-wrapper {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}

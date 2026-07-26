@@ -1,0 +1,126 @@
+name: edutalent
+
+x-app-environment: &app-environment
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@database:5432/${POSTGRES_DB:-edutalent}
+  PORT: "8080"
+  SERVER_HOST: 0.0.0.0
+  SERVER_PORT: "8080"
+  QDRANT_URL: http://qdrant:6334
+  EMBEDDING_PROVIDER: local
+  EMBEDDING_BASE_URL: http://embedding:80/v1
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+  EMBEDDING_VECTOR_SIZE: ${EMBEDDING_VECTOR_SIZE:-384}
+  QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
+
+services:
+  database:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-edutalent}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-edutalent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.14.1
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+  embedding:
+    image: ${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.9}
+    command:
+      - --model-id
+      - ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      - --served-model-name
+      - ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+    ports:
+      - "${EMBEDDING_PORT:-8081}:80"
+    volumes:
+      - embedding-data:/data
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      target: runtime
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@database:5432/${POSTGRES_DB:-edutalent}
+    command: ["migrate"]
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    profiles: ["app"]
+    build:
+      context: .
+      target: runtime
+    image: ${EDUTALENT_IMAGE:-edutalent}:${EDUTALENT_TAG:-local}
+    env_file:
+      - .env
+    environment:
+      <<: *app-environment
+      RUN_MIGRATIONS: "false"
+    command: ["server"]
+    ports:
+      - "${EDUTALENT_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_started
+      embedding:
+        condition: service_started
+    restart: unless-stopped
+
+  dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    env_file:
+      - .env
+    environment:
+      <<: *app-environment
+      CARGO_TARGET_DIR: /workspace/target
+    command: ["dx", "serve", "--web", "--package", "web", "--addr", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "${EDUTALENT_PORT:-8080}:8080"
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/workspace/target
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_started
+      embedding:
+        condition: service_started
+    stdin_open: true
+    tty: true
+
+volumes:
+  postgres-data:
+  qdrant-data:
+  embedding-data:
+  cargo-registry:
+  cargo-git:
+  cargo-target:

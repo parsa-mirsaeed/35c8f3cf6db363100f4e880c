@@ -1,0 +1,19 @@
+# Rust and Dioxus build outputs
+/target
+packages/web/public/
+bin-build/
+dist/
+
+# Local environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Frontend tooling
+node_modules/
+
+# OS/editor files
+.DS_Store
+
+# rustfmt backups
+**/*.rs.bk

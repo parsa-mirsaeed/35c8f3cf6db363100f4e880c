@@ -1,0 +1,509 @@
+# EduTalent Internationalization: Bilingual English/Farsi Implementation Plan
+
+## Problem Statement
+
+Convert the EduTalent web application from a monolingual (English-only) system to a **fully bilingual platform** supporting:
+- **English (en)** and **Farsi/Persian (fa)** languages
+- **Farsi as the default language**
+- **Complete RTL (Right-to-Left) layout** for Farsi mode
+- **Locale-specific grading system**: 20-based scale for Iranian education (Farsi) vs 100-based for international (English)
+
+---
+
+## Principled Analysis (JSON Standard Format)
+
+```json
+{
+  "standard_reference": {
+    "primary": "ISO 639-1 (Language Codes)",
+    "secondary": "ISO 15897 (Locale Definitions)",
+    "best_practices": [
+      "GNU gettext i18n patterns",
+      "React i18next architecture (adapted for Dioxus/Rust)",
+      "CLDR (Unicode Common Locale Data Repository) for locale-specific formatting"
+    ]
+  },
+  "problem_decomposition": {
+    "scope": {
+      "total_ui_files": 67,
+      "estimated_translatable_strings": "500+",
+      "affected_packages": ["web", "api", "ui"],
+      "grading_scale_change": {
+        "english_scale": "0-100 (percentage-based)",
+        "farsi_scale": "0-20 (Iranian education standard)"
+      }
+    }
+  },
+  "solutions": [
+    {
+      "id": "A",
+      "name": "Runtime JSON Translation with Context Provider",
+      "description": "Load JSON translation files at runtime, use React-like context pattern for locale state, implement t!() macro for type-safe keys",
+      "pros": [
+        "Hot-swappable translations without rebuild",
+        "Familiar pattern from React/Vue i18n libraries",
+        "Easy maintenance for translators (JSON files)",
+        "Supports dynamic locale switching",
+        "Compile-time key verification possible with build script"
+      ],
+      "cons": [
+        "Slightly larger bundle size (JSON embedded or fetched)",
+        "Runtime overhead for lookups (negligible in practice)"
+      ],
+      "success_probability": {
+        "conditional_factors": {
+          "given_dioxus_context_support": 0.98,
+          "given_rust_macro_capabilities": 0.95,
+          "given_proper_testing": 0.92
+        },
+        "unconditional": 0.88
+      }
+    },
+    {
+      "id": "B",
+      "name": "Compile-time Fluent (rust-fluent) Integration",
+      "description": "Use Mozilla's Fluent syntax with compile-time validation, .ftl files for translations",
+      "pros": [
+        "Industry-standard (Firefox uses this)",
+        "Compile-time type safety",
+        "Advanced pluralization/gender support"
+      ],
+      "cons": [
+        "Steeper learning curve for Fluent syntax",
+        "More complex setup with Dioxus",
+        "Less intuitive for non-technical translators",
+        "Overkill for 2-language simple translation"
+      ],
+      "success_probability": {
+        "conditional_factors": {
+          "given_fluent_dioxus_compat": 0.75,
+          "given_translator_familiarity": 0.60
+        },
+        "unconditional": 0.65
+      }
+    },
+    {
+      "id": "C",
+      "name": "Rust Enum-based Static Translation",
+      "description": "All translations as Rust enums/structs, compile-time only",
+      "pros": [
+        "Maximum type safety",
+        "Zero runtime overhead",
+        "IDE autocomplete for all keys"
+      ],
+      "cons": [
+        "Rebuild required for any translation change",
+        "Verbose boilerplate for 500+ strings",
+        "Difficult for non-developers to update translations"
+      ],
+      "success_probability": {
+        "conditional_factors": {
+          "given_small_translation_count": 0.85,
+          "given_large_translation_count": 0.55
+        },
+        "unconditional": 0.60
+      }
+    }
+  ],
+  "selected_solution": {
+    "id": "A",
+    "name": "Runtime JSON Translation with Context Provider",
+    "selection_rationale": [
+      "Best balance of type safety and maintainability",
+      "JSON files are easy for translators to work with",
+      "Proven pattern in modern web frameworks",
+      "Supports dynamic locale switching required for user preferences",
+      "Lower implementation complexity for 2-language system"
+    ],
+    "advantages_over_alternatives": {
+      "vs_B_fluent": "Simpler setup, familiar JSON format, sufficient for 2 languages",
+      "vs_C_static": "Translations editable without rebuild, less boilerplate"
+    }
+  },
+  "implementation_quality_target": "Mercedes-Benz Quality",
+  "quality_criteria": [
+    "100% translation coverage (no hardcoded English in Farsi mode)",
+    "Seamless RTL layout without visual breaks",
+    "Correct grading scale conversion with no data loss",
+    "Sub-100ms locale switching",
+    "Persistent user language preference"
+  ]
+}
+```
+
+---
+
+## User Decisions ✅ APPROVED
+
+> [!NOTE]
+> **Grading Scale Strategy - DECIDED**
+> - **Selected**: Option B - Store grades in the user's preferred scale
+> - When language is **Farsi**: Store and display grades on 0-20 scale
+> - When language is **English**: Store and display grades on 0-100 scale
+> - Grade conversion will occur at language switch time (with user confirmation)
+
+> [!NOTE]
+> **Font Selection - DECIDED**
+> - **Selected**: Vazirmatn font family with multiple variations
+> - Use different weights strategically:
+>   - **Thin (100)**: Subtle labels, metadata
+>   - **Regular (400)**: Body text, descriptions
+>   - **Medium (500)**: Navigation, buttons
+>   - **SemiBold (600)**: Section headers
+>   - **Bold (700)**: Page titles, emphasis
+> - This creates beautiful, eye-readable, modern typography
+
+---
+
+## Proposed Changes
+
+### Infrastructure Layer (New Files)
+
+---
+
+#### [NEW] [mod.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/src/i18n/mod.rs)
+
+Core i18n module exposing:
+- `Locale` enum with `En` and `Fa` variants (default: `Fa`)
+- `LocaleProvider` context component
+- `use_locale()` hook for components
+- `t!()` macro for translation lookup
+- `TranslationKey` type for compile-time key checking
+
+```rust
+// Core structure
+pub enum Locale {
+    En,  // English
+    Fa,  // Farsi (Persian) - Default
+}
+
+impl Default for Locale {
+    fn default() -> Self {
+        Locale::Fa  // Farsi as default
+    }
+}
+```
+
+---
+
+#### [NEW] [translations.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/src/i18n/translations.rs)
+
+Translation loading and lookup logic:
+- Load JSON translation files
+- Fallback chain (requested → default → key itself)
+- Namespace support for organizing translations
+
+---
+
+#### [NEW] [grading.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/src/i18n/grading.rs)
+
+Locale-aware grading utilities:
+- `GradingScale` trait with `scale_100()` and `scale_20()` implementations
+- Grade conversion functions: `to_display(grade: f64, locale: Locale) -> String`
+- Grade input parsing with locale awareness
+
+```rust
+pub fn convert_grade_for_display(grade_100: f64, locale: Locale) -> String {
+    match locale {
+        Locale::En => format!("{:.0}%", grade_100),
+        Locale::Fa => format!("{:.1}", grade_100 * 20.0 / 100.0), // Convert to 20-scale
+    }
+}
+```
+
+---
+
+#### [NEW] [en.json](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/assets/locales/en.json)
+
+English translation file with all UI strings organized by namespace:
+```json
+{
+  "common": {
+    "sign_in": "Sign In",
+    "sign_out": "Sign Out",
+    "cancel": "Cancel",
+    "save": "Save",
+    "loading": "Loading..."
+  },
+  "auth": {
+    "email_placeholder": "Email Address",
+    "password_placeholder": "Password",
+    "forgot_password": "Forgot Password?",
+    "invalid_credentials": "Invalid email or password"
+  },
+  "grades": {
+    "title": "Grades",
+    "gpa": "GPA",
+    "cumulative_gpa": "Cumulative GPA",
+    "no_grades": "No graded assignments yet"
+  }
+  // ... 500+ keys
+}
+```
+
+---
+
+#### [NEW] [fa.json](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/assets/locales/fa.json)
+
+Farsi translation file (complete Persian translations):
+```json
+{
+  "common": {
+    "sign_in": "ورود",
+    "sign_out": "خروج",
+    "cancel": "انصراف",
+    "save": "ذخیره",
+    "loading": "در حال بارگذاری..."
+  },
+  "auth": {
+    "email_placeholder": "آدرس ایمیل",
+    "password_placeholder": "رمز عبور",
+    "forgot_password": "رمز عبور را فراموش کرده‌اید؟",
+    "invalid_credentials": "ایمیل یا رمز عبور نامعتبر است"
+  },
+  "grades": {
+    "title": "نمرات",
+    "gpa": "معدل",
+    "cumulative_gpa": "معدل کل",
+    "no_grades": "هنوز تکلیف نمره‌گذاری شده‌ای وجود ندارد"
+  }
+  // ... 500+ keys in Farsi
+}
+```
+
+---
+
+### Web Package Modifications
+
+---
+
+#### [MODIFY] [main.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/src/main.rs)
+
+- Wrap app with `LocaleProvider` context
+- Add `dir` attribute to HTML based on locale (ltr/rtl)
+- Initialize locale from user preferences or default to Farsi
+
+---
+
+#### [MODIFY] [login.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/src/views/login.rs)
+
+Replace all hardcoded strings with translation keys:
+```rust
+// Before
+"Sign In"
+
+// After
+t!("auth.sign_in")
+```
+
+Affected strings (~15):
+- "Sign In", "Email Address", "Password", "Forgot Password?", "Don't have an account?", etc.
+
+---
+
+#### [MODIFY] [grades.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/src/views/role_based/student/grades.rs)
+
+- Replace ~20 hardcoded strings with translation keys
+- Update grade display to use `convert_grade_for_display()`
+- Add RTL-aware layout classes
+
+Key changes:
+```rust
+// Before
+"Grades"
+"Cumulative GPA"
+"{grade.grade}"
+
+// After
+t!("grades.title")
+t!("grades.cumulative_gpa")
+convert_grade_for_display(grade.grade, locale)
+```
+
+---
+
+#### [MODIFY] All 67 view files in role_based directories
+
+Each file requires:
+1. Import i18n utilities: `use crate::i18n::{t, use_locale};`
+2. Replace all string literals with `t!()` calls
+3. Update any grade displays to use locale-aware formatting
+
+Estimated changes per file: 10-50 strings depending on UI complexity.
+
+---
+
+#### [MODIFY] [main.css](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/assets/main.css)
+
+Add RTL support:
+```css
+/* RTL base styles */
+[dir="rtl"] {
+  --text-align: right;
+  --flex-direction: row-reverse;
+}
+
+/* Convert all margin/padding to logical properties */
+.glass-card {
+  margin-inline-start: var(--spacing-4);
+  padding-inline-end: var(--spacing-2);
+}
+
+/* Icon direction flip for RTL */
+[dir="rtl"] .material-icons-outlined.chevron_right {
+  transform: scaleX(-1);
+}
+
+/* Farsi font import */
+@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap');
+
+[lang="fa"] {
+  font-family: 'Vazirmatn', 'Segoe UI', Tahoma, sans-serif;
+}
+```
+
+---
+
+### API Package Modifications
+
+---
+
+#### [MODIFY] [submission.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/api/src/models/submission.rs)
+
+- Keep `grade` as `f64` (0-100 internal representation)
+- Add helper method for locale-aware display (if needed server-side)
+
+---
+
+#### [MODIFY] [auth.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/src/domain/auth.rs)
+
+Update [get_error_message()](file:///home/parsa/secure_projects/Edu/EduTalent/packages/web/src/domain/auth.rs#76-89) to return translation keys instead of hardcoded English:
+```rust
+// Before
+AuthError::InvalidCredentials => "Invalid email or password"
+
+// After  
+AuthError::InvalidCredentials => "auth.errors.invalid_credentials"
+```
+
+---
+
+#### [MODIFY] [user_preferences.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/api/src/models/user_preferences.rs)
+
+Already supports `language: String` field. Update default value:
+```rust
+// In migration or code
+language: String = "fa"  // Default to Farsi
+```
+
+---
+
+### UI Package Modifications
+
+---
+
+#### [MODIFY] [navbar.rs](file:///home/parsa/secure_projects/Edu/EduTalent/packages/ui/src/navbar.rs)
+
+- Add language toggle button
+- Update all text to use translation keys
+
+---
+
+## Verification Plan
+
+### Automated Tests
+
+```bash
+# Run i18n-specific unit tests
+cargo test --package web --features server -- i18n
+
+# Verify no untranslated strings (build script check)
+cargo build --package web --features check-translations
+
+# Run E2E tests with Farsi locale
+LOCALE=fa dx test
+```
+
+### Browser Testing (Subagent Tasks)
+
+1. **Language Switching Flow**
+   - Navigate to login page
+   - Verify Farsi is default (RTL layout, Persian text)
+   - Switch to English
+   - Verify LTR layout and English text
+   - Refresh and verify persistence
+
+2. **Grading Display Verification**
+   - Login as student
+   - Navigate to grades page
+   - In Farsi mode: verify grades show as X/20 format
+   - In English mode: verify grades show as X% format
+
+3. **RTL Layout Integrity**
+   - Navigate all major pages in Farsi mode
+   - Verify no layout breaks
+   - Check sidebar, navigation, forms, modals
+
+### Manual Verification
+
+- [ ] Full translation review by native Farsi speaker
+- [ ] Typography review (font rendering, numerals)
+- [ ] Verify all dates/times format correctly per locale
+
+---
+
+## File Change Summary
+
+| Category          | Files  | Action |
+| ----------------- | ------ | ------ |
+| New i18n Module   | 4      | CREATE |
+| Translation Files | 2      | CREATE |
+| View Files        | 67     | MODIFY |
+| CSS               | 1      | MODIFY |
+| API Models        | 3      | MODIFY |
+| Domain Logic      | 2      | MODIFY |
+| **Total**         | **79** |        |
+
+---
+
+## Implementation Phases
+
+```mermaid
+gantt
+    title EduTalent i18n Implementation
+    dateFormat  YYYY-MM-DD
+    
+    section Phase 1: Infrastructure
+    Create i18n module       :a1, 2024-01-15, 2d
+    Implement LocaleProvider :a2, after a1, 1d
+    Build t!() macro         :a3, after a2, 1d
+    
+    section Phase 2: Translations
+    Extract all strings      :b1, after a3, 3d
+    Create en.json           :b2, after b1, 1d
+    Create fa.json           :b3, after b2, 3d
+    
+    section Phase 3: RTL Support
+    CSS modifications        :c1, after b3, 2d
+    Add Vazirmatn font       :c2, after c1, 1d
+    
+    section Phase 4: Grading
+    Implement scale utils    :d1, after c2, 2d
+    Update grade displays    :d2, after d1, 2d
+    
+    section Phase 5: Testing
+    Unit tests               :e1, after d2, 1d
+    E2E browser tests        :e2, after e1, 2d
+    Manual review            :e3, after e2, 1d
+```
+
+---
+
+## Risk Mitigation
+
+| Risk                    | Probability | Impact | Mitigation                    |
+| ----------------------- | ----------- | ------ | ----------------------------- |
+| Missing translations    | Medium      | High   | Build-time check for coverage |
+| RTL layout breaks       | Medium      | Medium | Comprehensive visual testing  |
+| Grading scale confusion | Low         | High   | Clear UI labels for scale     |
+| Performance degradation | Low         | Low    | Efficient JSON caching        |

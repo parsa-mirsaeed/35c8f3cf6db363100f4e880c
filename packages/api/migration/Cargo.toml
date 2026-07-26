@@ -1,0 +1,21 @@
+[package]
+name = "migration"
+version = "0.2.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "migration"
+path = "src/lib.rs"
+
+[dependencies]
+async-std = { version = "1", features = ["attributes", "tokio1"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
+uuid = { version = "1.0", features = ["v4"] }
+chrono = "0.4"
+tokio = { version = "1.0", features = ["full"] }
+dotenvy = "0.15"
+
+[[bin]]
+name = "migration_runner"
+path = "src/main.rs"

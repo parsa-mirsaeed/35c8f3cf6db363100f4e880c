@@ -1,0 +1,12 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+target
+**/target
+dist
+bin-build
+node_modules
+.DS_Store
+*.log

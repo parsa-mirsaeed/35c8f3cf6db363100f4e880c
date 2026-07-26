@@ -1,0 +1,48 @@
+# Render.com Infrastructure as Code
+# The Dockerfile performs the complete Dioxus build and packages migrations.
+
+services:
+  - type: web
+    name: edutalent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: frankfurt
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PROJECT_REF
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_AUDIENCE
+        value: authenticated
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: RUST_LOG
+        value: info
+      - key: PORT
+        value: 10000
+      - key: RUN_MIGRATIONS
+        value: true
+      - key: EMBEDDING_PROVIDER
+        value: local
+      - key: EMBEDDING_BASE_URL
+        sync: false
+      - key: EMBEDDING_API_KEY
+        sync: false
+      - key: EMBEDDING_MODEL
+        value: BAAI/bge-small-en-v1.5
+      - key: EMBEDDING_VECTOR_SIZE
+        value: 384
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: QDRANT_VECTOR_SIZE
+        value: 384

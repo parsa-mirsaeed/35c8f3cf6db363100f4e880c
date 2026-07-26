@@ -1,0 +1,73 @@
+EDUTALENT PROPRIETARY LICENSE
+ALL RIGHTS RESERVED
+
+Copyright (c) 2025-2026 parsa-mirsaeed.
+All rights reserved.
+
+1. Ownership
+
+The source code, object code, documentation, designs, database schemas,
+workflows, configuration, assets, and all other materials contained in this
+repository (collectively, the "Software") are proprietary works protected by
+copyright and other applicable laws.
+
+2. No License Granted
+
+Except for the limited rights required to view and fork this public repository
+through GitHub's service as expressly permitted by GitHub's Terms of Service,
+no license, permission, authorization, or other right is granted to any person
+or entity, whether expressly, implicitly, by estoppel, or otherwise.
+
+3. Prohibited Activities
+
+Without the copyright holder's prior express written permission, you may not,
+in whole or in part:
+
+- use, run, execute, deploy, host, or provide the Software as a service;
+- copy or reproduce the Software, except as technically necessary to exercise
+  the limited GitHub viewing and forking rights described above;
+- modify, adapt, translate, merge, or create derivative works from the Software;
+- publish, distribute, transmit, sublicense, sell, rent, lease, assign, transfer,
+  or otherwise make the Software available to another person or entity;
+- reverse engineer, decompile, disassemble, or attempt to derive source code,
+  algorithms, models, architecture, or implementation details from compiled or
+  generated portions of the Software;
+- use the Software or any repository content for training, fine-tuning,
+  evaluating, benchmarking, or creating datasets for artificial intelligence,
+  machine-learning, or automated code-generation systems;
+- remove, obscure, or alter any copyright, ownership, attribution, trademark,
+  or other proprietary notice; or
+- use any name, logo, trademark, service mark, or branding associated with
+  EduTalent or the copyright holder.
+
+4. Contributions
+
+External contributions are not accepted or licensed unless they are governed
+by a separate written agreement signed by the copyright holder. Submission of
+an issue, suggestion, pull request, patch, or other material does not grant the
+submitter any rights in the Software.
+
+5. No Patent or Trademark Rights
+
+No patent, trademark, trade-secret, publicity, privacy, or other intellectual
+property rights are granted under this license.
+
+6. Enforcement
+
+Any unauthorized use, reproduction, modification, distribution, deployment,
+or other exploitation of the Software is prohibited and may result in legal
+action. No failure or delay in enforcing any right constitutes a waiver.
+
+7. Disclaimer
+
+THE SOFTWARE IS PROVIDED FOR VIEWING ONLY, "AS IS," WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR
+A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. TO THE MAXIMUM EXTENT
+PERMITTED BY LAW, THE COPYRIGHT HOLDER SHALL NOT BE LIABLE FOR ANY CLAIM,
+DAMAGES, OR OTHER LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE OR ITS
+VIEWING.
+
+8. Permission Requests
+
+Any permission must be obtained in a separate express written agreement from
+the copyright holder before the proposed activity begins.

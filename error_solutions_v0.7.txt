@@ -1,0 +1,212 @@
+# Error Solutions for Dioxus v0.7
+
+## Character Literal Errors
+**Error**: Character literal may only contain one codepoint
+**Problem**: Using single quotes for string literals like '#10b981', '#3b82f6', '#f59e0b'
+**Solution according to v0.7**: Use double quotes for string literals in RSX. In Dioxus v0.7, all string values in attributes and formatted text must use double quotes.
+
+```rust
+// ❌ Wrong
+background: if grade.starts_with('A') { '#10b981' }
+
+// ✅ Correct
+background: if grade.starts_with('A') { "#10b981" }
+```
+
+## Signal Mutability Errors
+**Error**: Cannot borrow `signal` as mutable, as it is not declared
+**Problem**: Forgetting to mark signals as mutable when trying to modify them
+**Solution according to v0.7**: Add `mut` keyword to signal declarations when you need to modify them.
+
+```rust
+// ❌ Wrong
+let is_active = use_signal(|| false);
+is_active.set(true);
+
+// ✅ Correct
+let mut is_active = use_signal(|| false);
+is_active.set(true);
+```
+
+## Event Handler Type Errors
+**Error**: Expected `()`, found `Event<MouseData>`
+**Problem**: Event handlers expecting different parameter types
+**Solution according to v0.7**: Event handlers should accept the Event object. Use EventHandler<MouseEvent> for component props.
+
+```rust
+// ❌ Wrong
+onclick: move |evt| on_go_home.call(evt), // expects () but gets Event<MouseData>
+
+// ✅ Correct
+onclick: move |_| on_go_home.call(()), // ignore the event
+// OR
+onclick: move |evt| on_go_home.call(evt), // make handler accept Event<MouseData>
+```
+
+## Type Mismatch Errors
+**Error**: Expected `f32`, found integer
+**Problem**: Comparing f32 variables with integer literals
+**Solution according to v0.7**: Use float literals when comparing with f32 values.
+
+```rust
+// ❌ Wrong
+background: if grade_percentage >= 90 { "#10b981" }
+
+// ✅ Correct
+background: if grade_percentage >= 90.0 { "#10b981" }
+```
+
+## Method Not Found Errors
+**Error**: Method `can_manage_classes` not found
+**Problem**: Calling methods that don't exist on the type
+**Solution according to v0.7**: Access methods through the correct field or implement the method.
+
+```rust
+// ❌ Wrong
+if user.can_manage_classes() {
+
+// ✅ Correct
+if user.role.can_manage_classes() {
+```
+
+## Coroutine/Async Errors
+**Error**: use_coroutine expects Future<Output = ()>
+**Problem**: Returning wrong type from async block in use_coroutine
+**Solution according to v0.7**: Handle the result properly inside the async block or use different hook.
+
+```rust
+// ❌ Wrong
+let user_state = use_coroutine(|_| {
+    async move {
+        AppAuthService::get_current_user().await // returns Result
+    }
+});
+
+// ✅ Correct
+let mut user_state = use_signal(|| None);
+use_effect(move || async move {
+    if let Ok(user) = AppAuthService::get_current_user().await {
+        user_state.set(Some(user));
+    }
+});
+```
+
+## RSX Syntax Errors
+**Error**: Expected identifier in rsx! blocks
+**Problem**: Invalid RSX syntax or component structure
+**Solution according to v0.7**: Ensure proper RSX syntax with elements and valid expressions.
+
+```rust
+// ❌ Wrong
+rsx! {
+    // incomplete or malformed rsx
+}
+
+// ✅ Correct
+rsx! {
+    div {
+        "content"
+    }
+}
+```
+
+## String Comparison Errors
+**Error**: Can't compare `&str` with `str`
+**Problem**: Incorrect string reference comparison
+**Solution according to v0.7**: Dereference one side or use proper string comparison.
+
+```rust
+// ❌ Wrong
+if part != "dashboard" {
+
+// ✅ Correct
+if *part != "dashboard" {
+// OR
+if part.as_ref() != "dashboard" {
+```
+
+## Attribute Value Type Errors
+**Error**: String reference type issues in rsx attributes
+**Problem**: Wrong type passed to attributes
+**Solution according to v0.7**: Convert strings to proper types for attributes.
+
+```rust
+// ❌ Wrong
+style: if is_collapsed { &String::from("...") }
+
+// ✅ Correct
+style: if is_collapsed { "display: none;" }
+```
+
+## Borrowing/Lifetime Errors
+**Error**: Cannot borrow as mutable, value does not live long enough
+**Problem**: Incorrect signal borrowing patterns
+**Solution according to v0.7**: Follow proper signal usage patterns in v0.7.
+
+```rust
+// ❌ Wrong
+fn use_is_auth() -> bool {
+    let auth_state = use_signal(|| false);
+    *auth_state.read() // error: value does not live long enough
+}
+
+// ✅ Correct
+#[component]
+fn AuthComponent() -> Element {
+    let auth_state = use_signal(|| false);
+    rsx! {
+        "{auth_state.read()}" // use within component
+    }
+}
+```
+
+## Function Signature Errors
+**Error**: Missing variants or wrong function signatures
+**Problem**: Function definitions don't match usage
+**Solution according to v0.7**: Ensure function signatures match expected patterns.
+
+```rust
+// ❌ Wrong - missing variant
+enum Route {
+    Home,
+    About,
+}
+// Using Route::Dashboard {} - error: variant not found
+
+// ✅ Correct
+enum Route {
+    Home,
+    About,
+    Dashboard,
+}
+```
+
+## Duplicate Definition Errors
+**Error**: Duplicate definitions with same name
+**Problem**: Two functions/structs with same name
+**Solution according to v0.7**: Rename or consolidate duplicate definitions.
+
+```rust
+// ❌ Wrong
+pub async fn is_session_valid() -> bool { ... }
+fn is_session_valid(session: &UserSession) -> bool { ... } // duplicate
+
+// ✅ Correct
+pub async fn is_session_valid() -> bool { ... }
+fn is_session_valid_sync(session: &UserSession) -> bool { ... } // renamed
+```
+
+## Float Comparison Errors
+**Error**: The trait bound `f32: Ord` is not satisfied
+**Problem**: Trying to use max() on f32 values directly
+**Solution according to v0.7**: Use f32::max() or different approach for finding max.
+
+```rust
+// ❌ Wrong
+let max_value = data.iter().map(|item| item.value).max().unwrap_or(100.0);
+
+// ✅ Correct
+let max_value = data.iter()
+    .map(|item| item.value)
+    .fold(0.0, f32::max);
+```

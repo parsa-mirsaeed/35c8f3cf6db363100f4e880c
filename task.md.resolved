@@ -1,0 +1,82 @@
+# EduTalent Internationalization (i18n) - Bilingual English/Farsi
+
+## High-Level Objective
+Make EduTalent a fully bilingual application supporting English and Farsi (Persian) with:
+- Farsi as default language
+- Complete RTL (Right-to-Left) layout support for Farsi
+- Locale-specific grading system (20-based for Farsi, 100-based for English)
+- Comprehensive translation of all UI text
+
+---
+
+## Phase 1: Core i18n Infrastructure
+- [x] Create i18n module structure in `packages/web/src/i18n/`
+- [x] Implement `Locale` enum (En, Fa) with Farsi as default
+- [x] Create translation key registry (type-safe keys)
+- [x] Build translation loading mechanism with HashMap-based system
+- [x] Create `LocaleProvider` context for global language state
+- [x] Add `use_locale()` hook for component access
+- [x] Add `LanguageSwitcher` component
+
+## Phase 2: Translation Files & Content
+- [x] Create English translations in `translations.rs`
+- [x] Create Farsi translations in `translations.rs`
+- [/] Replace hardcoded strings in views:
+  - [x] `views/login.rs` - Login page strings
+  - [x] `views/role_based/components/header.rs` - Header strings
+  - [x] `views/role_based/components/sidebar.rs` - Sidebar strings
+  - [x] `views/role_based/student/dashboard.rs` - Student dashboard
+  - [x] `views/role_based/student/classes.rs`
+  - [x] `views/role_based/student/assignments.rs`
+  - [x] `views/role_based/student/grades.rs`
+  - [x] `views/role_based/student/schedule.rs`
+  - [ ] `views/role_based/teacher/` - Teacher views
+    - [x] `dashboard.rs`
+    - [x] `classes.rs`
+    - [x] `assignments.rs`
+    - [x] `students.rs`
+    - [x] `submissions.rs`
+  - [ ] `views/role_based/school_manager/` - Admin views
+    - [x] `dashboard.rs`
+    - [x] `user_management.rs`
+    - [x] `reports.rs`
+    - [x] `requests.rs`
+    - [x] `user_creation.rs`
+    - [x] `settings/`
+    - [x] `user_creation.rs`
+    - [x] `settings/`
+    - [x] `class_management.rs`
+  - [x] `views/role_based/parent/` - Parent views
+    - [x] `dashboard.rs`
+    - [x] `children.rs`
+    - [x] `communication.rs`
+    - [x] `reports.rs`
+  - [x] `views/role_based/shared/` - Shared components
+
+## Phase 3: RTL Layout Support
+- [x] Add `dir` attribute switching (ltr/rtl) to root HTML element
+- [x] Update `main.css` with RTL-specific styles
+- [x] Implement CSS logical properties
+- [x] Add Vazirmatn font for Farsi
+
+## Phase 4: Grading System Localization
+- [x] Create grading scale abstraction in i18n module
+- [x] Implement LocalizedGrade with 100/20 scale support
+- [x] Create GradeDisplay component for locale-aware rendering
+- [ ] Integrate grade display with backend (requires API changes)
+
+## Phase 5: Language Persistence
+- [x] Add language selector UI component (LanguageSwitcher)
+- [x] Persist language to localStorage
+- [x] Load saved preference on app load
+
+---
+
+## Current Status
+- [x] Phase 1: Core i18n Infrastructure - Complete
+- [x] Phase 2: Translation Files & Content - Complete
+- [x] Phase 2B: Time/Navigation/Pagination Strings - Complete
+- [x] Phase 3: RTL Layout Support - Complete
+- [/] Phase 4: Grading System Localization - Frontend complete, backend integration pending
+- [x] Phase 5: Language Persistence - Complete
+

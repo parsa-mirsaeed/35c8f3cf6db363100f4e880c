@@ -265,6 +265,12 @@ services:
     ports: !reset []
     networks: !override
       - data
+    # The upstream entrypoint sets RLIMIT_NOFILE=100000. Declare the same
+    # soft/hard limit at container creation so it does not need CAP_SYS_RESOURCE.
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
     security_opt:
       - no-new-privileges:true
 

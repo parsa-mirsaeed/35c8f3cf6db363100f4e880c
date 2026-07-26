@@ -286,6 +286,14 @@ def main() -> None:
         if functions_profiles != ["edge-functions"]:
             fail("Edge Functions must remain disabled behind the explicit profile")
 
+    pooler_ulimits = services["supavisor"].get("ulimits", {}) or {}
+    pooler_nofile = pooler_ulimits.get("nofile", {}) or {}
+    if not isinstance(pooler_nofile, dict) or {
+        str(pooler_nofile.get("soft")),
+        str(pooler_nofile.get("hard")),
+    } != {"100000"}:
+        fail("Supavisor must receive a 100000 soft/hard nofile limit without extra capabilities")
+
     qdrant_service = services["qdrant"]
     qdrant_env = qdrant_service.get("environment", {}) or {}
     qdrant_key = qdrant_env.get("QDRANT__SERVICE__API_KEY", "")

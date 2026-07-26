@@ -102,6 +102,11 @@ startup_diagnostics() {
   echo "Bounded migration/database/auth/gateway logs follow." >&2
   compose logs --no-color --tail 300 \
     migrate database-access db auth kong app gateway-tls gateway functions >&2 || true
+  echo "Bounded pooler logs follow; credential-shaped values are redacted." >&2
+  compose logs --no-color --tail 100 supavisor 2>&1 | sed -E \
+    -e 's#(postgres(ql)?://)[^[:space:]]+#\1[REDACTED]#gI' \
+    -e 's#(Authorization:|apikey:|Bearer)[[:space:]]+[^[:space:]]+#\1 [REDACTED]#gI' \
+    -e 's#[[:alnum:]_~-]{32,}#[REDACTED]#g' >&2 || true
 }
 
 command="${1:-help}"

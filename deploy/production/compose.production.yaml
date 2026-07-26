@@ -62,9 +62,16 @@ services:
         chmod 0700 /data /config
         cp -f /source/fullchain.pem /prepared/fullchain.pem
         cp -f /source/privkey.pem /prepared/privkey.pem
+        # The official image grants its Caddy executable a file capability for
+        # low ports. This deployment maps only to unprivileged container ports
+        # and drops every runtime capability, so stage a plain copy without
+        # that xattr for execution under no-new-privileges.
+        cp -f /usr/bin/caddy /prepared/caddy
         chown "$${GATEWAY_UID}:$${GATEWAY_GID}" /prepared/fullchain.pem /prepared/privkey.pem
+        chown "$${GATEWAY_UID}:$${GATEWAY_GID}" /prepared/caddy
         chmod 0644 /prepared/fullchain.pem
         chmod 0600 /prepared/privkey.pem
+        chmod 0755 /prepared/caddy
     volumes:
       - ${TLS_CERT_FILE:?TLS_CERT_FILE is required}:/source/fullchain.pem:ro
       - ${TLS_KEY_FILE:?TLS_KEY_FILE is required}:/source/privkey.pem:ro
@@ -88,6 +95,8 @@ services:
     <<: *security-baseline
     image: caddy:2.11.4-alpine
     user: "${GATEWAY_UID:-1000}:${GATEWAY_GID:-1000}"
+    entrypoint: ["/etc/caddy/tls/caddy"]
+    command: ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
     restart: unless-stopped
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required}

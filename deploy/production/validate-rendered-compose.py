@@ -261,6 +261,8 @@ def main() -> None:
             )
     if dependency_condition(gateway, "gateway-tls") != "service_completed_successfully":
         fail("gateway must wait for successful state and TLS initialization")
+    if gateway.get("entrypoint") != ["/etc/caddy/tls/caddy"]:
+        fail("gateway must execute the capability-free Caddy binary staged by initialization")
 
     for network_name in (
         "edutalent-edge",

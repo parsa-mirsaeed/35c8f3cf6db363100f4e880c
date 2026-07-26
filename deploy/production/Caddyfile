@@ -1,0 +1,69 @@
+{
+	admin off
+	auto_https disable_certs
+	http_port 8080
+	https_port 8443
+}
+
+(common_security) {
+	encode zstd gzip
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+}
+
+http://{$APP_DOMAIN}, http://{$SUPABASE_DOMAIN}, http://{$ADMIN_DOMAIN} {
+	redir https://{host}{uri} permanent
+}
+
+https://{$APP_DOMAIN} {
+	tls /etc/caddy/tls/fullchain.pem /etc/caddy/tls/privkey.pem
+	import common_security
+	request_body {
+		max_size 64MB
+	}
+	reverse_proxy app:{$EDUTALENT_INTERNAL_PORT} {
+		health_uri /healthz
+		health_interval 30s
+	}
+}
+
+https://{$SUPABASE_DOMAIN} {
+	tls /etc/caddy/tls/fullchain.pem /etc/caddy/tls/privkey.pem
+	import common_security
+
+	@supabase_public path \
+		/auth/v1/* \
+		/rest/v1/* \
+		/realtime/v1/* \
+		/storage/v1/* \
+		/graphql/v1* \
+		/.well-known/oauth-authorization-server
+
+	handle @supabase_public {
+		reverse_proxy kong:8000
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+}
+
+https://{$ADMIN_DOMAIN} {
+	tls /etc/caddy/tls/fullchain.pem /etc/caddy/tls/privkey.pem
+	import common_security
+
+	@admin_allowed remote_ip {$ADMIN_ALLOWED_CIDRS}
+	handle @admin_allowed {
+		reverse_proxy kong:8000
+	}
+
+	handle {
+		respond "Forbidden" 403
+	}
+}

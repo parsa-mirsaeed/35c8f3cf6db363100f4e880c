@@ -5,33 +5,49 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${EDUTALENT_ENV_FILE:-${ROOT_DIR}/.env}"
 DEV_COMPOSE="${ROOT_DIR}/compose.yaml"
 RELEASE_COMPOSE="${ROOT_DIR}/compose.release.yaml"
+PRODUCTION_COMMAND="${ROOT_DIR}/deploy/production/edutalent-production"
 
 cd "${ROOT_DIR}"
 
 usage() {
-    cat <<'EOF'
-EduTalent unified developer and packaging command
+    cat <<'USAGE'
+EduTalent unified developer, packaging, and production command
 
 Usage:
   make <command>
   bash edutalent <command>
 
-Commands:
+Development and package commands:
   init                 Create .env from .env.example when missing
   dev                  Run the complete hot-reload development stack
-  up                   Build and run the production-like stack in the background
+  up                   Build and run the lightweight production-like stack
   down                 Stop development and production-like stacks
   logs                 Follow application logs
   ps                   Show stack status
   migrate              Run all PostgreSQL migrations transactionally
-  build [tag]           Build the final runtime image
-  package [version]     Build a source-free Docker release bundle in dist/
-  publish [version]     Build and push the runtime image to IMAGE_REPOSITORY
-  smoke                 Start the production-like stack and verify /healthz
-  validate              Validate shell and Compose packaging definitions
-  clean                 Stop the stack and remove local stack volumes
-  help                  Show this help
-EOF
+  build [tag]          Build the final runtime image
+  package [version]    Build a source-free Docker release bundle in dist/
+  publish [version]    Build and push the runtime image to IMAGE_REPOSITORY
+  smoke                Start the lightweight stack and verify /healthz
+  validate             Validate shell and Compose packaging definitions
+  clean                Stop the lightweight stack and remove its volumes
+
+Self-hosted production commands:
+  production-bootstrap Fetch the exact pinned official Supabase Docker runtime
+  production-init      Generate production secrets after domains/TLS are set
+  production-validate  Verify TLS, secrets, topology, and exposure invariants
+  production-config    Render the complete production Compose configuration
+  production-up        Start the self-hosted production stack
+  production-down      Stop production without deleting data
+  production-logs      Follow production logs
+  production-ps        Show production service status
+  production-migrate   Re-run migrations and backend-role configuration
+  production-database-check Verify the constrained backend database identity
+  production-gateway-check Verify non-root, capability-free TLS gateway state
+  production-qdrant-check Verify private Qdrant readiness from the app container
+
+  help                 Show this help
+USAGE
 }
 
 require_command() {
@@ -119,6 +135,16 @@ write_checksum() {
         require_command shasum
         (cd "${directory}" && shasum -a 256 edutalent-image.tar.gz > SHA256SUMS)
     fi
+}
+
+run_production() {
+    local subcommand="$1"
+    shift
+    [[ -f "${PRODUCTION_COMMAND}" ]] || {
+        echo "Production command is missing: ${PRODUCTION_COMMAND}" >&2
+        exit 1
+    }
+    exec bash "${PRODUCTION_COMMAND}" "${subcommand}" "$@"
 }
 
 command="${1:-help}"
@@ -220,7 +246,17 @@ case "${command}" in
     validate)
         ensure_docker
         ensure_env
-        bash -n edutalent docker/entrypoint.sh build-for-render.sh scripts/ci/apply_migrations.sh
+        bash -n \
+            edutalent \
+            docker/entrypoint.sh \
+            build-for-render.sh \
+            scripts/ci/apply_migrations.sh \
+            scripts/ci/configure_database_role.sh \
+            deploy/production/bootstrap-supabase.sh \
+            deploy/production/generate-secrets.sh \
+            deploy/production/preflight.sh \
+            deploy/production/edutalent-production
+        python3 -m py_compile deploy/production/validate-rendered-compose.py
         docker compose --env-file "${ENV_FILE}" -f compose.yaml config --quiet
         docker compose --env-file "${ENV_FILE}" -f compose.release.yaml config --quiet
         grep -Fq 'cargo chef cook' Dockerfile
@@ -228,12 +264,49 @@ case "${command}" in
         grep -Fq 'dx bundle --web --release --package web' Dockerfile
         grep -Fq 'target/dx/web/release/web' Dockerfile
         grep -Fq 'bash edutalent package' .github/workflows/package.yml
-        echo "Packaging definitions are valid."
+        grep -Eq '^[0-9a-f]{40}$' deploy/production/SUPABASE_UPSTREAM
+        echo "Packaging and production command definitions are valid."
         ;;
     clean)
         ensure_docker
         ensure_env
         compose_dev --profile dev --profile app down --volumes --remove-orphans
+        ;;
+    production-bootstrap)
+        run_production bootstrap "$@"
+        ;;
+    production-init)
+        run_production init "$@"
+        ;;
+    production-validate)
+        run_production validate "$@"
+        ;;
+    production-config)
+        run_production config "$@"
+        ;;
+    production-up)
+        run_production up "$@"
+        ;;
+    production-down)
+        run_production down "$@"
+        ;;
+    production-logs)
+        run_production logs "$@"
+        ;;
+    production-ps)
+        run_production ps "$@"
+        ;;
+    production-migrate)
+        run_production migrate "$@"
+        ;;
+    production-database-check)
+        run_production database-check "$@"
+        ;;
+    production-gateway-check)
+        run_production gateway-check "$@"
+        ;;
+    production-qdrant-check)
+        run_production qdrant-check "$@"
         ;;
     help|-h|--help)
         usage

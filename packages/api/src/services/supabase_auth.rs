@@ -1,17 +1,20 @@
 use crate::config::SupabaseConfig;
 use crate::domain::UserId;
 use crate::error::{AppError, AppResult};
-use crate::models::user::{AdminCreateStudentRequest, AdminCreateTeacherRequest, AdminCreateParentRequest};
+use crate::models::user::{
+    AdminCreateParentRequest, AdminCreateStudentRequest, AdminCreateTeacherRequest,
+};
+use chrono::{Duration, Utc};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use reqwest::{Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
-use tracing::{info, error, warn};
-use uuid::Uuid;
-use chrono::{DateTime, Utc, Duration};
-use jsonwebtoken::{decode, Validation, DecodingKey, Header, Algorithm};
 use serde_json::Value;
+use tracing::{error, info};
 
 #[derive(Debug, Clone)]
 pub struct SupabaseAdminService {
     config: SupabaseConfig,
+    client: Client,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,255 +51,275 @@ pub struct JwkSet {
 
 #[derive(Debug, Deserialize)]
 pub struct Jwk {
-    pub kid: String,
-    pub kty: String,
-    pub alg: String,
-    pub x: String,
-    pub y: String,
-    // Add other fields if needed
+    pub kid: Option<String>,
+    pub kty: Option<String>,
+    pub alg: Option<String>,
+    pub x: Option<String>,
+    pub y: Option<String>,
+}
+
+fn resolve_jwt_issuer(config: &SupabaseConfig, configured_issuer: Option<&str>) -> String {
+    configured_issuer
+        .map(str::trim)
+        .filter(|issuer| !issuer.is_empty())
+        .map(|issuer| issuer.trim_end_matches('/').to_string())
+        .unwrap_or_else(|| format!("https://{}.supabase.co/auth/v1", config.project_ref.trim()))
 }
 
 impl SupabaseAdminService {
     pub fn new(config: SupabaseConfig) -> Self {
-        Self { config }
-    }
-
-    /// Fetch JWKS from Supabase
-    pub async fn fetch_jwks(&self) -> AppResult<JwkSet> {
-        let url = format!("{}/auth/v1/.well-known/jwks.json", self.config.url);
-        let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| {
-                error!("Failed to fetch JWKS: {}", e);
-                AppError::SupabaseError(format!("Failed to fetch JWKS: {}", e))
-            })?;
-
-        if response.status().is_success() {
-            let jwks: JwkSet = response.json().await.map_err(|e| {
-                error!("Failed to parse JWKS: {}", e);
-                AppError::SupabaseError(format!("Failed to parse JWKS: {}", e))
-            })?;
-            Ok(jwks)
-        } else {
-            Err(AppError::SupabaseError(format!("Failed to fetch JWKS: {}", response.status())))
+        Self {
+            config,
+            client: Client::new(),
         }
     }
 
-    /// Validate a JWT token from Supabase using ECC (ES256) and JWKS
-    pub async fn validate_jwt_token(&self, token: &str) -> AppResult<Value> {
-        // 1. Decode header to find 'kid'
-        let header = jsonwebtoken::decode_header(token)
-            .map_err(|e| AppError::Unauthorized(format!("Invalid token header: {}", e)))?;
-
-        let kid = header.kid.ok_or_else(|| AppError::Unauthorized("Token missing key ID (kid)".to_string()))?;
-
-        // 2. Fetch JWKS (In production, cache this!)
-        let jwks = self.fetch_jwks().await?;
-
-        // 3. Find the matching key
-        let jwk = jwks.keys.iter().find(|k| k.kid == kid)
-            .ok_or_else(|| AppError::Unauthorized("Unknown signing key".to_string()))?;
-
-        // 4. Create DecodingKey from JWK components
-        let decoding_key = DecodingKey::from_ec_components(&jwk.x, &jwk.y)
-            .map_err(|e| AppError::Unauthorized(format!("Invalid key components: {}", e)))?;
-
-        // 5. Validate
-        let mut validation = Validation::new(Algorithm::ES256);
-        validation.set_audience(&[self.config.audience.clone()]);
-        validation.set_issuer(&[format!("https://{}.supabase.co/auth/v1", self.config.project_ref)]);
-
-        let token_data = decode::<Value>(
-            token,
-            &decoding_key,
-            &validation,
-        )
-        .map_err(|e| {
-            error!("Failed to validate JWT token: {}", e);
-            AppError::Unauthorized(format!("Invalid authentication token: {}", e))
-        })?;
-
-        Ok(token_data.claims)
+    fn jwt_issuer(&self) -> String {
+        let configured = std::env::var("SUPABASE_JWT_ISSUER").ok();
+        resolve_jwt_issuer(&self.config, configured.as_deref())
     }
 
-    /// Extract user information from a validated JWT token
-    pub fn extract_user_from_token(&self, claims: &Value) -> AppResult<(String, String)> {
-        let email = claims
-            .get("email")
-            .and_then(|v| v.as_str())
+    fn admin_request(&self, method: Method, path: &str) -> RequestBuilder {
+        let url = format!(
+            "{}/{}",
+            self.config.url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+
+        self.client
+            .request(method, url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.config.secret_key),
+            )
+            .header("apikey", &self.config.secret_key)
+            .header("Content-Type", "application/json")
+    }
+
+    /// Fetch the asymmetric signing keys from the configured Supabase endpoint.
+    pub async fn fetch_jwks(&self) -> AppResult<JwkSet> {
+        let url = format!(
+            "{}/auth/v1/.well-known/jwks.json",
+            self.config.url.trim_end_matches('/')
+        );
+        let response = self.client.get(&url).send().await.map_err(|error| {
+            error!(%error, "Failed to fetch Supabase JWKS");
+            AppError::SupabaseError(format!("Failed to fetch JWKS: {error}"))
+        })?;
+
+        if !response.status().is_success() {
+            return Err(AppError::SupabaseError(format!(
+                "Failed to fetch JWKS: {}",
+                response.status()
+            )));
+        }
+
+        response.json().await.map_err(|error| {
+            error!(%error, "Failed to parse Supabase JWKS");
+            AppError::SupabaseError(format!("Failed to parse JWKS: {error}"))
+        })
+    }
+
+    /// Validate a Supabase ES256 token against its JWKS, audience, and issuer.
+    ///
+    /// Managed deployments keep the historical `project_ref.supabase.co`
+    /// default. Self-hosted deployments must set `SUPABASE_JWT_ISSUER` to the
+    /// public Auth issuer, for example `https://supabase.school.tld/auth/v1`.
+    pub async fn validate_jwt_token(&self, token: &str) -> AppResult<Value> {
+        let header = jsonwebtoken::decode_header(token)
+            .map_err(|error| AppError::Unauthorized(format!("Invalid token header: {error}")))?;
+        let kid = header
+            .kid
+            .ok_or_else(|| AppError::Unauthorized("Token missing key ID (kid)".to_string()))?;
+
+        let jwks = self.fetch_jwks().await?;
+        let jwk = jwks
+            .keys
+            .iter()
+            .find(|key| {
+                key.kid.as_deref() == Some(kid.as_str())
+                    && key.kty.as_deref() == Some("EC")
+                    && key.alg.as_deref() == Some("ES256")
+            })
             .ok_or_else(|| {
-                error!("JWT token missing email claim");
-                AppError::Unauthorized("Invalid token: missing email".to_string())
+                AppError::Unauthorized("Unknown or unsupported signing key".to_string())
             })?;
 
-        let user_id = claims
-            .get("sub")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                error!("JWT token missing sub claim");
-                AppError::Unauthorized("Invalid token: missing user ID".to_string())
-            })?;
+        let x = jwk
+            .x
+            .as_deref()
+            .ok_or_else(|| AppError::Unauthorized("Signing key is missing x".to_string()))?;
+        let y = jwk
+            .y
+            .as_deref()
+            .ok_or_else(|| AppError::Unauthorized("Signing key is missing y".to_string()))?;
+        let decoding_key = DecodingKey::from_ec_components(x, y)
+            .map_err(|error| AppError::Unauthorized(format!("Invalid key components: {error}")))?;
+
+        let issuer = self.jwt_issuer();
+        let mut validation = Validation::new(Algorithm::ES256);
+        validation.set_audience(&[self.config.audience.clone()]);
+        validation.set_issuer(&[issuer]);
+
+        decode::<Value>(token, &decoding_key, &validation)
+            .map(|data| data.claims)
+            .map_err(|error| {
+                error!(%error, "Failed to validate Supabase JWT");
+                AppError::Unauthorized(format!("Invalid authentication token: {error}"))
+            })
+    }
+
+    pub fn extract_user_from_token(&self, claims: &Value) -> AppResult<(String, String)> {
+        let email = claims.get("email").and_then(Value::as_str).ok_or_else(|| {
+            error!("JWT token missing email claim");
+            AppError::Unauthorized("Invalid token: missing email".to_string())
+        })?;
+        let user_id = claims.get("sub").and_then(Value::as_str).ok_or_else(|| {
+            error!("JWT token missing sub claim");
+            AppError::Unauthorized("Invalid token: missing user ID".to_string())
+        })?;
 
         Ok((user_id.to_string(), email.to_string()))
     }
 
-    /// Validate a JWT token and return user information
     pub async fn validate_and_extract_user(&self, token: &str) -> AppResult<(String, String)> {
         let claims = self.validate_jwt_token(token).await?;
         self.extract_user_from_token(&claims)
     }
 
-    /// Create a user in Supabase Auth using the service role key
     pub async fn create_user(
         &self,
         email: &str,
         password: &str,
         user_metadata: serde_json::Value,
     ) -> AppResult<SupabaseUserResponse> {
-        let url = format!("{}/auth/v1/admin/users", self.config.url);
-
-        let request_payload = SupabaseUserCreateRequest {
+        let payload = SupabaseUserCreateRequest {
             email: email.to_string(),
             password: password.to_string(),
-            email_confirm: true, // Auto-confirm email for admin-created users
+            email_confirm: true,
             user_metadata,
             app_metadata: None,
         };
 
-        info!("Creating user in Supabase Auth: {}", email);
-
-        let client = reqwest::Client::new();
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.config.secret_key))
-            .header("apikey", &self.config.secret_key)
-            .header("Content-Type", "application/json")
-            .json(&request_payload)
-            .send()
-            .await
-            .map_err(|e| {
-                error!("Failed to send request to Supabase: {}", e);
-                AppError::SupabaseError(format!("Failed to create user in Supabase Auth: {}", e))
-            })?;
-
-        if response.status().is_success() {
-            let user_response: SupabaseUserResponse = response.json().await.map_err(|e| {
-                error!("Failed to parse Supabase response: {}", e);
-                AppError::SupabaseError("Failed to parse Supabase response".to_string())
-            })?;
-
-            info!("Successfully created user in Supabase Auth: {} (ID: {})", email, user_response.id);
-            Ok(user_response)
-        } else {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            error!("Failed to create user in Supabase Auth: {} - {}", status, error_text);
-
-            // Handle specific error cases
-            if status.as_u16() == 422 {
-                if error_text.contains("already registered") {
-                    return Err(AppError::BadRequest("User with this email already exists in Supabase Auth".to_string()));
-                }
-                if error_text.contains("Password should be at least") {
-                    return Err(AppError::Validation("Password does not meet Supabase requirements".to_string()));
-                }
-            }
-
-            Err(AppError::SupabaseError(format!("Failed to create user in Supabase Auth: {} - {}", status, error_text)))
-        }
-    }
-
-    /// Delete a user from Supabase Auth
-    pub async fn delete_user(&self, user_id: &UserId) -> AppResult<()> {
-        let url = format!("{}/auth/v1/admin/users/{}", self.config.url, user_id);
-
-        info!("Deleting user from Supabase Auth: {}", user_id);
-
-        let client = reqwest::Client::new();
-        let response = client
-            .delete(&url)
-            .header("Authorization", format!("Bearer {}", self.config.secret_key))
-            .header("apikey", &self.config.secret_key)
-            .send()
-            .await
-            .map_err(|e| {
-                error!("Failed to delete user from Supabase: {}", e);
-                AppError::SupabaseError(format!("Failed to delete user from Supabase Auth: {}", e))
-            })?;
-
-        if response.status().is_success() {
-            info!("Successfully deleted user from Supabase Auth: {}", user_id);
-            Ok(())
-        } else {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            error!("Failed to delete user from Supabase Auth: {} - {}", status, error_text);
-            Err(AppError::SupabaseError(format!("Failed to delete user from Supabase Auth: {} - {}", status, error_text)))
-        }
-    }
-
-    /// Update user password in Supabase Auth
-    pub async fn update_user_password(&self, user_id: &UserId, new_password: &str) -> AppResult<()> {
-        let url = format!("{}/auth/v1/admin/users/{}", self.config.url, user_id);
-
-        let payload = serde_json::json!({
-            "password": new_password
-        });
-
-        info!("Updating password in Supabase Auth for user: {}", user_id);
-
-        let client = reqwest::Client::new();
-        let response = client
-            .put(&url)
-            .header("Authorization", format!("Bearer {}", self.config.secret_key))
-            .header("apikey", &self.config.secret_key)
-            .header("Content-Type", "application/json")
+        info!(email, "Creating user in Supabase Auth");
+        let response = self
+            .admin_request(Method::POST, "auth/v1/admin/users")
             .json(&payload)
             .send()
             .await
-            .map_err(|e| {
-                error!("Failed to update password in Supabase: {}", e);
-                AppError::SupabaseError(format!("Failed to update password in Supabase Auth: {}", e))
+            .map_err(|error| {
+                error!(%error, "Failed to send Supabase user creation request");
+                AppError::SupabaseError(format!("Failed to create user in Supabase Auth: {error}"))
             })?;
 
         if response.status().is_success() {
-            info!("Successfully updated password in Supabase Auth for user: {}", user_id);
-            Ok(())
-        } else {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            error!("Failed to update password in Supabase Auth: {} - {}", status, error_text);
-            Err(AppError::SupabaseError(format!("Failed to update password in Supabase Auth: {} - {}", status, error_text)))
+            let user = response
+                .json::<SupabaseUserResponse>()
+                .await
+                .map_err(|error| {
+                    error!(%error, "Failed to parse Supabase user response");
+                    AppError::SupabaseError("Failed to parse Supabase response".to_string())
+                })?;
+            info!(email, user_id = %user.id, "Created user in Supabase Auth");
+            return Ok(user);
         }
+
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        error!(%status, "Failed to create user in Supabase Auth");
+        if status.as_u16() == 422 {
+            if error_text.contains("already registered") {
+                return Err(AppError::BadRequest(
+                    "User with this email already exists in Supabase Auth".to_string(),
+                ));
+            }
+            if error_text.contains("Password should be at least") {
+                return Err(AppError::Validation(
+                    "Password does not meet Supabase requirements".to_string(),
+                ));
+            }
+        }
+
+        Err(AppError::SupabaseError(format!(
+            "Failed to create user in Supabase Auth: {status} - {error_text}"
+        )))
     }
 
-    /// Generate a secure temporary password
+    pub async fn delete_user(&self, user_id: &UserId) -> AppResult<()> {
+        info!(%user_id, "Deleting user from Supabase Auth");
+        let response = self
+            .admin_request(Method::DELETE, &format!("auth/v1/admin/users/{user_id}"))
+            .send()
+            .await
+            .map_err(|error| {
+                error!(%error, "Failed to send Supabase user deletion request");
+                AppError::SupabaseError(format!(
+                    "Failed to delete user from Supabase Auth: {error}"
+                ))
+            })?;
+
+        if response.status().is_success() {
+            info!(%user_id, "Deleted user from Supabase Auth");
+            return Ok(());
+        }
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        error!(%status, %user_id, "Failed to delete user from Supabase Auth");
+        Err(AppError::SupabaseError(format!(
+            "Failed to delete user from Supabase Auth: {status} - {body}"
+        )))
+    }
+
+    pub async fn update_user_password(
+        &self,
+        user_id: &UserId,
+        new_password: &str,
+    ) -> AppResult<()> {
+        info!(%user_id, "Updating password in Supabase Auth");
+        let response = self
+            .admin_request(Method::PUT, &format!("auth/v1/admin/users/{user_id}"))
+            .json(&serde_json::json!({ "password": new_password }))
+            .send()
+            .await
+            .map_err(|error| {
+                error!(%error, "Failed to send Supabase password update request");
+                AppError::SupabaseError(format!(
+                    "Failed to update password in Supabase Auth: {error}"
+                ))
+            })?;
+
+        if response.status().is_success() {
+            info!(%user_id, "Updated password in Supabase Auth");
+            return Ok(());
+        }
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        error!(%status, %user_id, "Failed to update password in Supabase Auth");
+        Err(AppError::SupabaseError(format!(
+            "Failed to update password in Supabase Auth: {status} - {body}"
+        )))
+    }
+
     pub fn generate_temporary_password() -> String {
         use rand::Rng;
-        let password: String = rand::thread_rng()
+
+        rand::thread_rng()
             .sample_iter(&rand::distributions::Alphanumeric)
-            .take(12)
+            .take(20)
             .map(char::from)
-            .collect();
-        password
+            .collect()
     }
 
-    /// Create a student with complete registration flow (database + Supabase Auth)
     pub async fn create_student_complete(
         &self,
         request: &AdminCreateStudentRequest,
         user_id: &UserId,
     ) -> AppResult<UserRegistrationResult> {
-        info!("Starting complete student registration for: {}", request.email);
-
-        // Generate temporary password
+        info!(email = %request.email, "Starting student registration");
         let temporary_password = Self::generate_temporary_password();
-        let password_expiry = Utc::now() + Duration::days(7); // Password expires in 7 days
-
-        // Prepare user metadata for Supabase
+        let password_expiry = Utc::now() + Duration::days(7);
         let user_metadata = serde_json::json!({
             "role": "student",
             "school_id": request.school_id.to_string(),
@@ -304,19 +327,9 @@ impl SupabaseAdminService {
             "talent_profile_ref": request.talent_profile_ref,
             "parent_id": request.parent_id.map(|id| id.to_string())
         });
-
-        let app_metadata = serde_json::json!({
-            "provider": "email",
-            "created_by": "admin",
-            "user_id": user_id.to_string()
-        });
-
-        // Create user in Supabase Auth
-        let supabase_user = self.create_user(
-            &request.email,
-            &temporary_password,
-            user_metadata,
-        ).await?;
+        let supabase_user = self
+            .create_user(&request.email, &temporary_password, user_metadata)
+            .await?;
 
         Ok(UserRegistrationResult {
             user_id: user_id.to_string(),
@@ -327,37 +340,22 @@ impl SupabaseAdminService {
         })
     }
 
-    /// Create a teacher with complete registration flow (database + Supabase Auth)
     pub async fn create_teacher_complete(
         &self,
         request: &AdminCreateTeacherRequest,
         user_id: &UserId,
     ) -> AppResult<UserRegistrationResult> {
-        info!("Starting complete teacher registration for: {}", request.email);
-
-        // Generate temporary password
+        info!(email = %request.email, "Starting teacher registration");
         let temporary_password = Self::generate_temporary_password();
-        let password_expiry = Utc::now() + Duration::days(7); // Password expires in 7 days
-
-        // Prepare user metadata for Supabase
+        let password_expiry = Utc::now() + Duration::days(7);
         let user_metadata = serde_json::json!({
             "role": "teacher",
             "school_id": request.school_id.to_string(),
             "subject": request.subject
         });
-
-        let app_metadata = serde_json::json!({
-            "provider": "email",
-            "created_by": "admin",
-            "user_id": user_id.to_string()
-        });
-
-        // Create user in Supabase Auth
-        let supabase_user = self.create_user(
-            &request.email,
-            &temporary_password,
-            user_metadata,
-        ).await?;
+        let supabase_user = self
+            .create_user(&request.email, &temporary_password, user_metadata)
+            .await?;
 
         Ok(UserRegistrationResult {
             user_id: user_id.to_string(),
@@ -368,37 +366,22 @@ impl SupabaseAdminService {
         })
     }
 
-    /// Create a parent with complete registration flow (database + Supabase Auth)
     pub async fn create_parent_complete(
         &self,
         request: &AdminCreateParentRequest,
         user_id: &UserId,
     ) -> AppResult<UserRegistrationResult> {
-        info!("Starting complete parent registration for: {}", request.email);
-
-        // Generate temporary password
+        info!(email = %request.email, "Starting parent registration");
         let temporary_password = Self::generate_temporary_password();
-        let password_expiry = Utc::now() + Duration::days(7); // Password expires in 7 days
-
-        // Prepare user metadata for Supabase
+        let password_expiry = Utc::now() + Duration::days(7);
         let user_metadata = serde_json::json!({
             "role": "parent",
             "school_id": request.school_id.to_string(),
             "phone": request.phone
         });
-
-        let app_metadata = serde_json::json!({
-            "provider": "email",
-            "created_by": "admin",
-            "user_id": user_id.to_string()
-        });
-
-        // Create user in Supabase Auth
-        let supabase_user = self.create_user(
-            &request.email,
-            &temporary_password,
-            user_metadata,
-        ).await?;
+        let supabase_user = self
+            .create_user(&request.email, &temporary_password, user_metadata)
+            .await?;
 
         Ok(UserRegistrationResult {
             user_id: user_id.to_string(),
@@ -409,77 +392,53 @@ impl SupabaseAdminService {
         })
     }
 
-    /// Send password reset email
     pub async fn send_password_reset(&self, email: &str) -> AppResult<()> {
-        let url = format!("{}/auth/v1/recover", self.config.url);
-
-        let payload = serde_json::json!({
-            "email": email
-        });
-
-        info!("Sending password reset email to: {}", email);
-
-        let client = reqwest::Client::new();
-        let response = client
-            .post(&url)
-            .header("apikey", &self.config.secret_key)
-            .header("Content-Type", "application/json")
-            .json(&payload)
+        info!(email, "Requesting Supabase password reset");
+        let response = self
+            .admin_request(Method::POST, "auth/v1/recover")
+            .json(&serde_json::json!({ "email": email }))
             .send()
             .await
-            .map_err(|e| {
-                error!("Failed to send password reset email: {}", e);
-                AppError::SupabaseError(format!("Failed to send password reset email: {}", e))
+            .map_err(|error| {
+                error!(%error, "Failed to send password reset request");
+                AppError::SupabaseError(format!("Failed to send password reset email: {error}"))
             })?;
 
         if response.status().is_success() {
-            info!("Successfully sent password reset email to: {}", email);
-            Ok(())
-        } else {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            error!("Failed to send password reset email: {} - {}", status, error_text);
-            Err(AppError::SupabaseError(format!("Failed to send password reset email: {} - {}", status, error_text)))
+            return Ok(());
         }
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(AppError::SupabaseError(format!(
+            "Failed to send password reset email: {status} - {body}"
+        )))
     }
 
-    /// Send email confirmation (for user registration)
     pub async fn send_email_confirmation(&self, email: &str) -> AppResult<()> {
-        let url = format!("{}/auth/v1/verify", self.config.url);
-
-        let payload = serde_json::json!({
-            "email": email,
-            "type": "signup"
-        });
-
-        info!("Sending email confirmation to: {}", email);
-
-        let client = reqwest::Client::new();
-        let response = client
-            .post(&url)
-            .header("apikey", &self.config.secret_key)
-            .header("Content-Type", "application/json")
-            .json(&payload)
+        info!(email, "Requesting Supabase email confirmation");
+        let response = self
+            .admin_request(Method::POST, "auth/v1/verify")
+            .json(&serde_json::json!({ "email": email, "type": "signup" }))
             .send()
             .await
-            .map_err(|e| {
-                error!("Failed to send email confirmation: {}", e);
-                AppError::SupabaseError(format!("Failed to send email confirmation: {}", e))
+            .map_err(|error| {
+                error!(%error, "Failed to send email confirmation request");
+                AppError::SupabaseError(format!("Failed to send email confirmation: {error}"))
             })?;
 
         if response.status().is_success() {
-            info!("Successfully sent email confirmation to: {}", email);
-            Ok(())
-        } else {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            error!("Failed to send email confirmation: {} - {}", status, error_text);
-            Err(AppError::SupabaseError(format!("Failed to send email confirmation: {} - {}", status, error_text)))
+            return Ok(());
         }
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(AppError::SupabaseError(format!(
+            "Failed to send email confirmation: {status} - {body}"
+        )))
     }
 }
 
-// Helper function to create user metadata for our application
 pub fn create_user_metadata(name: &str, role: &str, school_id: &str) -> serde_json::Value {
     serde_json::json!({
         "name": name,
@@ -488,4 +447,65 @@ pub fn create_user_metadata(name: &str, role: &str, school_id: &str) -> serde_js
         "created_by": "school_manager",
         "source": "admin_panel"
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> SupabaseConfig {
+        SupabaseConfig {
+            url: "https://project.supabase.co".to_string(),
+            project_ref: "project".to_string(),
+            audience: "authenticated".to_string(),
+            publishable_key: "publishable".to_string(),
+            secret_key: "secret".to_string(),
+        }
+    }
+
+    #[test]
+    fn managed_issuer_remains_backwards_compatible() {
+        assert_eq!(
+            resolve_jwt_issuer(&config(), None),
+            "https://project.supabase.co/auth/v1",
+        );
+    }
+
+    #[test]
+    fn self_hosted_issuer_is_explicit_and_normalized() {
+        assert_eq!(
+            resolve_jwt_issuer(
+                &config(),
+                Some(" https://supabase.school.example/auth/v1/ "),
+            ),
+            "https://supabase.school.example/auth/v1",
+        );
+    }
+
+    #[test]
+    fn mixed_legacy_and_asymmetric_jwks_deserializes() {
+        let jwks: JwkSet = serde_json::from_value(serde_json::json!({
+            "keys": [
+                {
+                    "kid": "legacy",
+                    "kty": "oct",
+                    "alg": "HS256",
+                    "k": "not-used-by-es256-validation"
+                },
+                {
+                    "kid": "current",
+                    "kty": "EC",
+                    "alg": "ES256",
+                    "crv": "P-256",
+                    "x": "x-coordinate",
+                    "y": "y-coordinate"
+                }
+            ]
+        }))
+        .expect("mixed Supabase JWKS must deserialize");
+
+        assert_eq!(jwks.keys.len(), 2);
+        assert!(jwks.keys[0].x.is_none());
+        assert_eq!(jwks.keys[1].x.as_deref(), Some("x-coordinate"));
+    }
 }

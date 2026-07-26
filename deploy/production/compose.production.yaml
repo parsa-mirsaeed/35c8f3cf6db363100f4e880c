@@ -1,0 +1,348 @@
+name: edutalent-production
+
+x-edutalent-environment: &edutalent-environment
+  DATABASE_URL: postgresql://${DATABASE_APP_USER:?DATABASE_APP_USER is required}:${DATABASE_APP_PASSWORD:?DATABASE_APP_PASSWORD is required}@db:5432/${POSTGRES_DB:-postgres}
+  DATABASE_APP_USER: ${DATABASE_APP_USER:?DATABASE_APP_USER is required}
+  DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-15}
+  DATABASE_MIN_CONNECTIONS: ${DATABASE_MIN_CONNECTIONS:-1}
+  DATABASE_CONNECT_TIMEOUT: ${DATABASE_CONNECT_TIMEOUT:-30}
+  PORT: ${EDUTALENT_INTERNAL_PORT:-8080}
+  SERVER_HOST: 0.0.0.0
+  SERVER_PORT: ${EDUTALENT_INTERNAL_PORT:-8080}
+  SERVER_WORKERS: ${SERVER_WORKERS:-2}
+  RUST_LOG: ${RUST_LOG:-info}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+  JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
+  SUPABASE_URL: http://kong:8000
+  SUPABASE_PUBLIC_URL: https://${SUPABASE_DOMAIN:?SUPABASE_DOMAIN is required}
+  SUPABASE_JWT_ISSUER: https://${SUPABASE_DOMAIN:?SUPABASE_DOMAIN is required}/auth/v1
+  SUPABASE_PROJECT_REF: self-hosted
+  SUPABASE_AUDIENCE: ${SUPABASE_AUDIENCE:-authenticated}
+  SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:?SUPABASE_PUBLISHABLE_KEY is required}
+  SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:?SUPABASE_SECRET_KEY is required}
+  QDRANT_URL: http://qdrant:6334
+  QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
+  QDRANT_COLLECTION: ${QDRANT_COLLECTION:-edutalent_materials_local_v1}
+  QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+  EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://embedding:80/v1}
+  EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+  EMBEDDING_VECTOR_SIZE: ${EMBEDDING_VECTOR_SIZE:-384}
+  KNOWLEDGE_JOB_POLL_MS: ${KNOWLEDGE_JOB_POLL_MS:-1000}
+  KNOWLEDGE_JOB_HEARTBEAT_SECONDS: ${KNOWLEDGE_JOB_HEARTBEAT_SECONDS:-15}
+  KNOWLEDGE_JOB_STALE_SECONDS: ${KNOWLEDGE_JOB_STALE_SECONDS:-120}
+  KNOWLEDGE_JOB_MAX_ATTEMPTS: ${KNOWLEDGE_JOB_MAX_ATTEMPTS:-5}
+  KNOWLEDGE_CHUNK_SIZE: ${KNOWLEDGE_CHUNK_SIZE:-1200}
+  KNOWLEDGE_CHUNK_OVERLAP: ${KNOWLEDGE_CHUNK_OVERLAP:-200}
+
+x-security-baseline: &security-baseline
+  init: true
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  # Stage operator-owned mode-600 TLS files and initialize Caddy's persistent
+  # state volumes for the numeric non-root identity. This bounded one-shot has
+  # no network access; the long-running gateway never sees the source key bind.
+  gateway-tls:
+    <<: *security-baseline
+    image: caddy:2.11.4-alpine
+    user: "0:0"
+    restart: "no"
+    environment:
+      GATEWAY_UID: ${GATEWAY_UID:-1000}
+      GATEWAY_GID: ${GATEWAY_GID:-1000}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        chown -R "$${GATEWAY_UID}:$${GATEWAY_GID}" /data /config
+        chmod 0700 /data /config
+        cp -f /source/fullchain.pem /prepared/fullchain.pem
+        cp -f /source/privkey.pem /prepared/privkey.pem
+        chown "$${GATEWAY_UID}:$${GATEWAY_GID}" /prepared/fullchain.pem /prepared/privkey.pem
+        chmod 0644 /prepared/fullchain.pem
+        chmod 0600 /prepared/privkey.pem
+    volumes:
+      - ${TLS_CERT_FILE:?TLS_CERT_FILE is required}:/source/fullchain.pem:ro
+      - ${TLS_KEY_FILE:?TLS_KEY_FILE is required}:/source/privkey.pem:ro
+      - gateway-tls:/prepared
+      - caddy-data:/data
+      - caddy-config:/config
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # The only host-published service. The gateway listens on unprivileged
+  # container ports while Docker maps host ports 80/443 to it.
+  gateway:
+    <<: *security-baseline
+    image: caddy:2.11.4-alpine
+    user: "${GATEWAY_UID:-1000}:${GATEWAY_GID:-1000}"
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required}
+      SUPABASE_DOMAIN: ${SUPABASE_DOMAIN:?SUPABASE_DOMAIN is required}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:?ADMIN_DOMAIN is required}
+      ADMIN_ALLOWED_CIDRS: ${ADMIN_ALLOWED_CIDRS:-127.0.0.1/32 ::1/128}
+      EDUTALENT_INTERNAL_PORT: ${EDUTALENT_INTERNAL_PORT:-8080}
+    ports:
+      - target: 8080
+        published: "80"
+        protocol: tcp
+        mode: host
+      - target: 8443
+        published: "443"
+        protocol: tcp
+        mode: host
+    volumes:
+      - gateway-tls:/etc/caddy/tls:ro
+      - ${EDUTALENT_PRODUCTION_DIR:?EDUTALENT_PRODUCTION_DIR is required}/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      gateway-tls:
+        condition: service_completed_successfully
+      app:
+        condition: service_healthy
+      kong:
+        condition: service_healthy
+    networks:
+      - edge
+      - supabase_api
+      - admin
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    deploy:
+      resources:
+        limits:
+          cpus: "${GATEWAY_CPU_LIMIT:-0.50}"
+          memory: "${GATEWAY_MEMORY_LIMIT:-256M}"
+
+  # Database schema changes run with the Supabase bootstrap administrator only.
+  migrate:
+    <<: *security-baseline
+    image: ${EDUTALENT_IMAGE:-edutalent}:${EDUTALENT_TAG:-local}
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-postgres}
+    command: ["migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - data
+    cap_drop:
+      - ALL
+
+  # Configure the generated backend identity after migrations. This one-shot
+  # service is the only application image process that receives the bootstrap
+  # administrator URL.
+  database-access:
+    <<: *security-baseline
+    image: ${EDUTALENT_IMAGE:-edutalent}:${EDUTALENT_TAG:-local}
+    restart: "no"
+    environment:
+      DATABASE_ADMIN_URL: postgresql://postgres:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-postgres}
+      DATABASE_APP_USER: ${DATABASE_APP_USER:?DATABASE_APP_USER is required}
+      DATABASE_APP_PASSWORD: ${DATABASE_APP_PASSWORD:?DATABASE_APP_PASSWORD is required}
+    command: ["configure-database-role"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - data
+    cap_drop:
+      - ALL
+
+  app:
+    <<: *security-baseline
+    image: ${EDUTALENT_IMAGE:-edutalent}:${EDUTALENT_TAG:-local}
+    restart: unless-stopped
+    environment:
+      <<: *edutalent-environment
+      RUN_MIGRATIONS: "false"
+    command: ["server"]
+    expose:
+      - "${EDUTALENT_INTERNAL_PORT:-8080}"
+    depends_on:
+      database-access:
+        condition: service_completed_successfully
+      kong:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - supabase_api
+      - data
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "${APP_CPU_LIMIT:-1.50}"
+          memory: "${APP_MEMORY_LIMIT:-2G}"
+
+  qdrant:
+    <<: *security-baseline
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.18.2}
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
+      QDRANT__SERVICE__ENABLE_TLS: "false"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    expose:
+      - "6333"
+      - "6334"
+    networks:
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: "${QDRANT_CPU_LIMIT:-1.50}"
+          memory: "${QDRANT_MEMORY_LIMIT:-2G}"
+
+  # Compatibility-only local embedding service. It is not started unless the
+  # local-embedding profile is explicitly selected.
+  embedding:
+    <<: *security-baseline
+    profiles: ["local-embedding"]
+    image: ${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-1.9}
+    restart: unless-stopped
+    command:
+      - --model-id
+      - ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      - --served-model-name
+      - ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+    volumes:
+      - embedding-data:/data
+    expose:
+      - "80"
+    networks:
+      - data
+    deploy:
+      resources:
+        limits:
+          cpus: "${EMBEDDING_CPU_LIMIT:-1.50}"
+          memory: "${EMBEDDING_MEMORY_LIMIT:-4G}"
+
+  # Remove all upstream public host ports. Caddy is the sole ingress path.
+  kong:
+    ports: !reset []
+    networks: !override
+      - supabase_api
+      - admin
+    security_opt:
+      - no-new-privileges:true
+
+  supavisor:
+    ports: !reset []
+    networks: !override
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+  studio:
+    networks: !override
+      - admin
+      - supabase_api
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+  auth:
+    networks: !override
+      - supabase_api
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+  rest:
+    networks: !override
+      - supabase_api
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+  realtime:
+    networks: !override
+      - supabase_api
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+  storage:
+    networks: !override
+      - supabase_api
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+  imgproxy:
+    networks: !override
+      - supabase_api
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+  meta:
+    networks: !override
+      - admin
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+  # Edge Functions are retained in the coordinated upstream definition but are
+  # disabled by default because EduTalent does not depend on them. Enabling this
+  # profile requires its own health and ingress acceptance review.
+  functions:
+    profiles: ["edge-functions"]
+    networks: !override
+      - supabase_api
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+  db:
+    networks: !override
+      - data
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  edge:
+    name: edutalent-edge
+    internal: true
+  supabase_api:
+    name: edutalent-supabase-api
+    internal: true
+  data:
+    name: edutalent-data
+    internal: true
+  admin:
+    name: edutalent-admin
+    internal: true
+
+volumes:
+  qdrant-data:
+  embedding-data:
+  gateway-tls:
+  caddy-data:
+  caddy-config:

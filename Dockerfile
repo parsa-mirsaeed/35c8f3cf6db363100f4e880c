@@ -1,5 +1,4 @@
 # syntax=docker/dockerfile:1.7
-
 ARG RUST_IMAGE=rust:1.96.1-trixie
 FROM ${RUST_IMAGE} AS toolchain
 
@@ -70,8 +69,12 @@ COPY --from=builder /opt/edutalent-bundle/ /opt/edutalent/
 COPY packages/api/migration/migrations/ /opt/edutalent/packages/api/migration/migrations/
 COPY migrations/ /opt/edutalent/migrations/
 COPY scripts/ci/apply_migrations.sh /opt/edutalent/scripts/ci/apply_migrations.sh
+COPY scripts/ci/configure_database_role.sh /opt/edutalent/scripts/ci/configure_database_role.sh
 COPY docker/entrypoint.sh /usr/local/bin/edutalent-entrypoint
-RUN chmod +x /usr/local/bin/edutalent-entrypoint /opt/edutalent/scripts/ci/apply_migrations.sh
+RUN chmod +x \
+    /usr/local/bin/edutalent-entrypoint \
+    /opt/edutalent/scripts/ci/apply_migrations.sh \
+    /opt/edutalent/scripts/ci/configure_database_role.sh
 
 ENV IP=0.0.0.0 \
     PORT=8080 \

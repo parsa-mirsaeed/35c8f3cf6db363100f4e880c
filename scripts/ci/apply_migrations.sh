@@ -36,18 +36,31 @@ sql_literal() {
 # but are not owned by this repository's application migrations. The local table
 # remains empty; only its contract is needed by UUID sync and provisioning migrations.
 #
+# A self-hosted Supabase database already owns and protects auth.users. PostgreSQL
+# checks schema CREATE privileges even for CREATE TABLE IF NOT EXISTS, so create the
+# compatibility stub only when the table is genuinely absent. This preserves the
+# plain-PostgreSQL CI contract without attempting to modify Supabase Auth internals.
+#
 # edutalent_migration_files makes the canonical file runner safe to execute on every
 # container start. A previously applied file is skipped only when its checksum is
 # unchanged; edited historical migrations fail closed.
 psql "$DATABASE_URL" --set=ON_ERROR_STOP=1 <<'SQL'
 CREATE SCHEMA IF NOT EXISTS auth;
-CREATE TABLE IF NOT EXISTS auth.users (
-    id UUID PRIMARY KEY,
-    email TEXT UNIQUE,
-    raw_user_meta_data JSONB NOT NULL DEFAULT '{}'::JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+DO $edutalent_auth_stub$
+BEGIN
+    IF to_regclass('auth.users') IS NULL THEN
+        EXECUTE $create_auth_users$
+            CREATE TABLE auth.users (
+                id UUID PRIMARY KEY,
+                email TEXT UNIQUE,
+                raw_user_meta_data JSONB NOT NULL DEFAULT '{}'::JSONB,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        $create_auth_users$;
+    END IF;
+END
+$edutalent_auth_stub$;
 
 CREATE TABLE IF NOT EXISTS _sqlx_migrations (
     version BIGINT PRIMARY KEY,

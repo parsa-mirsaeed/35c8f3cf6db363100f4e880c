@@ -114,7 +114,10 @@ set_env "${SUPABASE_ENV}" API_EXTERNAL_URL "https://${supabase_domain}/auth/v1"
 set_env "${SUPABASE_ENV}" SITE_URL "https://${app_domain}"
 set_env "${SUPABASE_ENV}" ADDITIONAL_REDIRECT_URLS "https://${app_domain}"
 set_env "${SUPABASE_ENV}" DISABLE_SIGNUP "true"
-set_env "${SUPABASE_ENV}" ENABLE_EMAIL_SIGNUP "false"
+# GoTrue uses this provider switch for both password registration and login.
+# Keep it enabled for administratively provisioned users; DISABLE_SIGNUP above
+# independently prevents public registration.
+set_env "${SUPABASE_ENV}" ENABLE_EMAIL_SIGNUP "true"
 set_env "${SUPABASE_ENV}" ENABLE_EMAIL_AUTOCONFIRM "false"
 set_env "${SUPABASE_ENV}" ENABLE_ANONYMOUS_USERS "false"
 set_env "${SUPABASE_ENV}" ENABLE_PHONE_SIGNUP "false"

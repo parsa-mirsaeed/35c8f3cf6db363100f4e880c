@@ -211,9 +211,13 @@ acceptance review rather than silently expanding the public surface.
 ## Authentication policy
 
 Public signup, anonymous users, phone signup, and unauthenticated Edge Functions
-are disabled. Cloud SMTP is not required. Schools may provision users through
-approved administrative flows and perform recovery locally. A local SMTP relay
-can be configured later without granting general internet access.
+are disabled. The email provider remains enabled because Supabase Auth uses that
+provider switch for both registration and password login; `DISABLE_SIGNUP=true`
+independently blocks public registration while allowing administratively
+provisioned users to log in. Cloud SMTP is not required. Schools may provision
+users through approved administrative flows and perform recovery locally. A
+local SMTP relay can be configured later without granting general internet
+access.
 
 EduTalent validates Supabase ES256 tokens against the local JWKS endpoint and the
 explicit public self-hosted issuer `https://SUPABASE_DOMAIN/auth/v1`; it does not

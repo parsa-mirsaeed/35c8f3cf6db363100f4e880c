@@ -324,6 +324,21 @@ def main() -> None:
         if functions_profiles != ["edge-functions"]:
             fail("Edge Functions must remain disabled behind the explicit profile")
 
+    auth_env = services["auth"].get("environment", {}) or {}
+    auth_expectations = {
+        "GOTRUE_DISABLE_SIGNUP": "true",
+        "GOTRUE_EXTERNAL_EMAIL_ENABLED": "true",
+        "GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED": "false",
+        "GOTRUE_EXTERNAL_PHONE_ENABLED": "false",
+    }
+    for key, expected in auth_expectations.items():
+        actual = str(auth_env.get(key, "")).lower()
+        if actual != expected:
+            fail(
+                f"Supabase Auth setting {key} must render as {expected}, "
+                f"got {actual or 'missing'}"
+            )
+
     pooler_ulimits = services["supavisor"].get("ulimits", {}) or {}
     pooler_nofile = pooler_ulimits.get("nofile", {}) or {}
     if not isinstance(pooler_nofile, dict) or {

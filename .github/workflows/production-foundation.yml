@@ -390,7 +390,7 @@ jobs:
             --data "${login_payload}" \
             'https://supabase.ci.internal/auth/v1/token?grant_type=password')"
           if [[ "${login_status}" != "200" ]]; then
-            login_error_code="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("code", "missing"))' "${RUNNER_TEMP}/login.json")"
+            login_error_code="$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1], encoding="utf-8")).get("error_code"); print(value if isinstance(value, str) and re.fullmatch(r"[a-z0-9_]+", value) else "missing")' "${RUNNER_TEMP}/login.json")"
             echo "Supabase password login returned ${login_status} (${login_error_code})." >&2
             exit 1
           fi

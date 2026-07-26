@@ -130,10 +130,10 @@ postgres_password="$(read_env "${SUPABASE_ENV}" POSTGRES_PASSWORD)"
   exit 1
 }
 
-for key in DISABLE_SIGNUP ENABLE_ANONYMOUS_USERS ENABLE_PHONE_SIGNUP FUNCTIONS_VERIFY_JWT; do
+for key in DISABLE_SIGNUP ENABLE_EMAIL_SIGNUP ENABLE_ANONYMOUS_USERS ENABLE_PHONE_SIGNUP FUNCTIONS_VERIFY_JWT; do
   value="$(read_env "${SUPABASE_ENV}" "${key}")"
   case "${key}:${value}" in
-    DISABLE_SIGNUP:true|ENABLE_ANONYMOUS_USERS:false|ENABLE_PHONE_SIGNUP:false|FUNCTIONS_VERIFY_JWT:true) ;;
+    DISABLE_SIGNUP:true|ENABLE_EMAIL_SIGNUP:true|ENABLE_ANONYMOUS_USERS:false|ENABLE_PHONE_SIGNUP:false|FUNCTIONS_VERIFY_JWT:true) ;;
     *) echo "Unsafe Supabase setting ${key}=${value}" >&2; exit 1 ;;
   esac
 done

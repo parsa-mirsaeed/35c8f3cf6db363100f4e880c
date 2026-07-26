@@ -100,7 +100,9 @@ Production does **not** use the lightweight standalone PostgreSQL/Supabase arran
 - a numeric non-root Caddy gateway with zero effective Linux capabilities;
 - host ports 80/443 mapped to unprivileged container ports 8080/8443;
 - generated asymmetric Supabase signing keys and opaque API keys;
-- disabled public signup, anonymous/phone auth, cloud SMTP defaults, Studio AI, and default Edge Functions startup/ingress.
+- disabled public signup, anonymous/phone auth, cloud SMTP defaults, Studio AI,
+  and default Edge Functions startup/ingress, while retaining password login
+  for administratively provisioned email users.
 
 Start with:
 

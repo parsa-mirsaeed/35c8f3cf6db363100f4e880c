@@ -368,7 +368,7 @@ jobs:
           fi
           echo "Inactive Edge Functions ingress boundary verified."
 
-          test_email="ci-$(date +%s)-${RANDOM}@example.invalid"
+          test_email="ci-$(date +%s)-${RANDOM}@app.ci.internal"
           test_password="Ci-$(openssl rand -hex 16)-Aa1!"
           create_payload="$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"password":sys.argv[2],"email_confirm":True}))' "${test_email}" "${test_password}")"
           curl --fail --silent --show-error --insecure \
@@ -382,12 +382,18 @@ jobs:
           echo "Supabase secret-key administrative boundary verified."
 
           login_payload="$(python3 -c 'import json,sys; print(json.dumps({"email":sys.argv[1],"password":sys.argv[2]}))' "${test_email}" "${test_password}")"
-          curl --fail --silent --show-error --insecure \
+          login_status="$(curl --silent --show-error --insecure \
+            --output "${RUNNER_TEMP}/login.json" --write-out '%{http_code}' \
             --resolve supabase.ci.internal:443:127.0.0.1 \
             -H "apikey: ${publishable_key}" \
             -H 'Content-Type: application/json' \
             --data "${login_payload}" \
-            'https://supabase.ci.internal/auth/v1/token?grant_type=password' > "${RUNNER_TEMP}/login.json"
+            'https://supabase.ci.internal/auth/v1/token?grant_type=password')"
+          if [[ "${login_status}" != "200" ]]; then
+            login_error_code="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("code", "missing"))' "${RUNNER_TEMP}/login.json")"
+            echo "Supabase password login returned ${login_status} (${login_error_code})." >&2
+            exit 1
+          fi
           access_token="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["access_token"])' "${RUNNER_TEMP}/login.json")"
           curl --fail --silent --show-error --insecure \
             --resolve supabase.ci.internal:443:127.0.0.1 \

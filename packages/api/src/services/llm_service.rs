@@ -1,19 +1,24 @@
 //! External LLM client routed exclusively through the local AI gateway.
 //!
 //! Provider destinations and provider credentials are not accepted by this
-//! module. Requests are tenant-scoped and prompts are minimized before leaving
-//! the appliance.
+//! module. Requests are school-scoped and prompts are minimized before leaving
+//! the appliance. Internal identity fields are carried only for quota/audit
+//! routing and are never serialized into the provider prompt.
 
 use crate::ai_gateway_protocol::{
     GatewayChatMessage, GatewayChatRequest, GatewayChatResponse, GatewayErrorEnvelope,
     GatewayResponseFormat,
 };
+use reqwest::redirect::Policy as RedirectPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
 use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
+
+const INTERNAL_GATEWAY_ORIGIN: &str = "http://ai-gateway:8090";
+const APPROVED_LLM_MODEL: &str = "deepseek-chat";
 
 #[derive(Debug, Error)]
 pub enum LlmError {
@@ -41,12 +46,15 @@ pub enum LlmError {
 
 #[derive(Debug, Clone)]
 pub struct LlmConfig {
+    /// Internal AI Gateway bearer token, never a provider credential.
     pub api_key: String,
     pub base_url: String,
     pub model: String,
     pub max_tokens: u32,
     pub temperature: f32,
     pub request_timeout: Duration,
+    /// Compatibility fallback for callers that cannot yet carry a school ID.
+    /// Production personalization uses `StudentContext::school_id` instead.
     pub default_school_id: Option<Uuid>,
     pub max_prompt_chars: usize,
 }
@@ -55,8 +63,8 @@ impl Default for LlmConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            base_url: "http://ai-gateway:8090".to_string(),
-            model: "deepseek-chat".to_string(),
+            base_url: INTERNAL_GATEWAY_ORIGIN.to_string(),
+            model: APPROVED_LLM_MODEL.to_string(),
             max_tokens: 4_096,
             temperature: 0.7,
             request_timeout: Duration::from_secs(120),
@@ -68,47 +76,53 @@ impl Default for LlmConfig {
 
 impl LlmConfig {
     pub fn from_env() -> Result<Self, LlmError> {
-        let api_key = env::var("AI_GATEWAY_INTERNAL_TOKEN").map_err(|_| LlmError::MissingApiKey)?;
-        if api_key.len() < 24 {
+        let api_key = env::var("AI_GATEWAY_INTERNAL_TOKEN")
+            .map_err(|_| LlmError::MissingApiKey)?;
+        if api_key.len() < 32 || looks_like_placeholder(&api_key) {
             return Err(LlmError::MissingApiKey);
         }
         let base_url = env::var("AI_GATEWAY_URL")
-            .unwrap_or_else(|_| "http://ai-gateway:8090".to_string());
-        let parsed = reqwest::Url::parse(&base_url)
-            .map_err(|error| LlmError::InvalidResponse(format!("Invalid AI_GATEWAY_URL: {error}")))?;
-        if parsed.scheme() != "http" || parsed.host_str().is_none() {
+            .unwrap_or_else(|_| INTERNAL_GATEWAY_ORIGIN.to_string());
+        validate_internal_gateway_url(&base_url)?;
+        let model = env::var("LLM_MODEL")
+            .unwrap_or_else(|_| APPROVED_LLM_MODEL.to_string());
+        if model != APPROVED_LLM_MODEL {
+            return Err(LlmError::InvalidResponse(format!(
+                "LLM_MODEL must be exactly {APPROVED_LLM_MODEL}"
+            )));
+        }
+        let temperature = env::var("LLM_TEMPERATURE")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0.7);
+        if !f32::is_finite(temperature) || !(0.0..=2.0).contains(&temperature) {
             return Err(LlmError::InvalidResponse(
-                "AI_GATEWAY_URL must be an internal HTTP URL".to_string(),
+                "LLM_TEMPERATURE must be between 0 and 2".to_string(),
             ));
         }
         Ok(Self {
             api_key,
             base_url,
-            model: env::var("LLM_MODEL").unwrap_or_else(|_| "deepseek-chat".to_string()),
+            model,
             max_tokens: env::var("LLM_MAX_TOKENS")
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(4_096)
-                .clamp(1, 16_384),
-            temperature: env::var("LLM_TEMPERATURE")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(0.7),
+                .clamp(128, 16_384),
+            temperature,
             request_timeout: Duration::from_secs(
                 env::var("AI_GATEWAY_REQUEST_TIMEOUT_SECONDS")
                     .ok()
-                    .and_then(|value| value.parse().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
                     .unwrap_or(120)
                     .clamp(5, 180),
             ),
-            default_school_id: env::var("AI_GATEWAY_DEFAULT_SCHOOL_ID")
-                .ok()
-                .and_then(|value| Uuid::parse_str(&value).ok())
-                .filter(|value| !value.is_nil()),
+            default_school_id: None,
             max_prompt_chars: env::var("AI_MAX_PROMPT_CHARS")
                 .ok()
                 .and_then(|value| value.parse().ok())
-                .unwrap_or(80_000),
+                .unwrap_or(80_000)
+                .clamp(1_000, 500_000),
         })
     }
 
@@ -169,6 +183,9 @@ pub struct RubricCriterion {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StudentContext {
+    /// Internal quota/audit routing only; deliberately absent from serialization.
+    #[serde(skip)]
+    pub school_id: Uuid,
     pub student_id: String,
     pub student_name: String,
     pub talent_profile: Option<TalentProfile>,
@@ -225,8 +242,18 @@ impl ExternalLlmClient {
     }
 
     pub fn with_config(config: LlmConfig) -> Result<Self, LlmError> {
+        validate_internal_gateway_url(&config.base_url)?;
+        if config.model != APPROVED_LLM_MODEL {
+            return Err(LlmError::InvalidResponse(format!(
+                "LLM model must be exactly {APPROVED_LLM_MODEL}"
+            )));
+        }
+        if config.api_key.len() < 32 || looks_like_placeholder(&config.api_key) {
+            return Err(LlmError::MissingApiKey);
+        }
         let client = reqwest::Client::builder()
             .timeout(config.request_timeout)
+            .redirect(RedirectPolicy::none())
             .build()?;
         Ok(Self { client, config })
     }
@@ -236,17 +263,8 @@ impl ExternalLlmClient {
         base_assignment: &BaseAssignment,
         student_context: &StudentContext,
     ) -> Result<PersonalizedAssignment, LlmError> {
-        let school_id = self
-            .config
-            .default_school_id
-            .ok_or(LlmError::MissingSchoolId)?;
-        self.personalize_assignment_with_context_for_school(
-            school_id,
-            base_assignment,
-            student_context,
-            &[],
-        )
-        .await
+        self.personalize_assignment_with_context(base_assignment, student_context, &[])
+            .await
     }
 
     pub async fn personalize_assignment_with_context(
@@ -255,10 +273,14 @@ impl ExternalLlmClient {
         student_context: &StudentContext,
         material_context: &[MaterialContext],
     ) -> Result<PersonalizedAssignment, LlmError> {
-        let school_id = self
-            .config
-            .default_school_id
-            .ok_or(LlmError::MissingSchoolId)?;
+        let school_id = if !student_context.school_id.is_nil() {
+            student_context.school_id
+        } else {
+            self.config
+                .default_school_id
+                .filter(|value| !value.is_nil())
+                .ok_or(LlmError::MissingSchoolId)?
+        };
         self.personalize_assignment_with_context_for_school(
             school_id,
             base_assignment,
@@ -275,7 +297,7 @@ impl ExternalLlmClient {
         student_context: &StudentContext,
         material_context: &[MaterialContext],
     ) -> Result<PersonalizedAssignment, LlmError> {
-        if school_id.is_nil() {
+        if school_id.is_nil() || (!student_context.school_id.is_nil() && school_id != student_context.school_id) {
             return Err(LlmError::MissingSchoolId);
         }
         let messages = vec![
@@ -292,7 +314,9 @@ impl ExternalLlmClient {
                 )?,
             },
         ];
-        let response = self.chat_completion_for_school(school_id, messages, true).await?;
+        let response = self
+            .chat_completion_for_school(school_id, messages, true)
+            .await?;
         self.parse_personalized_assignment(&response)
     }
 
@@ -384,7 +408,7 @@ impl ExternalLlmClient {
                     "total_points": 100,
                 },
                 "personalization_notes": "string",
-                "estimated_difficulty": "easy|medium|challenging",
+                "estimated_difficulty": "easy|medium|hard",
             },
         });
         let prompt = serde_json::to_string(&context)
@@ -402,16 +426,18 @@ impl ExternalLlmClient {
         messages: Vec<ChatMessage>,
         json_mode: bool,
     ) -> Result<String, LlmError> {
-        let gateway_messages = messages
-            .into_iter()
-            .map(|message| GatewayChatMessage {
-                role: message.role,
-                content: message.content,
-            })
-            .collect::<Vec<_>>();
+        if school_id.is_nil() {
+            return Err(LlmError::MissingSchoolId);
+        }
         let request = GatewayChatRequest {
             model: self.config.model.clone(),
-            messages: gateway_messages,
+            messages: messages
+                .into_iter()
+                .map(|message| GatewayChatMessage {
+                    role: message.role,
+                    content: message.content,
+                })
+                .collect(),
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
             response_format: json_mode.then_some(GatewayResponseFormat {
@@ -442,9 +468,13 @@ impl ExternalLlmClient {
                 "provider_rate_limited" | "quota_exceeded" => Err(LlmError::RateLimited {
                     retry_after_seconds: retry_after,
                 }),
-                "ai_temporarily_unavailable" | "circuit_open" => {
-                    Err(LlmError::TemporarilyUnavailable)
-                }
+                "ai_temporarily_unavailable"
+                | "circuit_open"
+                | "provider_unconfigured"
+                | "gateway_shutting_down"
+                | "invalid_provider_response"
+                | "provider_response_too_large"
+                | "provider_rejected_request" => Err(LlmError::TemporarilyUnavailable),
                 _ => Err(LlmError::ApiError {
                     status: status.as_u16(),
                     message: code.to_string(),
@@ -455,13 +485,25 @@ impl ExternalLlmClient {
             .json::<GatewayChatResponse>()
             .await
             .map_err(|error| LlmError::ParseError(error.to_string()))?;
-        completion
+        if completion.model != self.config.model || completion.choices.len() != 1 {
+            return Err(LlmError::InvalidResponse(
+                "Gateway returned the wrong model or choice count".to_string(),
+            ));
+        }
+        let choice = completion
             .choices
             .into_iter()
             .next()
-            .map(|choice| choice.message.content)
-            .filter(|content| !content.trim().is_empty())
-            .ok_or_else(|| LlmError::InvalidResponse("No completion choice".to_string()))
+            .ok_or_else(|| LlmError::InvalidResponse("No completion choice".to_string()))?;
+        if choice.index != 0
+            || choice.message.role != "assistant"
+            || choice.message.content.trim().is_empty()
+        {
+            return Err(LlmError::InvalidResponse(
+                "Invalid completion choice".to_string(),
+            ));
+        }
+        Ok(choice.message.content)
     }
 
     fn parse_personalized_assignment(
@@ -490,8 +532,34 @@ impl ExternalLlmClient {
     }
 
     pub fn is_configured(&self) -> bool {
-        self.config.api_key.len() >= 24 && !self.config.base_url.is_empty()
+        self.config.api_key.len() >= 32
+            && self.config.base_url == INTERNAL_GATEWAY_ORIGIN
+            && self.config.model == APPROVED_LLM_MODEL
     }
+}
+
+fn validate_internal_gateway_url(value: &str) -> Result<(), LlmError> {
+    let parsed = reqwest::Url::parse(value)
+        .map_err(|error| LlmError::InvalidResponse(format!("Invalid AI_GATEWAY_URL: {error}")))?;
+    if value.trim_end_matches('/') != INTERNAL_GATEWAY_ORIGIN
+        || parsed.scheme() != "http"
+        || parsed.host_str() != Some("ai-gateway")
+        || parsed.port_or_known_default() != Some(8090)
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(LlmError::InvalidResponse(format!(
+            "AI_GATEWAY_URL must be exactly {INTERNAL_GATEWAY_ORIGIN}"
+        )));
+    }
+    Ok(())
+}
+
+fn looks_like_placeholder(value: &str) -> bool {
+    let lowered = value.to_ascii_lowercase();
+    lowered.contains("replace") || lowered.contains("example") || lowered.contains("insecure")
 }
 
 fn truncate_chars(value: &str, maximum: usize) -> String {
@@ -524,15 +592,15 @@ mod tests {
     fn client() -> ExternalLlmClient {
         ExternalLlmClient::with_config(LlmConfig {
             api_key: "abcdefghijklmnopqrstuvwxyz123456".to_string(),
-            base_url: "http://ai-gateway:8090".to_string(),
-            model: "approved-model".to_string(),
+            base_url: INTERNAL_GATEWAY_ORIGIN.to_string(),
+            model: APPROVED_LLM_MODEL.to_string(),
             max_tokens: 1_024,
             temperature: 0.2,
             request_timeout: Duration::from_secs(5),
-            default_school_id: Some(Uuid::new_v4()),
+            default_school_id: None,
             max_prompt_chars: 20_000,
         })
-        .unwrap()
+        .expect("client")
     }
 
     fn assignment() -> BaseAssignment {
@@ -548,6 +616,7 @@ mod tests {
 
     fn student() -> StudentContext {
         StudentContext {
+            school_id: Uuid::new_v4(),
             student_id: "internal-student-id".to_string(),
             student_name: "Example Student".to_string(),
             talent_profile: Some(TalentProfile {
@@ -566,8 +635,7 @@ mod tests {
 
     #[test]
     fn prompt_minimizes_identifiers_and_marks_documents_untrusted() {
-        let client = client();
-        let prompt = client
+        let prompt = client()
             .build_user_prompt_with_context(
                 &assignment(),
                 &student(),
@@ -577,13 +645,24 @@ mod tests {
                     relevance_score: 0.9,
                 }],
             )
-            .unwrap();
+            .expect("prompt");
         assert!(!prompt.contains("internal-student-id"));
         assert!(!prompt.contains("Example Student"));
         assert!(!prompt.contains("Teacher identity must not leave appliance"));
-        let system = client.build_system_prompt_with_rag(true);
+        let system = client().build_system_prompt_with_rag(true);
         assert!(system.contains("untrusted"));
         assert!(system.contains("prompt injection"));
+    }
+
+    #[test]
+    fn serialized_student_context_omits_internal_school_and_identity_is_not_prompted() {
+        let student = student();
+        let serialized = serde_json::to_string(&student).expect("serialize");
+        assert!(!serialized.contains(&student.school_id.to_string()));
+        assert!(client()
+            .build_user_prompt(&assignment(), &student)
+            .expect("prompt")
+            .contains("student_learning_context"));
     }
 
     #[test]
@@ -623,15 +702,23 @@ mod tests {
             "personalization_notes": "Uses visual strengths",
             "estimated_difficulty": "medium"
         }"#;
-        let parsed = client().parse_personalized_assignment(response).unwrap();
+        let parsed = client()
+            .parse_personalized_assignment(response)
+            .expect("parse");
         assert_eq!(parsed.personalized_title, "Visual climate project");
     }
 
     #[test]
-    fn default_config_is_gateway_only() {
-        let config = LlmConfig::default();
-        assert_eq!(config.base_url, "http://ai-gateway:8090");
-        assert!(config.api_key.is_empty());
+    fn arbitrary_gateway_urls_and_models_are_rejected() {
+        let mut config = LlmConfig::default();
+        config.api_key = "abcdefghijklmnopqrstuvwxyz123456".to_string();
+        config.base_url = "http://other-service:8090".to_string();
+        assert!(ExternalLlmClient::with_config(config).is_err());
+
+        let mut config = LlmConfig::default();
+        config.api_key = "abcdefghijklmnopqrstuvwxyz123456".to_string();
+        config.model = "user-controlled-model".to_string();
+        assert!(ExternalLlmClient::with_config(config).is_err());
     }
 
     #[test]

@@ -184,6 +184,10 @@ key_public="$(openssl pkey -in "${key_file}" -pubout -outform der | openssl dgst
 rendered="$(mktemp)"
 trap 'rm -f "${rendered}"' EXIT
 export EDUTALENT_PRODUCTION_DIR="${SCRIPT_DIR}"
+profile_args=()
+if [[ "${embedding_profile}" == "local-bge-v1" ]]; then
+  profile_args=(--profile local-embedding)
+fi
 docker compose \
   --project-name edutalent \
   --project-directory "${SUPABASE_DIR}" \
@@ -191,6 +195,7 @@ docker compose \
   --env-file "${APP_ENV}" \
   -f "${SUPABASE_DIR}/docker-compose.yml" \
   -f "${OVERLAY}" \
+  "${profile_args[@]}" \
   config --format json > "${rendered}"
 python3 "${SCRIPT_DIR}/validate-rendered-compose.py" "${rendered}" "${host_cpus}"
 

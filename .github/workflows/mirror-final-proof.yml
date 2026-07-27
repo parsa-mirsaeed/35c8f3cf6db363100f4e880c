@@ -68,14 +68,24 @@ jobs:
           grep -Fq '.chunk()' packages/api/src/ai_gateway_runtime.rs
           grep -Fq 'chunked_provider_body_stops_at_the_configured_limit' packages/api/src/ai_gateway_runtime.rs
 
-      - name: Commit isolated correction
+      - name: Stage isolated correction
         shell: bash
         run: |
           set -euo pipefail
           git add -A
           git diff --cached --check
           git status --short | sed -n '1,100p'
+
+      - name: Create isolated correction commit
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m 'fix(ai): isolate final review changes'
+
+      - name: Push isolated correction
+        shell: bash
+        run: |
+          set -euo pipefail
           git push origin HEAD:"$HEAD_REF"

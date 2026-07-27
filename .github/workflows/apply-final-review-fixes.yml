@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   patch:
-    runs-on: [self-hosted, Linux, X64, edutalent-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

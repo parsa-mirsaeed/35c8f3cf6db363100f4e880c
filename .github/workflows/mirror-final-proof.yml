@@ -29,17 +29,25 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      - name: Restore parent and reapply only reviewed fixes
+      - name: Restore pre-format tree
         shell: bash
         run: |
           set -euo pipefail
-
-          # Restore the tree before the accidental workspace-wide formatting,
-          # while keeping the current temporary workflow controls.
           git restore --source=3c4e4a1ae77da95f9ca9c71d400c349c92f0c6e5 --staged --worktree .
           git restore --source=HEAD --staged --worktree .github/workflows
+          git status --short | head -n 30
 
+      - name: Reapply reviewed source fixes
+        shell: bash
+        run: |
+          set -euo pipefail
           python3 scripts/apply_final_review_fixes.py
+          git status --short | head -n 30
+
+      - name: Format touched Rust files
+        shell: bash
+        run: |
+          set -euo pipefail
           rustup component add rustfmt
           rustfmt --edition 2021 \
             packages/api/src/ai_gateway_runtime.rs \
@@ -47,6 +55,10 @@ jobs:
             packages/api/src/services/knowledge_vector_store_service.rs \
             packages/api/src/services/vector_store_service.rs
 
+      - name: Validate corrected tree
+        shell: bash
+        run: |
+          set -euo pipefail
           bash -n edutalent
           python3 -m py_compile deploy/production/validate-rendered-compose.py
           git diff --check
@@ -56,10 +68,13 @@ jobs:
           grep -Fq '.chunk()' packages/api/src/ai_gateway_runtime.rs
           grep -Fq 'chunked_provider_body_stops_at_the_configured_limit' packages/api/src/ai_gateway_runtime.rs
 
+      - name: Commit isolated correction
+        shell: bash
+        run: |
+          set -euo pipefail
           git add -A
           git diff --cached --check
-          git status --short
-
+          git status --short | head -n 100
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m 'fix(ai): isolate final review changes'

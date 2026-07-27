@@ -1,3 +1,4 @@
+pub mod ai_outage_queue;
 pub mod assignment_personalization_service;
 pub mod audit_service;
 #[cfg(feature = "server")]

@@ -220,7 +220,12 @@ case "${command}" in
         FROM pg_roles WHERE rolname = current_user")"
       IFS="|" read -r role super inherit createdb createrole replication bypassrls <<<"${role_row}"
       [ "${role}" = "${DATABASE_APP_USER}" ]
-      [ "${super}|${inherit}|${createdb}|${createrole}|${replication}|${bypassrls}" = "false|false|false|false|false|true" ]
+      [ "${super}" = "false" ]
+      [ "${inherit}" = "false" ]
+      [ "${createdb}" = "false" ]
+      [ "${createrole}" = "false" ]
+      [ "${replication}" = "false" ]
+      [ "${bypassrls}" = "true" ]
       [ "$(psql "${DATABASE_URL}" -Atc "SELECT has_schema_privilege(current_user, '"'"'public'"'"', '"'"'CREATE'"'"')")" = "f" ]
       [ "$(psql "${DATABASE_URL}" -Atc "SELECT has_table_privilege(current_user, '"'"'public.users'"'"', '"'"'SELECT'"'"')")" = "t" ]
       [ "$(psql "${DATABASE_URL}" -Atc "SELECT NOT (has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'INSERT'"'"') OR has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'UPDATE'"'"') OR has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'DELETE'"'"'))")" = "t" ]
@@ -251,21 +256,62 @@ SH
     ;;
   ai-check)
     verify_ai_network_membership
-    compose exec -T app sh -eu -c '
+    probe_school_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+    compose exec -T -e "AI_PROBE_SCHOOL_ID=${probe_school_id}" app sh -eu -c '
+      case "${EMBEDDING_PROFILE}" in
+        local-bge-v1)
+          payload='"'"'{"model":"BAAI/bge-small-en-v1.5","input":["boundary probe"],"dimensions":null}'"'"'
+          ;;
+        openai-v1)
+          payload='"'"'{"model":"text-embedding-3-small","input":["boundary probe"],"dimensions":1536}'"'"'
+          ;;
+        *) echo "Unsupported embedding profile" >&2; exit 1 ;;
+      esac
       curl --fail --silent http://ai-gateway:8090/healthz >/dev/null
-      status="$(curl --silent --output /dev/null --write-out "%{http_code}" -H "Authorization: Bearer invalid-token" -H "x-edutalent-school-id: ${AI_GATEWAY_DEFAULT_SCHOOL_ID}" http://ai-gateway:8090/v1/embeddings)"
+      status="$(curl --silent --output /dev/null --write-out "%{http_code}" \
+        -H "Authorization: Bearer invalid-token" \
+        -H "x-edutalent-school-id: ${AI_PROBE_SCHOOL_ID}" \
+        -H "Content-Type: application/json" --data "${payload}" \
+        http://ai-gateway:8090/v1/embeddings)"
       [ "${status}" = "401" ]
-      status="$(curl --silent --output /dev/null --write-out "%{http_code}" -H "Authorization: Bearer ${AI_GATEWAY_INTERNAL_TOKEN}" http://ai-gateway:8090/v1/embeddings)"
+      status="$(curl --silent --output /dev/null --write-out "%{http_code}" \
+        -H "Authorization: Bearer ${AI_GATEWAY_INTERNAL_TOKEN}" \
+        -H "Content-Type: application/json" --data "${payload}" \
+        http://ai-gateway:8090/v1/embeddings)"
       [ "${status}" = "400" ]
       echo "AI gateway authentication and tenant boundaries verified."
     '
-    if [[ "$(read_env "${APP_ENV}" EMBEDDING_PROFILE)" == "local-bge-v1" ]]; then
-      compose stop embedding >/dev/null
-      compose exec -T app curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null
-      compose exec -T app curl --fail --silent http://ai-gateway:8090/healthz >/dev/null
-      echo "Core application and gateway remained healthy during embedding-provider outage."
-      compose start embedding >/dev/null
+
+    ai_gateway_stopped=false
+    restore_ai_gateway() {
+      if [[ "${ai_gateway_stopped}" == true ]]; then
+        compose start ai-gateway >/dev/null 2>&1 || true
+      fi
+    }
+    trap restore_ai_gateway EXIT
+    compose stop ai-gateway >/dev/null
+    ai_gateway_stopped=true
+    compose exec -T app curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null
+    if compose exec -T app curl --fail --silent --max-time 2 http://ai-gateway:8090/healthz >/dev/null 2>&1; then
+      echo "AI gateway remained reachable after it was stopped." >&2
+      exit 1
     fi
+    echo "Core application remained healthy during complete AI gateway outage."
+
+    compose start ai-gateway >/dev/null
+    ai_gateway_stopped=false
+    recovered=false
+    for attempt in $(seq 1 60); do
+      if compose exec -T app curl --fail --silent http://ai-gateway:8090/healthz >/dev/null 2>&1; then
+        recovered=true
+        break
+      fi
+      sleep 2
+    done
+    [[ "${recovered}" == true ]] || { echo "AI gateway did not recover." >&2; exit 1; }
+    compose exec -T app curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null
+    trap - EXIT
+    echo "AI gateway recovery and provider-independent core health verified."
     ;;
   qdrant-check)
     compose exec -T app sh -eu -c '

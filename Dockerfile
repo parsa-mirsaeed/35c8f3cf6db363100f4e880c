@@ -37,6 +37,7 @@ RUN set -eux; \
     runuser -u postgres -- createdb edutalent_build; \
     export DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5432/edutalent_build'; \
     bash scripts/ci/apply_migrations.sh; \
+    cargo build --release --package api --features server --bin ai_gateway; \
     dx bundle --web --release --package web; \
     service postgresql stop
 RUN set -eux; \
@@ -53,11 +54,13 @@ RUN set -eux; \
         test -n "${executable}"; \
         cp "${executable}" /opt/edutalent-bundle/server; \
     fi; \
+    test -x target/release/ai_gateway; \
+    cp target/release/ai_gateway /opt/edutalent-bundle/ai_gateway; \
     if [ -d packages/web/assets/fonts ]; then \
         mkdir -p /opt/edutalent-bundle/public/fonts; \
         cp -R packages/web/assets/fonts/. /opt/edutalent-bundle/public/fonts/; \
     fi; \
-    chmod +x /opt/edutalent-bundle/server
+    chmod +x /opt/edutalent-bundle/server /opt/edutalent-bundle/ai_gateway
 
 FROM debian:trixie-slim AS runtime
 RUN apt-get update \
@@ -73,6 +76,8 @@ COPY scripts/ci/configure_database_role.sh /opt/edutalent/scripts/ci/configure_d
 COPY docker/entrypoint.sh /usr/local/bin/edutalent-entrypoint
 RUN chmod +x \
     /usr/local/bin/edutalent-entrypoint \
+    /opt/edutalent/server \
+    /opt/edutalent/ai_gateway \
     /opt/edutalent/scripts/ci/apply_migrations.sh \
     /opt/edutalent/scripts/ci/configure_database_role.sh
 

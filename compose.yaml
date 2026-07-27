@@ -25,7 +25,6 @@ x-app-environment: &app-environment
   QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
   AI_GATEWAY_URL: http://ai-gateway:8090
   AI_GATEWAY_INTERNAL_TOKEN: ${AI_GATEWAY_INTERNAL_TOKEN:-development-only-ai-gateway-token-0001}
-  AI_GATEWAY_DEFAULT_SCHOOL_ID: ${AI_GATEWAY_DEFAULT_SCHOOL_ID:-00000000-0000-4000-8000-000000000001}
   AI_GATEWAY_REQUEST_TIMEOUT_SECONDS: ${AI_GATEWAY_REQUEST_TIMEOUT_SECONDS:-60}
   EMBEDDING_PROFILE: ${EMBEDDING_PROFILE:-local-bge-v1}
   EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
@@ -94,10 +93,8 @@ services:
       AI_GATEWAY_INTERNAL_TOKEN: ${AI_GATEWAY_INTERNAL_TOKEN:-development-only-ai-gateway-token-0001}
       EMBEDDING_PROFILE: ${EMBEDDING_PROFILE:-local-bge-v1}
       AI_EMBEDDING_BASE_URL: ${AI_EMBEDDING_BASE_URL:-http://embedding:80/v1/}
-      AI_ALLOWED_EMBEDDING_BASE_URLS: ${AI_ALLOWED_EMBEDDING_BASE_URLS:-https://api.openai.com/v1/}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      AI_LLM_BASE_URL: ${AI_LLM_BASE_URL:-https://api.deepseek.com/v1/}
-      AI_ALLOWED_LLM_BASE_URLS: ${AI_ALLOWED_LLM_BASE_URLS:-https://api.deepseek.com/v1/}
+      AI_LLM_BASE_URL: https://api.deepseek.com/v1/
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       AI_CONNECT_TIMEOUT_SECONDS: ${AI_CONNECT_TIMEOUT_SECONDS:-5}
@@ -109,11 +106,16 @@ services:
       AI_EMBEDDING_CONCURRENCY: ${AI_EMBEDDING_CONCURRENCY:-4}
       AI_LLM_CONCURRENCY: ${AI_LLM_CONCURRENCY:-2}
       AI_EMBEDDING_QUOTA_REQUESTS_PER_HOUR: ${AI_EMBEDDING_QUOTA_REQUESTS_PER_HOUR:-2000}
+      AI_EMBEDDING_QUOTA_CHARS_PER_HOUR: ${AI_EMBEDDING_QUOTA_CHARS_PER_HOUR:-5000000}
       AI_LLM_QUOTA_REQUESTS_PER_HOUR: ${AI_LLM_QUOTA_REQUESTS_PER_HOUR:-500}
+      AI_LLM_QUOTA_CHARS_PER_HOUR: ${AI_LLM_QUOTA_CHARS_PER_HOUR:-2000000}
       AI_MAX_BODY_BYTES: ${AI_MAX_BODY_BYTES:-262144}
+      AI_MAX_PROVIDER_RESPONSE_BYTES: ${AI_MAX_PROVIDER_RESPONSE_BYTES:-16777216}
       AI_MAX_EMBEDDING_INPUTS: ${AI_MAX_EMBEDDING_INPUTS:-64}
       AI_MAX_EMBEDDING_CHARS: ${AI_MAX_EMBEDDING_CHARS:-120000}
+      AI_MAX_CHAT_MESSAGES: ${AI_MAX_CHAT_MESSAGES:-24}
       AI_MAX_PROMPT_CHARS: ${AI_MAX_PROMPT_CHARS:-80000}
+      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-4096}
     command: ["ai-gateway"]
     ports:
       - "${AI_GATEWAY_PORT:-8090}:8090"
@@ -151,8 +153,6 @@ services:
         condition: service_completed_successfully
       qdrant:
         condition: service_started
-      ai-gateway:
-        condition: service_healthy
     restart: unless-stopped
 
   dev:
@@ -176,8 +176,6 @@ services:
         condition: service_completed_successfully
       qdrant:
         condition: service_started
-      ai-gateway:
-        condition: service_healthy
     stdin_open: true
     tty: true
 

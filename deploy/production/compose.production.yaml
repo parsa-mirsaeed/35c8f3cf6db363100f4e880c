@@ -24,13 +24,19 @@ x-edutalent-environment: &edutalent-environment
   SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:?SUPABASE_SECRET_KEY is required}
   QDRANT_URL: http://qdrant:6334
   QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required}
-  QDRANT_COLLECTION: ${QDRANT_COLLECTION:-edutalent_materials_local_v1}
+  QDRANT_COLLECTION: ${QDRANT_COLLECTION:-edutalent_local_bge_v1}
   QDRANT_VECTOR_SIZE: ${QDRANT_VECTOR_SIZE:-384}
-  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
-  EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://embedding:80/v1}
-  EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+  AI_GATEWAY_URL: http://ai-gateway:8090
+  AI_GATEWAY_INTERNAL_TOKEN: ${AI_GATEWAY_INTERNAL_TOKEN:?AI_GATEWAY_INTERNAL_TOKEN is required}
+  AI_GATEWAY_DEFAULT_SCHOOL_ID: ${AI_GATEWAY_DEFAULT_SCHOOL_ID:?AI_GATEWAY_DEFAULT_SCHOOL_ID is required}
+  AI_GATEWAY_REQUEST_TIMEOUT_SECONDS: ${AI_GATEWAY_REQUEST_TIMEOUT_SECONDS:-60}
+  EMBEDDING_PROFILE: ${EMBEDDING_PROFILE:-local-bge-v1}
   EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
   EMBEDDING_VECTOR_SIZE: ${EMBEDDING_VECTOR_SIZE:-384}
+  LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+  LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-4096}
+  LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
+  AI_MAX_PROMPT_CHARS: ${AI_MAX_PROMPT_CHARS:-80000}
   KNOWLEDGE_JOB_POLL_MS: ${KNOWLEDGE_JOB_POLL_MS:-1000}
   KNOWLEDGE_JOB_HEARTBEAT_SECONDS: ${KNOWLEDGE_JOB_HEARTBEAT_SECONDS:-15}
   KNOWLEDGE_JOB_STALE_SECONDS: ${KNOWLEDGE_JOB_STALE_SECONDS:-120}
@@ -44,9 +50,6 @@ x-security-baseline: &security-baseline
     - no-new-privileges:true
 
 services:
-  # Stage operator-owned mode-600 TLS files and initialize Caddy's persistent
-  # state volumes for the numeric non-root identity. This bounded one-shot has
-  # no network access; the long-running gateway never sees the source key bind.
   gateway-tls:
     <<: *security-baseline
     image: caddy:2.11.4-alpine
@@ -62,10 +65,6 @@ services:
         chmod 0700 /data /config
         cp -f /source/fullchain.pem /prepared/fullchain.pem
         cp -f /source/privkey.pem /prepared/privkey.pem
-        # The official image grants its Caddy executable a file capability for
-        # low ports. This deployment maps only to unprivileged container ports
-        # and drops every runtime capability, so stage a plain copy without
-        # that xattr for execution under no-new-privileges.
         cp -f /usr/bin/caddy /prepared/caddy
         chown "$${GATEWAY_UID}:$${GATEWAY_GID}" /prepared/fullchain.pem /prepared/privkey.pem
         chown "$${GATEWAY_UID}:$${GATEWAY_GID}" /prepared/caddy
@@ -79,18 +78,11 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     network_mode: none
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     read_only: true
-    tmpfs:
-      - /tmp
+    tmpfs: [/tmp]
 
-  # The only host-published service. The gateway listens on unprivileged
-  # container ports while Docker maps host ports 80/443 to it.
   gateway:
     <<: *security-baseline
     image: caddy:2.11.4-alpine
@@ -125,24 +117,16 @@ services:
         condition: service_healthy
       kong:
         condition: service_healthy
-    networks:
-      - ingress
-      - edge
-      - supabase_api
-      - admin
-    cap_drop:
-      - ALL
+    networks: [ingress, edge, supabase_api, admin]
+    cap_drop: [ALL]
     read_only: true
-    tmpfs:
-      - /tmp
-      - /run
+    tmpfs: [/tmp, /run]
     deploy:
       resources:
         limits:
           cpus: "${GATEWAY_CPU_LIMIT:-0.50}"
           memory: "${GATEWAY_MEMORY_LIMIT:-256M}"
 
-  # Database schema changes run with the Supabase bootstrap administrator only.
   migrate:
     <<: *security-baseline
     image: ${EDUTALENT_IMAGE:-edutalent}:${EDUTALENT_TAG:-local}
@@ -153,14 +137,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    networks:
-      - data
-    cap_drop:
-      - ALL
+    networks: [data]
+    cap_drop: [ALL]
 
-  # Configure the generated backend identity after migrations. This one-shot
-  # service is the only application image process that receives the bootstrap
-  # administrator URL.
   database-access:
     <<: *security-baseline
     image: ${EDUTALENT_IMAGE:-edutalent}:${EDUTALENT_TAG:-local}
@@ -173,10 +152,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    networks:
-      - data
-    cap_drop:
-      - ALL
+    networks: [data]
+    cap_drop: [ALL]
 
   app:
     <<: *security-baseline
@@ -186,8 +163,7 @@ services:
       <<: *edutalent-environment
       RUN_MIGRATIONS: "false"
     command: ["server"]
-    expose:
-      - "${EDUTALENT_INTERNAL_PORT:-8080}"
+    expose: ["${EDUTALENT_INTERNAL_PORT:-8080}"]
     depends_on:
       database-access:
         condition: service_completed_successfully
@@ -195,19 +171,62 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
-    networks:
-      - supabase_api
-      - data
-    cap_drop:
-      - ALL
+      ai-gateway:
+        condition: service_healthy
+    networks: [supabase_api, data, ai_internal]
+    cap_drop: [ALL]
     read_only: true
-    tmpfs:
-      - /tmp
+    tmpfs: [/tmp]
     deploy:
       resources:
         limits:
           cpus: "${APP_CPU_LIMIT:-1.50}"
           memory: "${APP_MEMORY_LIMIT:-2G}"
+
+  ai-gateway:
+    <<: *security-baseline
+    image: ${EDUTALENT_IMAGE:-edutalent}:${EDUTALENT_TAG:-local}
+    user: "65532:65532"
+    restart: unless-stopped
+    environment:
+      PORT: "8090"
+      RUST_LOG: ${RUST_LOG:-info}
+      AI_GATEWAY_LISTEN_ADDR: 0.0.0.0:8090
+      AI_GATEWAY_MODE: ${AI_GATEWAY_MODE:-offline}
+      AI_GATEWAY_INTERNAL_TOKEN: ${AI_GATEWAY_INTERNAL_TOKEN:?AI_GATEWAY_INTERNAL_TOKEN is required}
+      EMBEDDING_PROFILE: ${EMBEDDING_PROFILE:-local-bge-v1}
+      AI_EMBEDDING_BASE_URL: ${AI_EMBEDDING_BASE_URL:-http://embedding:80/v1/}
+      AI_ALLOWED_EMBEDDING_BASE_URLS: ${AI_ALLOWED_EMBEDDING_BASE_URLS:-https://api.openai.com/v1/}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AI_LLM_BASE_URL: ${AI_LLM_BASE_URL:-https://api.deepseek.com/v1/}
+      AI_ALLOWED_LLM_BASE_URLS: ${AI_ALLOWED_LLM_BASE_URLS:-https://api.deepseek.com/v1/}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      AI_CONNECT_TIMEOUT_SECONDS: ${AI_CONNECT_TIMEOUT_SECONDS:-5}
+      AI_REQUEST_TIMEOUT_SECONDS: ${AI_REQUEST_TIMEOUT_SECONDS:-45}
+      AI_MAX_RETRIES: ${AI_MAX_RETRIES:-2}
+      AI_RETRY_BASE_DELAY_MS: ${AI_RETRY_BASE_DELAY_MS:-250}
+      AI_CIRCUIT_FAILURE_THRESHOLD: ${AI_CIRCUIT_FAILURE_THRESHOLD:-3}
+      AI_CIRCUIT_OPEN_SECONDS: ${AI_CIRCUIT_OPEN_SECONDS:-30}
+      AI_EMBEDDING_CONCURRENCY: ${AI_EMBEDDING_CONCURRENCY:-4}
+      AI_LLM_CONCURRENCY: ${AI_LLM_CONCURRENCY:-2}
+      AI_EMBEDDING_QUOTA_REQUESTS_PER_HOUR: ${AI_EMBEDDING_QUOTA_REQUESTS_PER_HOUR:-2000}
+      AI_LLM_QUOTA_REQUESTS_PER_HOUR: ${AI_LLM_QUOTA_REQUESTS_PER_HOUR:-500}
+      AI_MAX_BODY_BYTES: ${AI_MAX_BODY_BYTES:-262144}
+      AI_MAX_EMBEDDING_INPUTS: ${AI_MAX_EMBEDDING_INPUTS:-64}
+      AI_MAX_EMBEDDING_CHARS: ${AI_MAX_EMBEDDING_CHARS:-120000}
+      AI_MAX_PROMPT_CHARS: ${AI_MAX_PROMPT_CHARS:-80000}
+    command: ["ai-gateway"]
+    expose: ["8090"]
+    networks: [ai_internal, ai_egress]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    deploy:
+      resources:
+        limits:
+          cpus: "${AI_GATEWAY_CPU_LIMIT:-1.00}"
+          memory: "${AI_GATEWAY_MEMORY_LIMIT:-1G}"
 
   qdrant:
     <<: *security-baseline
@@ -218,19 +237,14 @@ services:
       QDRANT__SERVICE__ENABLE_TLS: "false"
     volumes:
       - qdrant-data:/qdrant/storage
-    expose:
-      - "6333"
-      - "6334"
-    networks:
-      - data
+    expose: ["6333", "6334"]
+    networks: [data]
     deploy:
       resources:
         limits:
           cpus: "${QDRANT_CPU_LIMIT:-1.50}"
           memory: "${QDRANT_MEMORY_LIMIT:-2G}"
 
-  # Compatibility-only local embedding service. It is not started unless the
-  # local-embedding profile is explicitly selected.
   embedding:
     <<: *security-baseline
     profiles: ["local-embedding"]
@@ -238,116 +252,77 @@ services:
     restart: unless-stopped
     command:
       - --model-id
-      - ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      - ${LOCAL_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
       - --served-model-name
-      - ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      - ${LOCAL_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
     volumes:
       - embedding-data:/data
-    expose:
-      - "80"
-    networks:
-      - data
+    expose: ["80"]
+    networks: [ai_internal]
     deploy:
       resources:
         limits:
           cpus: "${EMBEDDING_CPU_LIMIT:-1.50}"
           memory: "${EMBEDDING_MEMORY_LIMIT:-4G}"
 
-  # Remove all upstream public host ports. Caddy is the sole ingress path.
   kong:
     ports: !reset []
-    networks: !override
-      - supabase_api
-      - admin
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [supabase_api, admin]
+    security_opt: [no-new-privileges:true]
 
   supavisor:
     ports: !reset []
-    networks: !override
-      - data
-    # The upstream entrypoint sets RLIMIT_NOFILE=100000. Declare the same
-    # soft/hard limit at container creation so it does not need CAP_SYS_RESOURCE.
+    networks: !override [data]
     ulimits:
       nofile:
         soft: 100000
         hard: 100000
-    security_opt:
-      - no-new-privileges:true
+    security_opt: [no-new-privileges:true]
 
   studio:
-    networks: !override
-      - admin
-      - supabase_api
-      - data
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [admin, supabase_api, data]
+    security_opt: [no-new-privileges:true]
 
   auth:
-    networks: !override
-      - supabase_api
-      - data
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [supabase_api, data]
+    security_opt: [no-new-privileges:true]
 
   rest:
-    networks: !override
-      - supabase_api
-      - data
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [supabase_api, data]
+    security_opt: [no-new-privileges:true]
 
   realtime:
-    networks: !override
-      - supabase_api
-      - data
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [supabase_api, data]
+    security_opt: [no-new-privileges:true]
 
   storage:
-    networks: !override
-      - supabase_api
-      - data
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [supabase_api, data]
+    security_opt: [no-new-privileges:true]
 
   imgproxy:
-    networks: !override
-      - supabase_api
-      - data
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [supabase_api, data]
+    security_opt: [no-new-privileges:true]
 
   meta:
-    networks: !override
-      - admin
-      - data
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [admin, data]
+    security_opt: [no-new-privileges:true]
 
-  # Edge Functions are retained in the coordinated upstream definition but are
-  # disabled by default because EduTalent does not depend on them. Enabling this
-  # profile requires its own health and ingress acceptance review.
   functions:
     profiles: ["edge-functions"]
-    networks: !override
-      - supabase_api
-      - data
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [supabase_api, data]
+    security_opt: [no-new-privileges:true]
 
   db:
-    networks: !override
-      - data
-    security_opt:
-      - no-new-privileges:true
+    networks: !override [data]
+    security_opt: [no-new-privileges:true]
 
 networks:
-  # Docker does not create host port bindings for a container attached only to
-  # internal networks. This dedicated bridge exists solely for host ingress;
-  # no backend or data service may attach to it.
   ingress:
     name: edutalent-ingress
+    driver: bridge
+    internal: false
+  ai_egress:
+    name: edutalent-ai-egress
     driver: bridge
     internal: false
   edge:
@@ -361,6 +336,9 @@ networks:
     internal: true
   admin:
     name: edutalent-admin
+    internal: true
+  ai_internal:
+    name: edutalent-ai-internal
     internal: true
 
 volumes:

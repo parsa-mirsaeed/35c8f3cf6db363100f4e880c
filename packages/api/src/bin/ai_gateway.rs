@@ -7,7 +7,7 @@ async fn main() {
         )
         .init();
 
-    if let Err(error) = api::ai_gateway::run().await {
+    if let Err(error) = api::controlled_ai_gateway::run().await {
         tracing::error!(%error, "AI gateway terminated");
         std::process::exit(1);
     }

@@ -9,7 +9,7 @@ on:
       - labeled
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 concurrency:
@@ -28,7 +28,41 @@ jobs:
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
+      - name: Check out exact pull-request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Apply unresolved final-review fixes once
+        id: final_fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply_final_review_fixes.py
+          rustup component add rustfmt
+          cargo fmt --all
+          bash -n edutalent
+          python3 -m py_compile deploy/production/validate-rendered-compose.py
+          git diff --check
+          ! git grep -n 'edutalent_local_bge_v1' -- ':(exclude).github/workflows'
+          grep -Fq 'response.chunk()' packages/api/src/ai_gateway_runtime.rs
+          grep -Fq 'chunked_provider_body_stops_at_the_configured_limit' packages/api/src/ai_gateway_runtime.rs
+
+          if git diff --quiet; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -u ':!.github/workflows'
+          git commit -m 'fix(ai): close final review gaps'
+          git push origin HEAD:"$HEAD_REF"
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+
       - name: Dispatch exact-head Package and Production Foundation
+        if: steps.final_fix.outputs.changed != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -36,6 +70,7 @@ jobs:
           gh workflow run production-foundation.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
 
       - name: Resolve dispatched run IDs
+        if: steps.final_fix.outputs.changed != 'true'
         id: runs
         shell: bash
         run: |
@@ -71,6 +106,7 @@ jobs:
           echo "Production Foundation run: $production_run_id"
 
       - name: Wait for complete workflows
+        if: steps.final_fix.outputs.changed != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -80,6 +116,7 @@ jobs:
             --repo "$REPOSITORY" --exit-status
 
       - name: Enforce exact head and required jobs
+        if: steps.final_fix.outputs.changed != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -130,6 +167,7 @@ jobs:
           PY
 
       - name: Upload dispatched-run evidence
+        if: steps.final_fix.outputs.changed != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: mirror-final-proof

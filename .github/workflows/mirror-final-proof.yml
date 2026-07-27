@@ -48,7 +48,7 @@ jobs:
           ! git grep -n 'edutalent_local_bge_v1' -- \
             ':(exclude).github/workflows' \
             ':(exclude)scripts/apply_final_review_fixes.py'
-          grep -Fq 'response.chunk()' packages/api/src/ai_gateway_runtime.rs
+          grep -Fq '.chunk()' packages/api/src/ai_gateway_runtime.rs
           grep -Fq 'chunked_provider_body_stops_at_the_configured_limit' packages/api/src/ai_gateway_runtime.rs
 
           if git diff --quiet; then

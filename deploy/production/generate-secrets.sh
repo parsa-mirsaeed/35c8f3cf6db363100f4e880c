@@ -14,10 +14,9 @@ usage() {
   cat <<'USAGE'
 Usage: generate-secrets.sh
 
-Creates a fresh production configuration. The command refuses to overwrite an
-existing Supabase .env because rotating database/JWT keys is a separate,
-carefully staged operation. Node.js 16 or newer must be installed locally; the
-initializer never pulls a fallback image from a registry.
+Creates fresh local production credentials. The command refuses to overwrite an
+existing Supabase .env because key rotation is a separate staged operation.
+External AI provider credentials remain operator-owned and are never generated.
 USAGE
 }
 
@@ -71,6 +70,14 @@ set_env() {
   rm -f "${file}.bak"
 }
 
+random_uuid() {
+  local hex
+  hex="$(openssl rand -hex 16)"
+  printf '%s-%s-4%s-%s%s-%s\n' \
+    "${hex:0:8}" "${hex:8:4}" "${hex:13:3}" \
+    "$(( (0x${hex:16:1} & 3) | 8 ))" "${hex:17:3}" "${hex:20:12}"
+}
+
 app_domain="$(read_env APP_DOMAIN)"
 supabase_domain="$(read_env SUPABASE_DOMAIN)"
 admin_domain="$(read_env ADMIN_DOMAIN)"
@@ -98,25 +105,17 @@ trap cleanup_partial_initialization EXIT
 cp "${SUPABASE_DIR}/.env.example" "${SUPABASE_ENV}"
 chmod 600 "${SUPABASE_ENV}"
 
-# The official pinned generators print generated values, so suppress stdout to
-# keep secrets out of terminals and CI logs. Requiring local Node above prevents
-# the official helper from pulling its documented Docker fallback image.
 (
   cd "${SUPABASE_DIR}"
   sh utils/generate-keys.sh --update-env >/dev/null
   sh utils/add-new-auth-keys.sh --update-env >/dev/null
 )
 
-# Strict-network defaults: no public signup, anonymous/phone auth, cloud SMTP,
-# Studio AI assistant, or unauthenticated Edge Functions.
 set_env "${SUPABASE_ENV}" SUPABASE_PUBLIC_URL "https://${supabase_domain}"
 set_env "${SUPABASE_ENV}" API_EXTERNAL_URL "https://${supabase_domain}/auth/v1"
 set_env "${SUPABASE_ENV}" SITE_URL "https://${app_domain}"
 set_env "${SUPABASE_ENV}" ADDITIONAL_REDIRECT_URLS "https://${app_domain}"
 set_env "${SUPABASE_ENV}" DISABLE_SIGNUP "true"
-# GoTrue uses this provider switch for both password registration and login.
-# Keep it enabled for administratively provisioned users; DISABLE_SIGNUP above
-# independently prevents public registration.
 set_env "${SUPABASE_ENV}" ENABLE_EMAIL_SIGNUP "true"
 set_env "${SUPABASE_ENV}" ENABLE_EMAIL_AUTOCONFIRM "false"
 set_env "${SUPABASE_ENV}" ENABLE_ANONYMOUS_USERS "false"
@@ -138,13 +137,15 @@ set_env "${SUPABASE_ENV}" REGION "local"
 
 set_env "${APP_ENV}" DATABASE_APP_PASSWORD "$(openssl rand -hex 32)"
 set_env "${APP_ENV}" QDRANT_API_KEY "$(openssl rand -hex 32)"
+set_env "${APP_ENV}" AI_GATEWAY_INTERNAL_TOKEN "$(openssl rand -hex 32)"
+set_env "${APP_ENV}" AI_GATEWAY_DEFAULT_SCHOOL_ID "$(random_uuid)"
 chmod 600 "${SUPABASE_ENV}" "${APP_ENV}"
 
 initialization_complete=true
 rm -f "${SUPABASE_COMPOSE_BACKUP}"
 trap - EXIT
 
-echo "Generated production secrets without printing their values."
+echo "Generated local production secrets without printing their values."
 echo "Supabase environment: ${SUPABASE_ENV}"
 echo "EduTalent environment: ${APP_ENV}"
 echo "Dashboard host: https://${admin_domain}"

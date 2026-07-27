@@ -1,17 +1,19 @@
 //! Teacher Submissions Management View
-//!
+//! 
 //! This module provides the submissions management UI for teachers,
 //! including listing submissions pending grading and grading interface.
 
+use dioxus::prelude::*;
 use crate::views::role_based::components::DashboardSection;
 use crate::views::role_based::shared::common::Modal;
 use api::server_functions::dashboard_functions::{
-    get_pending_submissions_for_teacher, get_submissions_for_assignment, grade_submission,
+    get_pending_submissions_for_teacher, 
+    get_submissions_for_assignment,
+    grade_submission,
     TeacherSubmissionInfo,
 };
-use dioxus::prelude::*;
 
-use crate::i18n::{use_locale, Locale, LocalizedGrade};
+use crate::i18n::{use_locale, LocalizedGrade, Locale};
 
 /// Submissions management section for teacher
 #[component]
@@ -41,18 +43,19 @@ pub fn SubmissionsList() -> Element {
     let mut active_modal = use_signal(|| SubmissionModal::None);
     let mut filter = use_signal(|| "pending".to_string());
     let locale = use_locale();
-
-    let mut submissions_resource =
-        use_resource(move || async move { get_pending_submissions_for_teacher().await });
-
+    
+    let mut submissions_resource = use_resource(move || async move {
+        get_pending_submissions_for_teacher().await
+    });
+    
     rsx! {
         div {
             class: "flex flex-col gap-4 md:gap-6 animate-fade-in",
-
+            
             // Header with stats
             div {
                 class: "flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3",
-
+                
                 // Filter tabs
                 div {
                     class: "flex gap-2 overflow-x-auto pb-1",
@@ -69,7 +72,7 @@ pub fn SubmissionsList() -> Element {
                         onclick: move |_| filter.set("all".to_string())
                     }
                 }
-
+                
                 // Refresh button
                 button {
                     class: "px-3 py-2 md:px-4 md:py-2 text-xs md:text-sm font-medium text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center gap-2 justify-center w-full sm:w-auto",
@@ -78,7 +81,7 @@ pub fn SubmissionsList() -> Element {
                     "{locale.t(\"common.refresh\")}"
                 }
             }
-
+            
             // Submissions list
             match &*submissions_resource.read() {
                 None => rsx! {
@@ -105,11 +108,11 @@ pub fn SubmissionsList() -> Element {
                                     class: "w-24 h-24 mx-auto mb-6 bg-gradient-to-br from-green-100 to-emerald-100 dark:from-green-900/30 dark:to-emerald-900/30 rounded-full flex items-center justify-center",
                                     span { class: "material-icons-outlined text-5xl text-green-500 dark:text-green-400", "check_circle" }
                                 }
-                                h3 {
+                                h3 { 
                                     class: "text-xl font-bold text-gray-900 dark:text-white mb-2",
                                     "{locale.t(\"submissions.caught_up_title\")}"
                                 }
-                                p {
+                                p { 
                                     class: "text-gray-500 dark:text-gray-400",
                                     "{locale.t(\"submissions.caught_up_desc\")}"
                                 }
@@ -133,7 +136,7 @@ pub fn SubmissionsList() -> Element {
                     }
                 }
             }
-
+            
             // Modal
             match active_modal() {
                 SubmissionModal::ViewAndGrade(submission) => rsx! {
@@ -154,13 +157,18 @@ pub fn SubmissionsList() -> Element {
 
 /// Filter tab component
 #[component]
-fn FilterTab(label: String, active: bool, count: Option<i32>, onclick: EventHandler) -> Element {
+fn FilterTab(
+    label: String,
+    active: bool,
+    count: Option<i32>,
+    onclick: EventHandler,
+) -> Element {
     let class = if active {
         "px-3 py-2 md:px-4 md:py-2 bg-primary text-white rounded-lg text-xs md:text-sm font-medium shadow-sm whitespace-nowrap"
     } else {
         "px-3 py-2 md:px-4 md:py-2 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 rounded-lg text-xs md:text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors whitespace-nowrap"
     };
-
+    
     rsx! {
         button {
             class: "{class} flex items-center gap-2",
@@ -201,34 +209,34 @@ fn SubmissionCard(
     on_grade: EventHandler<TeacherSubmissionInfo>,
 ) -> Element {
     let sub_for_click = submission.clone();
-
+    
     // Truncate content for preview
     let preview = if submission.content.len() > 200 {
         format!("{}...", &submission.content[..200])
     } else {
         submission.content.clone()
     };
-
+    
     let locale = use_locale();
     let status_badge = if submission.status == "graded" {
         ("bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800", locale.t("submissions.graded"))
     } else {
         ("bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800", locale.t("submissions.pending_filter"))
     };
-
+    
     rsx! {
         div {
             class: "bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-lg transition-all overflow-hidden",
-
+            
             div {
                 class: "p-4 md:p-6",
-
+                
                 // Header
                 div {
                     class: "flex flex-col sm:flex-row justify-between items-start gap-2 mb-3 md:mb-4",
                     div {
                         class: "flex-1 min-w-0",
-                        h3 {
+                        h3 { 
                             class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-1 truncate",
                             "{submission.assignment_title}"
                         }
@@ -258,13 +266,13 @@ fn SubmissionCard(
                         "{status_badge.1}"
                     }
                 }
-
+                
                 // Content preview
                 div {
                     class: "p-3 md:p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg text-xs md:text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap mb-3 md:mb-4 max-h-24 md:max-h-32 overflow-hidden",
                     "{preview}"
                 }
-
+                
                 // Grade info or action button
                 div {
                     class: "flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2",
@@ -277,7 +285,7 @@ fn SubmissionCard(
                     } else {
                         div {}
                     }
-
+                    
                     button {
                         class: "px-3 py-2 md:px-4 md:py-2 bg-primary hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2 justify-center min-h-[44px]",
                         onclick: move |_| on_grade.call(sub_for_click.clone()),
@@ -298,33 +306,31 @@ fn GradeSubmissionModal(
     on_graded: EventHandler,
 ) -> Element {
     let locale = use_locale();
-
+    
     let mut grade_value = use_signal(|| {
         if let Some(g) = submission.grade {
             // Backend sends 0-100. Convert to current locale scale.
-            let val = LocalizedGrade::english(g)
-                .convert_to(locale.current())
-                .value;
+            let val = LocalizedGrade::english(g).convert_to(locale.current()).value;
             // Format without symbols for input
             format!("{:.1}", val).trim_end_matches(".0").to_string()
         } else {
             String::new()
         }
     });
-
+    
     let mut feedback_value = use_signal(|| submission.feedback.clone().unwrap_or_default());
     let mut is_submitting = use_signal(|| false);
     let mut error_msg = use_signal(|| None::<String>);
-
+    
     let submission_id = submission.id.clone();
-
+    
     let handle_submit = move |_| {
         let locale = use_locale();
         let id = submission_id.clone();
         let grade_str = grade_value();
         let feedback = feedback_value();
         let on_graded = on_graded.clone();
-
+        
         // Parse grade
         let input_val: f64 = match grade_str.parse() {
             Ok(g) => g,
@@ -337,12 +343,8 @@ fn GradeSubmissionModal(
         // Validate range based on locale
         let max_grade = locale.max_grade();
         if input_val < 0.0 || input_val > max_grade {
-            error_msg.set(Some(format!(
-                "{} (0-{})",
-                locale.t("submissions.validation_range"),
-                max_grade
-            )));
-            return;
+             error_msg.set(Some(format!("{} (0-{})", locale.t("submissions.validation_range"), max_grade)));
+             return;
         }
 
         // Normalize to 0-100 for backend
@@ -351,17 +353,17 @@ fn GradeSubmissionModal(
         } else {
             input_val
         };
-
+        
         spawn(async move {
             is_submitting.set(true);
             error_msg.set(None);
-
-            let feedback_opt = if feedback.trim().is_empty() {
-                None
-            } else {
-                Some(feedback)
+            
+            let feedback_opt = if feedback.trim().is_empty() { 
+                None 
+            } else { 
+                Some(feedback) 
             };
-
+            
             match grade_submission(id, grade, feedback_opt).await {
                 Ok(true) => {
                     on_graded.call(());
@@ -373,7 +375,7 @@ fn GradeSubmissionModal(
             }
         });
     };
-
+    
     rsx! {
         Modal {
             title: locale.t("submissions.grade_modal_title"),
@@ -382,7 +384,7 @@ fn GradeSubmissionModal(
             children: rsx! {
                 div {
                     class: "space-y-6",
-
+                    
                     // Student info header
                     div {
                         class: "flex items-center gap-4 p-4 bg-gradient-to-r from-primary/10 to-purple-500/10 rounded-xl",
@@ -395,7 +397,7 @@ fn GradeSubmissionModal(
                             p { class: "text-sm text-gray-500 dark:text-gray-400", "{submission.assignment_title}" }
                         }
                     }
-
+                    
                     // Submission content
                     div {
                         class: "space-y-2",
@@ -405,7 +407,7 @@ fn GradeSubmissionModal(
                             "{submission.content}"
                         }
                     }
-
+                    
                     // Grade input
                     div {
                         class: "space-y-2",
@@ -428,7 +430,7 @@ fn GradeSubmissionModal(
                             }
                         }
                     }
-
+                    
                     // Feedback textarea
                     div {
                         class: "space-y-2",
@@ -441,7 +443,7 @@ fn GradeSubmissionModal(
                             oninput: move |e| feedback_value.set(e.value())
                         }
                     }
-
+                    
                     // Error message
                     if let Some(err) = error_msg() {
                         div {
@@ -450,7 +452,7 @@ fn GradeSubmissionModal(
                             "{err}"
                         }
                     }
-
+                    
                     // Actions
                     div {
                         class: "flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-800",

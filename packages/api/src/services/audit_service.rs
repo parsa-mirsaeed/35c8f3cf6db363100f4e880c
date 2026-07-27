@@ -1,5 +1,5 @@
-use crate::domain::{AuditLogId, UserId};
-use crate::models::audit_log::{AuditLog, CreateAuditLogRequest};
+use crate::models::audit_log::{CreateAuditLogRequest, AuditLog};
+use crate::domain::{UserId, AuditLogId};
 use crate::repositories::traits::AuditLogRepository;
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
@@ -16,7 +16,9 @@ pub struct AuditService {
 
 impl AuditService {
     pub fn new(audit_repository: Arc<dyn AuditLogRepository>) -> Self {
-        Self { audit_repository }
+        Self {
+            audit_repository,
+        }
     }
 
     /// Log a validation attempt
@@ -36,7 +38,7 @@ impl AuditService {
             entity_id: entity_id.map(|id| id.into()), // Convert AuditLogId to Uuid
             before,
             after,
-            ip: None,         // TODO: Extract from request
+            ip: None, // TODO: Extract from request
             user_agent: None, // TODO: Extract from request
             at: Utc::now(),
         };
@@ -57,15 +59,10 @@ impl AuditService {
             actor_id,
             "user",
             None,
-            if success {
-                "create_success"
-            } else {
-                "create_failed"
-            },
+            if success { "create_success" } else { "create_failed" },
             None,
             after,
-        )
-        .await
+        ).await
     }
 
     /// Log user update attempt
@@ -77,11 +74,7 @@ impl AuditService {
         after_data: Value,
         success: bool,
     ) -> Result<AuditLog, AppError> {
-        let action = if success {
-            "update_success"
-        } else {
-            "update_failed"
-        };
+        let action = if success { "update_success" } else { "update_failed" };
 
         self.log_validation_attempt(
             actor_id,
@@ -90,8 +83,7 @@ impl AuditService {
             action,
             Some(before_data),
             Some(after_data),
-        )
-        .await
+        ).await
     }
 
     /// Log profile change request
@@ -108,8 +100,7 @@ impl AuditService {
             "create",
             None,
             Some(profile_diff),
-        )
-        .await
+        ).await
     }
 
     /// Log validation failure
@@ -126,8 +117,7 @@ impl AuditService {
             "validation_failed",
             None,
             Some(validation_errors),
-        )
-        .await
+        ).await
     }
 
     /// Get audit logs for a specific entity
@@ -205,8 +195,7 @@ impl ValidationLogger for AuditService {
             "validation_start",
             None,
             Some(request_data),
-        )
-        .await?;
+        ).await?;
         Ok(())
     }
 
@@ -224,8 +213,7 @@ impl ValidationLogger for AuditService {
             "validation_success",
             None,
             Some(response_data),
-        )
-        .await?;
+        ).await?;
         Ok(())
     }
 
@@ -248,8 +236,7 @@ impl ValidationLogger for AuditService {
             "validation_error",
             None,
             Some(error_data),
-        )
-        .await?;
+        ).await?;
         Ok(())
     }
 }
@@ -265,40 +252,34 @@ where
     F: std::future::Future<Output = Result<R, AppError>>,
 {
     // Log validation start
-    audit_service
-        .log_validation_start(
-            actor_id,
-            entity,
-            serde_json::json!({"timestamp": Utc::now()}),
-        )
-        .await?;
+    audit_service.log_validation_start(
+        actor_id,
+        entity,
+        serde_json::json!({"timestamp": Utc::now()}),
+    ).await?;
 
     // Execute validation
     match validation_fn.await {
         Ok(result) => {
             // Log success (entity_id should be extracted from result if possible)
-            audit_service
-                .log_validation_attempt(
-                    actor_id,
-                    entity,
-                    None,
-                    "validation_completed",
-                    None,
-                    Some(serde_json::json!({"result": "success"})),
-                )
-                .await?;
+            audit_service.log_validation_attempt(
+                actor_id,
+                entity,
+                None,
+                "validation_completed",
+                None,
+                Some(serde_json::json!({"result": "success"})),
+            ).await?;
             Ok(result)
         }
         Err(error) => {
             // Log error
-            audit_service
-                .log_validation_error(
-                    actor_id,
-                    entity,
-                    serde_json::json!({"timestamp": Utc::now()}),
-                    error.to_string(),
-                )
-                .await?;
+            audit_service.log_validation_error(
+                actor_id,
+                entity,
+                serde_json::json!({"timestamp": Utc::now()}),
+                error.to_string(),
+            ).await?;
             Err(error)
         }
     }

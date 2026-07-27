@@ -1,18 +1,18 @@
 //! Student server functions.
 
+use dioxus::prelude::*;
+use crate::domain::{StudentId, UserId, SchoolId};
+use crate::models::{StudentResponse, CreateStudentRequest};
 #[cfg(feature = "server")]
 use crate::app_state::extract_server_state;
-use crate::domain::{SchoolId, StudentId, UserId};
 #[cfg(feature = "server")]
-use crate::models::student::UserInfo;
-use crate::models::{CreateStudentRequest, StudentResponse};
+use uuid::Uuid;
 #[cfg(feature = "server")]
 use crate::repositories::traits::StudentRepository;
 #[cfg(feature = "server")]
-use crate::server_functions::rls_helpers::extract_user_with_full_rls;
-use dioxus::prelude::*;
+use crate::models::student::UserInfo;
 #[cfg(feature = "server")]
-use uuid::Uuid;
+use crate::server_functions::rls_helpers::extract_user_with_full_rls;
 
 #[server(GetStudents, endpoint = "students/get_all")]
 pub async fn get_all() -> Result<Vec<StudentResponse>, ServerFnError> {
@@ -20,7 +20,7 @@ pub async fn get_all() -> Result<Vec<StudentResponse>, ServerFnError> {
     {
         // Extract user and set RLS context
         let (_user, pool) = extract_user_with_full_rls().await?;
-
+        
         // RLS policies now automatically filter to user's school
         let rows = sqlx::query!(
             r#"
@@ -38,22 +38,19 @@ pub async fn get_all() -> Result<Vec<StudentResponse>, ServerFnError> {
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
 
-        let responses = rows
-            .into_iter()
-            .map(|row| StudentResponse {
-                id: row.id.into(),
-                user: UserInfo {
-                    id: row.user_id.into(),
-                    name: row.user_name,
-                    email: row.user_email,
-                    is_active: row.user_is_active,
-                },
-                school_id: SchoolId::from(row.school_id),
-                parent_id: row.parent_id.map(|id| id.into()),
-                talent_profile_ref: row.talent_profile_ref,
-                created_at: row.created_at,
-            })
-            .collect();
+        let responses = rows.into_iter().map(|row| StudentResponse {
+            id: row.id.into(),
+            user: UserInfo {
+                id: row.user_id.into(),
+                name: row.user_name,
+                email: row.user_email,
+                is_active: row.user_is_active,
+            },
+            school_id: SchoolId::from(row.school_id),
+            parent_id: row.parent_id.map(|id| id.into()),
+            talent_profile_ref: row.talent_profile_ref,
+            created_at: row.created_at,
+        }).collect();
 
         Ok(responses)
     }
@@ -67,12 +64,10 @@ pub async fn get_by_id(id: String) -> Result<Option<StudentResponse>, ServerFnEr
     {
         let state = extract_server_state()?;
         let repo = &state.services.student;
-        let student_id = Uuid::parse_str(&id)
-            .map_err(|_| ServerFnError::new("Invalid ID"))?
-            .into();
+        let student_id = Uuid::parse_str(&id).map_err(|_| ServerFnError::new("Invalid ID"))?.into();
 
         let student = repo.find_with_user_by_id(student_id).await;
-
+        
         match student {
             Ok(s) => Ok(Some(StudentResponse::from(s))),
             Err(crate::repositories::RepositoryError::NotFound { .. }) => Ok(None),
@@ -89,18 +84,13 @@ pub async fn create(data: CreateStudentRequest) -> Result<StudentResponse, Serve
     {
         let state = extract_server_state()?;
         let repo = &state.services.student;
-
-        let student = repo
-            .create(data)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-
+        
+        let student = repo.create(data).await.map_err(|e| ServerFnError::new(e.to_string()))?;
+        
         // Fetch full details including user info
-        let full_student = repo
-            .find_with_user_by_id(student.id)
-            .await
+        let full_student = repo.find_with_user_by_id(student.id).await
             .map_err(|e| ServerFnError::new(e.to_string()))?;
-
+            
         Ok(StudentResponse::from(full_student))
     }
     #[cfg(not(feature = "server"))]
@@ -124,13 +114,9 @@ pub async fn delete(id: String) -> Result<(), ServerFnError> {
     {
         let state = extract_server_state()?;
         let repo = &state.services.student;
-        let student_id = Uuid::parse_str(&id)
-            .map_err(|_| ServerFnError::new("Invalid ID"))?
-            .into();
-
-        repo.delete(student_id)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        let student_id = Uuid::parse_str(&id).map_err(|_| ServerFnError::new("Invalid ID"))?.into();
+        
+        repo.delete(student_id).await.map_err(|e| ServerFnError::new(e.to_string()))?;
         Ok(())
     }
     #[cfg(not(feature = "server"))]

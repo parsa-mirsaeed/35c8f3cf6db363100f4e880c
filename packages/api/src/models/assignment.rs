@@ -1,6 +1,4 @@
-use crate::domain::{
-    AssignmentId, AssignmentStatus, ClassSectionId, LectureId, SubjectId, TeacherId,
-};
+use crate::domain::{AssignmentId, TeacherId, ClassSectionId, SubjectId, LectureId, AssignmentStatus};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -61,71 +59,25 @@ pub struct AssignmentWithDetails {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "server", derive(Validate))]
 pub struct CreateAssignmentRequest {
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_class_section_id",
-            message = "Invalid class section ID format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_class_section_id", message = "Invalid class section ID format")))]
     pub class_section_id: ClassSectionId,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_subject_id",
-            message = "Invalid subject ID format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_subject_id", message = "Invalid subject ID format")))]
     pub subject_id: SubjectId,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_lecture_id",
-            message = "Invalid lecture ID format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_lecture_id", message = "Invalid lecture ID format")))]
     pub lecture_id: Option<LectureId>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Lecture title must be between 1 and 255 characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Lecture title must be between 1 and 255 characters")))]
     pub lecture_title: Option<String>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(range(
-            min = 1,
-            max = 100,
-            message = "Lecture number must be between 1 and 100"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(range(min = 1, max = 100, message = "Lecture number must be between 1 and 100")))]
     pub lecture_number: Option<i32>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Title must be between 1 and 255 characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Title must be between 1 and 255 characters")))]
     pub title: String,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 65535,
-            message = "Body must be between 1 and 65535 characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 65535, message = "Body must be between 1 and 65535 characters")))]
     pub body: String,
 
     pub due_at: DateTime<Utc>,
@@ -138,46 +90,18 @@ pub struct CreateAssignmentRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "server", derive(Validate))]
 pub struct UpdateAssignmentRequest {
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Title must be between 1 and 255 characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Title must be between 1 and 255 characters")))]
     pub title: Option<String>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 65535,
-            message = "Body must be between 1 and 65535 characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 65535, message = "Body must be between 1 and 65535 characters")))]
     pub body: Option<String>,
 
     pub due_at: Option<DateTime<Utc>>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Lecture title must be between 1 and 255 characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Lecture title must be between 1 and 255 characters")))]
     pub lecture_title: Option<String>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(range(
-            min = 1,
-            max = 100,
-            message = "Lecture number must be between 1 and 100"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(range(min = 1, max = 100, message = "Lecture number must be between 1 and 100")))]
     pub lecture_number: Option<i32>,
 }
 
@@ -256,11 +180,7 @@ impl From<AssignmentWithDetails> for AssignmentResponse {
             status: assignment.status,
             created_at: assignment.created_at,
             published_at: assignment.published_at,
-            material_ids: assignment
-                .material_ids
-                .iter()
-                .map(|id| id.to_string())
-                .collect(),
+            material_ids: assignment.material_ids.iter().map(|id| id.to_string()).collect(),
         }
     }
 }

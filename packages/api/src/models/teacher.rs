@@ -1,4 +1,4 @@
-use crate::domain::{SchoolId, TeacherId, UserId};
+use crate::domain::{UserId, TeacherId, SchoolId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

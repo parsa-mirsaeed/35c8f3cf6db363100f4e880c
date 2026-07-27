@@ -1,9 +1,10 @@
-use crate::i18n::use_locale;
-use api::server_functions::admin_functions::change_admin_password;
 use dioxus::prelude::*;
+use api::server_functions::admin_functions::change_admin_password;
+use crate::i18n::use_locale;
 
 #[component]
 pub fn SecuritySettings() -> Element {
+
     let mut current_password = use_signal(|| String::new());
     let mut new_password = use_signal(|| String::new());
     let mut confirm_password = use_signal(|| String::new());
@@ -14,7 +15,7 @@ pub fn SecuritySettings() -> Element {
     rsx! {
         div {
             style: "background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 600px;",
-
+            
             h3 {
                 style: "font-size: 1.125rem; color: #1e293b; margin-bottom: 1.5rem; font-weight: 600;",
                 "{locale.t(\"school_manager.settings.security.title\")}"
@@ -84,7 +85,7 @@ pub fn SecuritySettings() -> Element {
                                 error_message.set(Some(locale.t("school_manager.settings.security.min_length")));
                                 return;
                             }
-
+                            
                             let locale_action = locale.clone();
                             spawn(async move {
                                 // Server verifies identity via cookies

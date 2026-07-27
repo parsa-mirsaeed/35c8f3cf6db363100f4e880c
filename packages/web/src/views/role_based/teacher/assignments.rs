@@ -1,16 +1,16 @@
 //! Teacher Assignments Management View
-//!
+//! 
 //! This module provides the assignments management UI for teachers,
 //! including listing assignments, creating new ones, and managing personalization.
 
-use crate::views::role_based::components::DashboardSection;
-use api::server_functions::assignment_functions::{
-    create_assignment, delete_assignment, get_all_assignments, get_assignment_by_id,
-    personalize_for_student, publish_assignment, AssignmentResponse, CreateAssignmentPayload,
-    PersonalizedAssignmentResponse,
-};
-use api::server_functions::dashboard_functions::{get_teacher_assignments, TeacherAssignmentInfo};
 use dioxus::prelude::*;
+use crate::views::role_based::components::DashboardSection;
+use api::server_functions::dashboard_functions::{get_teacher_assignments, TeacherAssignmentInfo};
+use api::server_functions::assignment_functions::{
+    get_all_assignments, create_assignment, delete_assignment, personalize_for_student,
+    publish_assignment, get_assignment_by_id,
+    AssignmentResponse, CreateAssignmentPayload, PersonalizedAssignmentResponse,
+};
 
 use crate::i18n::use_locale;
 
@@ -39,8 +39,9 @@ pub fn AssignmentsList() -> Element {
     let locale = use_locale();
 
     // Fetch real assignments from backend
-    let mut assignments_resource =
-        use_resource(move || async move { get_teacher_assignments().await });
+    let mut assignments_resource = use_resource(move || async move {
+        get_teacher_assignments().await
+    });
 
     // Handle delete action
     let handle_delete = move |assignment_id: String| {
@@ -48,17 +49,11 @@ pub fn AssignmentsList() -> Element {
         spawn(async move {
             match delete_assignment(assignment_id.clone()).await {
                 Ok(_) => {
-                    action_message.set(Some((
-                        locale.t("teachers.assignments.delete_success"),
-                        true,
-                    )));
+                    action_message.set(Some((locale.t("teachers.assignments.delete_success"), true)));
                     assignments_resource.restart();
                 }
                 Err(e) => {
-                    action_message.set(Some((
-                        format!("{}{}", locale.t("teachers.assignments.delete_failed"), e),
-                        false,
-                    )));
+                    action_message.set(Some((format!("{}{}", locale.t("teachers.assignments.delete_failed"), e), false)));
                 }
             }
         });
@@ -145,15 +140,15 @@ pub fn AssignmentsList() -> Element {
                 Some(Ok(assignments)) if assignments.is_empty() => rsx! {
                     div {
                         class: "text-center py-16",
-                        div {
+                        div { 
                             class: "w-24 h-24 mx-auto mb-6 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center",
                             span { class: "material-icons-outlined text-5xl text-gray-400", "assignment" }
                         }
-                        h3 {
+                        h3 { 
                             class: "text-xl font-bold text-gray-900 dark:text-white mb-2",
                             "{locale.t(\"teachers.assignments.no_assignments_title\")}"
                         }
-                        p {
+                        p { 
                             class: "text-gray-500 dark:text-gray-400 mb-6",
                             "{locale.t(\"teachers.assignments.no_assignments_desc\")}"
                         }
@@ -295,7 +290,7 @@ pub fn AssignmentCard(
 
             div {
                 class: "px-4 md:px-6 pb-4 md:pb-6 space-y-3 md:space-y-4",
-
+                
                 div {
                     class: "flex items-center justify-between text-sm",
                     div {
@@ -355,7 +350,10 @@ pub fn AssignmentCard(
 
 /// Create Assignment Modal
 #[component]
-fn CreateAssignmentModal(on_close: EventHandler, on_created: EventHandler) -> Element {
+fn CreateAssignmentModal(
+    on_close: EventHandler,
+    on_created: EventHandler,
+) -> Element {
     let mut title = use_signal(|| String::new());
     let mut body = use_signal(|| String::new());
     let mut class_section_id = use_signal(|| String::new());
@@ -378,24 +376,15 @@ fn CreateAssignmentModal(on_close: EventHandler, on_created: EventHandler) -> El
             if class_id.is_empty() {
                 Ok(vec![])
             } else {
-                api::server_functions::dashboard_functions::get_class_materials_for_teacher(
-                    class_id,
-                )
-                .await
+                api::server_functions::dashboard_functions::get_class_materials_for_teacher(class_id).await
             }
         }
     });
 
     let handle_submit = move |_| {
         let locale = use_locale();
-        if title().is_empty()
-            || body().is_empty()
-            || class_section_id().is_empty()
-            || due_date().is_empty()
-        {
-            error.set(Some(
-                locale.t("teachers.assignments.validation.required_fields"),
-            ));
+        if title().is_empty() || body().is_empty() || class_section_id().is_empty() || due_date().is_empty() {
+            error.set(Some(locale.t("teachers.assignments.validation.required_fields")));
             return;
         }
 
@@ -404,15 +393,10 @@ fn CreateAssignmentModal(on_close: EventHandler, on_created: EventHandler) -> El
 
         spawn(async move {
             // Parse the due date
-            let due_at = match chrono::NaiveDateTime::parse_from_str(
-                &format!("{} 23:59:59", due_date()),
-                "%Y-%m-%d %H:%M:%S",
-            ) {
+            let due_at = match chrono::NaiveDateTime::parse_from_str(&format!("{} 23:59:59", due_date()), "%Y-%m-%d %H:%M:%S") {
                 Ok(dt) => chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc),
                 Err(_) => {
-                    error.set(Some(
-                        locale.t("teachers.assignments.validation.invalid_date"),
-                    ));
+                    error.set(Some(locale.t("teachers.assignments.validation.invalid_date")));
                     is_submitting.set(false);
                     return;
                 }
@@ -439,11 +423,7 @@ fn CreateAssignmentModal(on_close: EventHandler, on_created: EventHandler) -> El
                     on_created.call(());
                 }
                 Err(e) => {
-                    error.set(Some(format!(
-                        "{}{}",
-                        locale.t("teachers.assignments.create.failed"),
-                        e
-                    )));
+                    error.set(Some(format!("{}{}", locale.t("teachers.assignments.create.failed"), e)));
                     is_submitting.set(false);
                 }
             }
@@ -524,7 +504,7 @@ fn CreateAssignmentModal(on_close: EventHandler, on_created: EventHandler) -> El
                             match &*classes_resource.read() {
                                 Some(Ok(classes)) => rsx! {
                                     for class in classes.iter() {
-                                        option {
+                                        option { 
                                             value: "{class.id}",
                                             "{class.name} - {class.subject_name}"
                                         }
@@ -724,40 +704,36 @@ fn AssignmentDetailModal(
 ) -> Element {
     let id_for_resource = assignment_id.clone();
     let id_for_publish = assignment_id.clone();
-
+    
     let mut is_publishing = use_signal(|| false);
     let mut error_msg = use_signal(|| None::<String>);
     let locale = use_locale();
-
+    
     // Fetch assignment details
     let assignment_resource = use_resource(move || {
         let id = id_for_resource.clone();
         async move { get_assignment_by_id(id).await }
     });
-
+    
     let handle_publish = move |_| {
         let locale = use_locale();
         let id = id_for_publish.clone();
         spawn(async move {
             is_publishing.set(true);
             error_msg.set(None);
-
+            
             match publish_assignment(id).await {
                 Ok(_) => {
                     on_publish.call(());
                 }
                 Err(e) => {
-                    error_msg.set(Some(format!(
-                        "{}{}",
-                        locale.t("teachers.assignments.publish.failed"),
-                        e
-                    )));
+                    error_msg.set(Some(format!("{}{}", locale.t("teachers.assignments.publish.failed"), e)));
                     is_publishing.set(false);
                 }
             }
         });
     };
-
+    
     rsx! {
         crate::views::role_based::shared::common::Modal {
             title: locale.t("teachers.assignments.details.title"),
@@ -766,7 +742,7 @@ fn AssignmentDetailModal(
             children: rsx! {
                 div {
                     class: "space-y-6",
-
+                    
                     // Error message
                     if let Some(err) = error_msg() {
                         div {
@@ -774,13 +750,13 @@ fn AssignmentDetailModal(
                             "{err}"
                         }
                     }
-
+                    
                     match &*assignment_resource.read() {
                         Some(Ok(Some(assignment))) => rsx! {
                             // Assignment info
                             div {
                                 class: "space-y-4",
-
+                                
                                 div {
                                     h3 { class: "text-xl font-bold text-gray-900 dark:text-white", "{assignment.title}" }
                                     div {
@@ -803,13 +779,13 @@ fn AssignmentDetailModal(
                                         }
                                     }
                                 }
-
+                                
                                 div {
                                     class: "p-4 bg-gray-50 dark:bg-gray-800 rounded-xl",
                                     h4 { class: "text-sm font-semibold text-gray-500 dark:text-gray-400 mb-2", "{locale.t(\"common.description\")}" }
                                     p { class: "text-gray-900 dark:text-white whitespace-pre-wrap", "{assignment.body}" }
                                 }
-
+                                
                                 div {
                                     class: "grid grid-cols-2 gap-4",
                                     div {
@@ -824,17 +800,17 @@ fn AssignmentDetailModal(
                                     }
                                 }
                             }
-
+                            
                             // Action buttons
                             div {
                                 class: "flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700",
-
+                                
                                 button {
                                     class: "px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors",
                                     onclick: move |_| on_close.call(()),
                                     "{locale.t(\"common.close\")}"
                                 }
-
+                                
                                 if assignment.status == "Draft" {
                                     button {
                                         class: "px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2",

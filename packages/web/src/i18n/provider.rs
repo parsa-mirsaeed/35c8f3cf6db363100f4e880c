@@ -1,9 +1,9 @@
 //! Locale Provider for Dioxus
-//!
+//! 
 //! Provides a React-like context for locale management throughout the app.
 
-use super::{t, Locale, LocalizedGrade};
 use dioxus::prelude::*;
+use super::{Locale, t, LocalizedGrade};
 
 /// Locale context value containing current locale and utilities
 #[derive(Clone, Copy)]
@@ -100,26 +100,23 @@ pub fn LocaleProvider(children: Element) -> Element {
 
     // Apply locale to document
     let locale = context.current();
-
+    
     // Update document root attributes for global CSS support
     use_effect(move || {
         let code = locale.code();
         let dir = locale.dir_attr();
-
+        
         spawn(async move {
             // We use JS eval to update the root <html> element
             // This ensures global CSS selectors like [lang="fa"] work correctly
             // everywhere, not just inside the provider's div
-            let _ = document::eval(&format!(
-                r#"
+            let _ = document::eval(&format!(r#"
                 document.documentElement.lang = '{}';
                 document.documentElement.dir = '{}';
-            "#,
-                code, dir
-            ));
+            "#, code, dir));
         });
     });
-
+    
     rsx! {
         // Wrapper that applies RTL/LTR styling
         div {
@@ -194,7 +191,7 @@ pub fn LanguageSwitcher(
                     }
                 },
                 title: "{locale_ctx.t(\"common.select_language\")}",
-
+                
                 span {
                     class: "current-lang",
                     "{current.native_name()}"
@@ -217,7 +214,7 @@ pub fn T(
 ) -> Element {
     let locale_ctx = use_locale();
     let translated = locale_ctx.t(translation_key);
-
+    
     rsx! {
         "{translated}"
     }
@@ -237,13 +234,13 @@ pub fn GradeDisplay(
 ) -> Element {
     let locale_ctx = use_locale();
     let grade = LocalizedGrade::new(value, locale_ctx.current());
-
+    
     let display = if show_full {
         grade.format_display()
     } else {
         grade.format_value()
     };
-
+    
     rsx! {
         span {
             class: "grade-display {class}",

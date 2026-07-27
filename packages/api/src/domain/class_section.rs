@@ -1,7 +1,7 @@
 //! Class section domain models.
 
-use crate::domain::{ClassSectionId, SchoolId, SubjectId};
 use serde::{Deserialize, Serialize};
+use crate::domain::{ClassSectionId, SubjectId, SchoolId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassSection {

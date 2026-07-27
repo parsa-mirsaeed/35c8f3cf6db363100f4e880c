@@ -1,4 +1,4 @@
-use crate::domain::{Role, RoleId, SchoolId, UserId};
+use crate::domain::{UserId, RoleId, Role, SchoolId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -34,7 +34,7 @@ pub struct UserWithRole {
     pub name: String,
     pub email: String,
     pub role_id: RoleId,
-    pub school_id: SchoolId, // Now required based on database migration
+    pub school_id: SchoolId,  // Now required based on database migration
     pub is_active: bool,
     pub metadata: Option<Value>,
     pub created_at: DateTime<Utc>,
@@ -47,66 +47,23 @@ pub struct UserWithRole {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "server", derive(Validate))]
 pub struct CreateUserRequest {
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Name must be between 1 and 255 characters"
-        ))
-    )]
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_name_regex",
-            message = "Name contains invalid characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Name must be between 1 and 255 characters")))]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_name_regex", message = "Name contains invalid characters")))]
     pub name: String,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_email",
-            message = "Invalid email format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_email", message = "Invalid email format")))]
     pub email: String,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_role_id",
-            message = "Invalid role ID format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_role_id", message = "Invalid role ID format")))]
     pub role_id: RoleId,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_school_id",
-            message = "Invalid school ID format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_school_id", message = "Invalid school ID format")))]
     pub school_id: SchoolId,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_boolean",
-            message = "Invalid boolean value"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_boolean", message = "Invalid boolean value")))]
     pub is_active: bool,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_jsonb_structure",
-            message = "Invalid JSON structure"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_jsonb_structure", message = "Invalid JSON structure")))]
     pub metadata: Option<Value>,
 }
 
@@ -124,39 +81,20 @@ pub struct CreateUserResponse {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub temporary_password: String, // Generated password for admin to share
     pub password_expiry: chrono::DateTime<chrono::Utc>, // When the temporary password expires
-    pub supabase_id: String,        // Supabase Auth user ID
+    pub supabase_id: String, // Supabase Auth user ID
 }
 
 /// Request payload for updating a user
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "server", derive(Validate))]
 pub struct UpdateUserRequest {
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Name must be between 1 and 255 characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Name must be between 1 and 255 characters")))]
     pub name: Option<String>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_email",
-            message = "Invalid email format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_email", message = "Invalid email format")))]
     pub email: Option<String>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_role_id_ref",
-            message = "Invalid role ID format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_role_id_ref", message = "Invalid role ID format")))]
     pub role_id: Option<RoleId>,
 
     pub is_active: Option<bool>,
@@ -167,69 +105,25 @@ pub struct UpdateUserRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "server", derive(Validate))]
 pub struct AdminCreateStudentRequest {
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Name must be between 1 and 255 characters"
-        ))
-    )]
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_name_regex",
-            message = "Name contains invalid characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Name must be between 1 and 255 characters")))]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_name_regex", message = "Name contains invalid characters")))]
     pub name: String,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_email",
-            message = "Invalid email format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_email", message = "Invalid email format")))]
     pub email: String,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_school_id",
-            message = "Invalid school ID format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_school_id", message = "Invalid school ID format")))]
     pub school_id: SchoolId,
 
     pub parent_id: Option<UserId>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Talent profile reference must be between 1 and 255 characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Talent profile reference must be between 1 and 255 characters")))]
     pub talent_profile_ref: Option<String>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_grade_level",
-            message = "Invalid grade level (must be 9-12)"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_grade_level", message = "Invalid grade level (must be 9-12)")))]
     pub grade_level: Option<i32>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_jsonb_structure",
-            message = "Invalid metadata structure"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_jsonb_structure", message = "Invalid metadata structure")))]
     pub metadata: Option<Value>,
 }
 
@@ -237,58 +131,20 @@ pub struct AdminCreateStudentRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "server", derive(Validate))]
 pub struct AdminCreateTeacherRequest {
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Name must be between 1 and 255 characters"
-        ))
-    )]
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_name_regex",
-            message = "Name contains invalid characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Name must be between 1 and 255 characters")))]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_name_regex", message = "Name contains invalid characters")))]
     pub name: String,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_email",
-            message = "Invalid email format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_email", message = "Invalid email format")))]
     pub email: String,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_school_id",
-            message = "Invalid school ID format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_school_id", message = "Invalid school ID format")))]
     pub school_id: SchoolId,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 100,
-            message = "Subject must be between 1 and 100 characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 100, message = "Subject must be between 1 and 100 characters")))]
     pub subject: Option<String>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_jsonb_structure",
-            message = "Invalid metadata structure"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_jsonb_structure", message = "Invalid metadata structure")))]
     pub metadata: Option<Value>,
 }
 
@@ -296,57 +152,20 @@ pub struct AdminCreateTeacherRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "server", derive(Validate))]
 pub struct AdminCreateParentRequest {
-    #[cfg_attr(
-        feature = "server",
-        validate(length(
-            min = 1,
-            max = 255,
-            message = "Name must be between 1 and 255 characters"
-        ))
-    )]
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_name_regex",
-            message = "Name contains invalid characters"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(length(min = 1, max = 255, message = "Name must be between 1 and 255 characters")))]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_name_regex", message = "Name contains invalid characters")))]
     pub name: String,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_email",
-            message = "Invalid email format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_email", message = "Invalid email format")))]
     pub email: String,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_school_id",
-            message = "Invalid school ID format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_school_id", message = "Invalid school ID format")))]
     pub school_id: SchoolId,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_phone_number",
-            message = "Invalid phone format"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_phone_number", message = "Invalid phone format")))]
     pub phone: Option<String>,
 
-    #[cfg_attr(
-        feature = "server",
-        validate(custom(
-            function = "validation::validate_jsonb_structure",
-            message = "Invalid metadata structure"
-        ))
-    )]
+    #[cfg_attr(feature = "server", validate(custom(function = "validation::validate_jsonb_structure", message = "Invalid metadata structure")))]
     pub metadata: Option<Value>,
 }
 
@@ -357,7 +176,7 @@ pub struct UserResponse {
     pub name: String,
     pub email: String,
     pub role: Role,
-    pub school_id: SchoolId, // Now required based on database migration
+    pub school_id: SchoolId,  // Now required based on database migration
     pub is_active: bool,
     pub metadata: Option<Value>,
     pub created_at: DateTime<Utc>,

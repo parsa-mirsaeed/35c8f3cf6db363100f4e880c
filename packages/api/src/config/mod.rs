@@ -48,6 +48,7 @@ pub struct LoggingConfig {
 impl Config {
     /// Load configuration from environment variables
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+
         let database_url = env::var("DATABASE_URL")
             .map_err(|_| "DATABASE_URL environment variable is required. Please configure your Supabase database connection.".to_string())?;
 
@@ -137,19 +138,13 @@ impl Config {
         // Validate log level
         let valid_levels = ["trace", "debug", "info", "warn", "error"];
         if !valid_levels.contains(&self.logging.level.as_str()) {
-            eprintln!(
-                "WARNING: Invalid LOG_LEVEL '{}'. Using 'info' instead.",
-                self.logging.level
-            );
+            eprintln!("WARNING: Invalid LOG_LEVEL '{}'. Using 'info' instead.", self.logging.level);
         }
 
         // Validate log format
         let valid_formats = ["json", "pretty"];
         if !valid_formats.contains(&self.logging.format.as_str()) {
-            eprintln!(
-                "WARNING: Invalid LOG_FORMAT '{}'. Using 'json' instead.",
-                self.logging.format
-            );
+            eprintln!("WARNING: Invalid LOG_FORMAT '{}'. Using 'json' instead.", self.logging.format);
         }
 
         Ok(())

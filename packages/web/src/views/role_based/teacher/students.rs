@@ -1,10 +1,11 @@
-use crate::components::skeleton::SkeletonCard;
+use dioxus::prelude::*;
 use crate::views::role_based::components::DashboardSection;
 use crate::views::role_based::shared::common::Modal;
+use crate::components::skeleton::SkeletonCard;
 use api::server_functions::dashboard_functions::{
-    get_student_grades_for_teacher, get_teacher_students, StudentGradeDetail, TeacherStudentInfo,
+    get_teacher_students, TeacherStudentInfo,
+    get_student_grades_for_teacher, StudentGradeDetail,
 };
-use dioxus::prelude::*;
 
 use crate::i18n::use_locale;
 
@@ -37,8 +38,10 @@ pub fn StudentsList() -> Element {
     let mut active_modal = use_signal(|| StudentModal::None);
     let mut search_query = use_signal(|| String::new());
     let locale = use_locale();
-
-    let students_resource = use_resource(move || async move { get_teacher_students().await });
+    
+    let students_resource = use_resource(move || async move {
+        get_teacher_students().await
+    });
 
     rsx! {
         div {
@@ -96,7 +99,7 @@ pub fn StudentsList() -> Element {
                     let filtered: Vec<_> = students.iter()
                         .filter(|s| query.is_empty() || s.name.to_lowercase().contains(&query) || s.email.to_lowercase().contains(&query))
                         .collect();
-
+                    
                     rsx! {
                         div {
                             class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6",
@@ -109,7 +112,7 @@ pub fn StudentsList() -> Element {
                                 }
                             }
                         }
-
+                        
                         // Modals
                         match active_modal() {
                             StudentModal::Profile(student) => rsx! {
@@ -144,20 +147,19 @@ fn StudentCard(
     let student_for_grades = student.clone();
     let email = student.email.clone();
     let locale = use_locale();
-
+    
     // Get initials for avatar
-    let initials: String = student
-        .name
+    let initials: String = student.name
         .split_whitespace()
         .filter_map(|word| word.chars().next())
         .take(2)
         .collect::<String>()
         .to_uppercase();
-
-    let grade_bg = if student.average_grade.starts_with('A') {
-        "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300"
-    } else if student.average_grade.starts_with('B') {
-        "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+    
+    let grade_bg = if student.average_grade.starts_with('A') { 
+        "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300" 
+    } else if student.average_grade.starts_with('B') { 
+        "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300" 
     } else if student.average_grade.starts_with('C') {
         "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300"
     } else {
@@ -247,7 +249,7 @@ fn StudentProfileModal(student: TeacherStudentInfo, on_close: EventHandler) -> E
             children: rsx! {
                 div {
                     class: "space-y-6",
-
+                    
                     // Header with avatar
                     div {
                         class: "flex items-center gap-4 p-4 bg-gradient-to-r from-primary/10 to-purple-500/10 rounded-xl",
@@ -267,30 +269,30 @@ fn StudentProfileModal(student: TeacherStudentInfo, on_close: EventHandler) -> E
                             p { class: "text-sm text-gray-500 dark:text-gray-400", "{student.email}" }
                         }
                     }
-
+                    
                     // Stats
                     div {
                         class: "grid grid-cols-3 gap-4",
-
+                        
                         div {
                             class: "p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl text-center",
                             p { class: "text-2xl font-bold text-blue-600 dark:text-blue-400", "{student.average_grade}" }
                             p { class: "text-xs text-blue-600 dark:text-blue-400 font-medium", "{locale.t(\"teachers.students.average_label\")}" }
                         }
-
+                        
                         div {
                             class: "p-4 bg-green-50 dark:bg-green-900/20 rounded-xl text-center",
                             p { class: "text-2xl font-bold text-green-600 dark:text-green-400", "{student.submitted_count}" }
                             p { class: "text-xs text-green-600 dark:text-green-400 font-medium", "{locale.t(\"teachers.students.submitted_stat\")}" }
                         }
-
+                        
                         div {
                             class: "p-4 bg-purple-50 dark:bg-purple-900/20 rounded-xl text-center",
                             p { class: "text-2xl font-bold text-purple-600 dark:text-purple-400", "{student.classes.len()}" }
                             p { class: "text-xs text-purple-600 dark:text-purple-400 font-medium", "{locale.t(\"teachers.students.classes_stat\")}" }
                         }
                     }
-
+                    
                     // Enrolled classes
                     if !student.classes.is_empty() {
                         div {
@@ -318,12 +320,12 @@ fn StudentProfileModal(student: TeacherStudentInfo, on_close: EventHandler) -> E
 fn StudentGradesModal(student: TeacherStudentInfo, on_close: EventHandler) -> Element {
     let student_id = student.id.clone();
     let locale = use_locale();
-
+    
     let grades_resource = use_resource(move || {
         let id = student_id.clone();
         async move { get_student_grades_for_teacher(id).await }
     });
-
+    
     rsx! {
         Modal {
             title: format!("{}{}", student.name, locale.t("teachers.students.grades_title_suffix")),
@@ -332,7 +334,7 @@ fn StudentGradesModal(student: TeacherStudentInfo, on_close: EventHandler) -> El
             children: rsx! {
                 div {
                     class: "space-y-4 max-h-96 overflow-y-auto",
-
+                    
                     // Summary
                     div {
                         class: "p-4 bg-gradient-to-r from-primary/10 to-purple-500/10 rounded-xl mb-4",
@@ -342,7 +344,7 @@ fn StudentGradesModal(student: TeacherStudentInfo, on_close: EventHandler) -> El
                             span { class: "text-2xl font-bold text-primary", "{student.average_grade}" }
                         }
                     }
-
+                    
                     match &*grades_resource.read() {
                         None => rsx! {
                             div { class: "text-center py-8 text-gray-500", "{locale.t(\"teachers.students.loading_grades\")}" }

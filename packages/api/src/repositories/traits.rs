@@ -1,11 +1,11 @@
 //! Repository traits for defining the interface of repositories
 
-use crate::domain::{AuditLogId, ParentId, RoleId, SchoolId, StudentId, TeacherId, UserId};
+use crate::models::user::{User, CreateUserRequest, UpdateUserRequest};
+use crate::models::student::{Student, CreateStudentRequest};
+use crate::models::teacher::{Teacher, CreateTeacherRequest};
+use crate::models::parent::{Parent, CreateParentRequest};
 use crate::models::audit_log::{AuditLog, CreateAuditLogRequest};
-use crate::models::parent::{CreateParentRequest, Parent};
-use crate::models::student::{CreateStudentRequest, Student};
-use crate::models::teacher::{CreateTeacherRequest, Teacher};
-use crate::models::user::{CreateUserRequest, UpdateUserRequest, User};
+use crate::domain::{UserId, SchoolId, RoleId, StudentId, TeacherId, ParentId, AuditLogId};
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
 

@@ -1,13 +1,13 @@
-use crate::components::skeleton::SkeletonCard;
-use crate::i18n::use_locale;
-use crate::views::role_based::components::DashboardSection;
-use crate::views::role_based::shared::common::Modal;
-use api::server_functions::dashboard_functions::{
-    get_class_assignments_for_student, get_class_grades_for_student,
-    get_class_materials_for_student, get_student_classes_view, ClassAssignmentInfo, ClassGradeInfo,
-    ClassMaterialInfo, StudentClassView,
-};
 use dioxus::prelude::*;
+use crate::views::role_based::components::DashboardSection;
+use crate::i18n::use_locale;
+use api::server_functions::dashboard_functions::{
+    get_student_classes_view, StudentClassView,
+    get_class_assignments_for_student, get_class_grades_for_student, get_class_materials_for_student,
+    ClassAssignmentInfo, ClassGradeInfo, ClassMaterialInfo,
+};
+use crate::components::skeleton::SkeletonCard;
+use crate::views::role_based::shared::common::Modal;
 
 /// Classes for student
 #[component]
@@ -15,7 +15,7 @@ pub fn Classes() -> Element {
     let locale_ctx = use_locale();
     let t_my_classes = locale_ctx.t("classes.my_classes");
     let t_description = locale_ctx.t("classes.view_description");
-
+    
     rsx! {
         DashboardSection {
             title: t_my_classes,
@@ -40,13 +40,15 @@ enum StudentClassModal {
 #[component]
 pub fn StudentClassesList() -> Element {
     let mut active_modal = use_signal(|| StudentClassModal::None);
-
+    
     let locale_ctx = use_locale();
     let t_failed_load = locale_ctx.t("grades.failed_load");
     let t_no_classes = locale_ctx.t("classes.no_classes");
     let t_not_enrolled = locale_ctx.t("classes.not_enrolled");
-
-    let classes_resource = use_resource(move || async move { get_student_classes_view().await });
+    
+    let classes_resource = use_resource(move || async move {
+        get_student_classes_view().await
+    });
 
     rsx! {
         match &*classes_resource.read() {
@@ -88,7 +90,7 @@ pub fn StudentClassesList() -> Element {
                         }
                     }
                 }
-
+                
                 // Modals
                 match active_modal() {
                     StudentClassModal::Tasks(class) => rsx! {
@@ -127,14 +129,14 @@ fn StudentClassCard(
     let class_for_materials = class.clone();
     let class_for_tasks = class.clone();
     let class_for_grades = class.clone();
-
+    
     let locale_ctx = use_locale();
     let t_subject = locale_ctx.t("classes.subject");
     let t_term = locale_ctx.t("classes.term");
     let t_materials = locale_ctx.t("nav.materials");
     let t_tasks = locale_ctx.t("assignments.title");
     let t_grades = locale_ctx.t("grades.title");
-
+    
     // Color gradient based on hash of class name for variety
     let color_class = match class.name.len() % 4 {
         0 => ("from-blue-600", "to-blue-400"),
@@ -146,11 +148,11 @@ fn StudentClassCard(
     rsx! {
         div {
             class: "glass-card p-0 flex flex-col h-full overflow-hidden group hover:-translate-y-1 transition-transform duration-300",
-
+            
             div {
                 class: "p-4 md:p-6 bg-gradient-to-br {color_class.0} {color_class.1} text-white relative overflow-hidden",
                 div { class: "absolute -right-6 -top-6 w-24 h-24 bg-white/20 rounded-full blur-xl" }
-
+                
                 h3 {
                     class: "text-lg md:text-xl font-bold mb-1 relative z-10",
                     "{class.name}"
@@ -160,10 +162,10 @@ fn StudentClassCard(
                     {format!("{}{}", locale_ctx.t("classes.with_teacher_prefix"), class.teacher_name)}
                 }
             }
-
+            
             div {
                 class: "p-4 md:p-6 flex-1 flex flex-col gap-3 md:gap-4",
-
+                
                 div {
                     class: "flex justify-between items-center text-sm",
                     div {
@@ -173,7 +175,7 @@ fn StudentClassCard(
                     }
                     span { class: "text-gray-900 dark:text-white font-medium", "{class.subject_name}" }
                 }
-
+                
                 div {
                     class: "flex justify-between items-center text-sm",
                     div {
@@ -183,24 +185,24 @@ fn StudentClassCard(
                     }
                     span { class: "text-gray-900 dark:text-white font-medium", "{class.term}" }
                 }
-
+                
                 div {
                     class: "grid grid-cols-3 gap-1 md:gap-2 mt-auto pt-3 md:pt-4 border-t border-gray-100 dark:border-gray-800",
-
+                    
                     button {
                         class: "flex flex-col items-center justify-center gap-0.5 md:gap-1 p-2 md:p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-gray-500 dark:text-gray-400 hover:text-primary dark:hover:text-primary-light min-h-[48px]",
                         onclick: move |_| on_materials.call(class_for_materials.clone()),
                         span { class: "material-icons-outlined text-lg md:text-xl", "folder_open" }
                         span { class: "text-[8px] md:text-[10px] font-medium uppercase", "{t_materials}" }
                     }
-
+                    
                     button {
                         class: "flex flex-col items-center justify-center gap-0.5 md:gap-1 p-2 md:p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-gray-500 dark:text-gray-400 hover:text-primary dark:hover:text-primary-light min-h-[48px]",
                         onclick: move |_| on_tasks.call(class_for_tasks.clone()),
                         span { class: "material-icons-outlined text-lg md:text-xl", "assignment" }
                         span { class: "text-[8px] md:text-[10px] font-medium uppercase", "{t_tasks}" }
                     }
-
+                    
                     button {
                         class: "flex flex-col items-center justify-center gap-0.5 md:gap-1 p-2 md:p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-gray-500 dark:text-gray-400 hover:text-primary dark:hover:text-primary-light min-h-[48px]",
                         onclick: move |_| on_grades.call(class_for_grades.clone()),
@@ -217,14 +219,14 @@ fn StudentClassCard(
 #[component]
 fn ClassTasksModal(class: StudentClassView, on_close: EventHandler) -> Element {
     let class_id = class.id.clone();
-
+    
     let tasks_resource = use_resource(move || {
         let id = class_id.clone();
         async move { get_class_assignments_for_student(id).await }
     });
-
+    
     let locale = use_locale();
-
+    
     rsx! {
         Modal {
             title: format!("{} - {}", class.name, locale.t("assignments.title")),
@@ -233,7 +235,7 @@ fn ClassTasksModal(class: StudentClassView, on_close: EventHandler) -> Element {
             children: rsx! {
                 div {
                     class: "space-y-4 max-h-96 overflow-y-auto",
-
+                    
                     match &*tasks_resource.read() {
                         None => rsx! {
                             div { class: "text-center py-8 text-gray-500", {locale.t("assignments.loading")} }
@@ -286,12 +288,12 @@ fn ClassTasksModal(class: StudentClassView, on_close: EventHandler) -> Element {
 #[component]
 fn ClassGradesModal(class: StudentClassView, on_close: EventHandler) -> Element {
     let class_id = class.id.clone();
-
+    
     let grades_resource = use_resource(move || {
         let id = class_id.clone();
         async move { get_class_grades_for_student(id).await }
     });
-
+    
     let locale = use_locale();
 
     rsx! {
@@ -302,7 +304,7 @@ fn ClassGradesModal(class: StudentClassView, on_close: EventHandler) -> Element 
             children: rsx! {
                 div {
                     class: "space-y-4 max-h-96 overflow-y-auto",
-
+                    
                     match &*grades_resource.read() {
                         None => rsx! {
                             div { class: "text-center py-8 text-gray-500", {locale.t("grades.loading")} }
@@ -325,7 +327,7 @@ fn ClassGradesModal(class: StudentClassView, on_close: EventHandler) -> Element 
                                     }
                                 }
                             }
-
+                            
                             for grade in grades.iter() {
                                 div {
                                     class: "p-4 border border-gray-200 dark:border-gray-700 rounded-lg flex justify-between items-center",
@@ -352,12 +354,12 @@ fn ClassGradesModal(class: StudentClassView, on_close: EventHandler) -> Element 
 #[component]
 fn ClassMaterialsModal(class: StudentClassView, on_close: EventHandler) -> Element {
     let class_id = class.id.clone();
-
+    
     let materials_resource = use_resource(move || {
         let id = class_id.clone();
         async move { get_class_materials_for_student(id).await }
     });
-
+    
     let locale = use_locale();
 
     rsx! {
@@ -368,7 +370,7 @@ fn ClassMaterialsModal(class: StudentClassView, on_close: EventHandler) -> Eleme
             children: rsx! {
                 div {
                     class: "space-y-4 max-h-96 overflow-y-auto",
-
+                    
                     match &*materials_resource.read() {
                         None => rsx! {
                             div { class: "text-center py-8 text-gray-500", {locale.t("materials.loading")} }
@@ -399,7 +401,7 @@ fn ClassMaterialsModal(class: StudentClassView, on_close: EventHandler) -> Eleme
                                         "audio" => "audio_file",
                                         _ => "folder",
                                     };
-
+                                    
                                     let icon_color = match material.material_type.as_str() {
                                         "document" => "text-blue-500",
                                         "video" => "text-red-500",
@@ -408,7 +410,7 @@ fn ClassMaterialsModal(class: StudentClassView, on_close: EventHandler) -> Eleme
                                         "audio" => "text-orange-500",
                                         _ => "text-gray-500",
                                     };
-
+                                    
                                     rsx! {
                                         div {
                                             class: "p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors",

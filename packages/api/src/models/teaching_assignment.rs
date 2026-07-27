@@ -1,4 +1,4 @@
-use crate::domain::{ClassSectionId, TeacherId, TeachingAssignmentId};
+use crate::domain::{TeacherId, ClassSectionId, TeachingAssignmentId};
 use serde::{Deserialize, Serialize};
 
 // --- SERVER-ONLY IMPORTS ---

@@ -1,5 +1,5 @@
-use crate::domain::{ClassSectionId, EnrollmentId, StudentId};
-use crate::models::{CreateEnrollmentRequest, Enrollment, EnrollmentWithDetails};
+use crate::domain::{EnrollmentId, ClassSectionId, StudentId};
+use crate::models::{Enrollment, EnrollmentWithDetails, CreateEnrollmentRequest};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
@@ -22,16 +22,13 @@ impl EnrollmentRepository {
     }
 
     /// Create a new enrollment
-    pub async fn create_internal(
-        &self,
-        request: CreateEnrollmentRequest,
-    ) -> RepositoryResult<Enrollment> {
+    pub async fn create_internal(&self, request: CreateEnrollmentRequest) -> RepositoryResult<Enrollment> {
         let row = sqlx::query(
             r#"
             INSERT INTO enrollments (class_section_id, student_id, enrolled_at)
             VALUES ($1, $2, NOW())
             RETURNING id, class_section_id, student_id, enrolled_at
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(request.class_section_id.into())
         .bind::<uuid::Uuid>(request.student_id.into())
@@ -55,7 +52,7 @@ impl EnrollmentRepository {
             SELECT id, class_section_id, student_id, enrolled_at
             FROM enrollments
             WHERE id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(enrollment_id.into())
         .fetch_optional(&*self.base.pool())
@@ -76,10 +73,7 @@ impl EnrollmentRepository {
     }
 
     /// List enrollments by class section with student details
-    pub async fn list_by_class_section(
-        &self,
-        class_section_id: ClassSectionId,
-    ) -> RepositoryResult<Vec<EnrollmentWithDetails>> {
+    pub async fn list_by_class_section(&self, class_section_id: ClassSectionId) -> RepositoryResult<Vec<EnrollmentWithDetails>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -95,7 +89,7 @@ impl EnrollmentRepository {
             JOIN subjects sub ON cs.subject_id = sub.id
             WHERE e.class_section_id = $1
             ORDER BY u.name
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(class_section_id.into())
         .fetch_all(&*self.base.pool())
@@ -119,10 +113,7 @@ impl EnrollmentRepository {
     }
 
     /// List enrollments by student with class details
-    pub async fn list_by_student(
-        &self,
-        student_id: StudentId,
-    ) -> RepositoryResult<Vec<EnrollmentWithDetails>> {
+    pub async fn list_by_student(&self, student_id: StudentId) -> RepositoryResult<Vec<EnrollmentWithDetails>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -138,7 +129,7 @@ impl EnrollmentRepository {
             JOIN subjects sub ON cs.subject_id = sub.id
             WHERE e.student_id = $1
             ORDER BY cs.name
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(student_id.into())
         .fetch_all(&*self.base.pool())
@@ -162,12 +153,7 @@ impl EnrollmentRepository {
     }
 
     /// List all enrollments by school (through class sections)
-    pub async fn list_by_school(
-        &self,
-        school_id: Uuid,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<EnrollmentWithDetails>> {
+    pub async fn list_by_school(&self, school_id: Uuid, limit: i64, offset: i64) -> RepositoryResult<Vec<EnrollmentWithDetails>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -184,7 +170,7 @@ impl EnrollmentRepository {
             WHERE cs.school_id = $1
             ORDER BY e.enrolled_at DESC
             LIMIT $2 OFFSET $3
-            "#,
+            "#
         )
         .bind(school_id)
         .bind(limit)
@@ -215,7 +201,7 @@ impl EnrollmentRepository {
             r#"
             DELETE FROM enrollments
             WHERE id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(enrollment_id.into())
         .execute(&*self.base.pool())

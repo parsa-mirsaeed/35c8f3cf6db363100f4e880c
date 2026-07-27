@@ -1,7 +1,7 @@
 //! Subject domain models.
 
-use crate::domain::{SchoolId, SubjectId};
 use serde::{Deserialize, Serialize};
+use crate::domain::{SubjectId, SchoolId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Subject {

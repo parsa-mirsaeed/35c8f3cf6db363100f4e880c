@@ -1,7 +1,7 @@
 //! Assignment domain models.
 
-use crate::domain::{AssignmentId, AssignmentStatus, UserId};
 use serde::{Deserialize, Serialize};
+use crate::domain::{AssignmentId, UserId, AssignmentStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Assignment {

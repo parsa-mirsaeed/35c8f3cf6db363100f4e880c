@@ -1,9 +1,13 @@
-use crate::i18n::use_locale;
 use dioxus::prelude::*;
+use crate::i18n::use_locale;
 
 /// Simple data table component
 #[component]
-pub fn DataTable(columns: Vec<TableColumn>, data: Vec<TableRow>, title: Option<String>) -> Element {
+pub fn DataTable(
+    columns: Vec<TableColumn>,
+    data: Vec<TableRow>,
+    title: Option<String>,
+) -> Element {
     let locale = use_locale();
     rsx! {
         div {
@@ -52,7 +56,7 @@ pub fn DataTable(columns: Vec<TableColumn>, data: Vec<TableRow>, title: Option<S
                     }
                 }
             }
-
+            
             if data.is_empty() {
                 div {
                     class: "p-8 text-center text-gray-500 dark:text-gray-400",
@@ -98,16 +102,16 @@ impl TableRow {
     }
 
     pub fn get_cell_value(&self, key: &str) -> String {
-        self.cells
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| "-".to_string())
+        self.cells.get(key).cloned().unwrap_or_else(|| "-".to_string())
     }
 }
 
 /// Stats grid component
 #[component]
-pub fn StatsGrid(stats: Vec<StatItem>, columns: Option<i32>) -> Element {
+pub fn StatsGrid(
+    stats: Vec<StatItem>,
+    columns: Option<i32>,
+) -> Element {
     // We use CSS Grid classes directly instead of calculating columns prop for better responsiveness
     rsx! {
         div {
@@ -141,7 +145,7 @@ pub fn StatsGrid(stats: Vec<StatItem>, columns: Option<i32>) -> Element {
                         div {
                             class: "flex items-center mt-2 text-sm font-medium",
                             class: if change.starts_with('+') { "text-green-600 dark:text-green-400" } else { "text-red-600 dark:text-red-400" },
-
+                            
                             span {
                                 class: "material-icons-outlined text-sm mr-1",
                                 if change.starts_with('+') { "trending_up" } else { "trending_down" }
@@ -166,11 +170,7 @@ pub struct StatItem {
 }
 
 impl StatItem {
-    pub fn new(
-        label: impl Into<String>,
-        value: impl Into<String>,
-        color: impl Into<String>,
-    ) -> Self {
+    pub fn new(label: impl Into<String>, value: impl Into<String>, color: impl Into<String>) -> Self {
         Self {
             label: label.into(),
             value: value.into(),
@@ -184,7 +184,7 @@ impl StatItem {
         self.change = Some(change.into());
         self
     }
-
+    
     pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
         self.icon = Some(icon.into());
         self

@@ -1,4 +1,4 @@
-use crate::domain::{AuthCredentials, AuthError, AuthResult, SystemRole, User, UserSession};
+use crate::domain::{AuthResult, AuthCredentials, AuthError, User, UserSession, SystemRole};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ pub struct AuthProvider;
 
 impl AuthProvider {
     /// Authenticate user with credentials
-    ///
+    /// 
     /// **IMPORTANT**: This uses gloo_net::http::Request instead of a Dioxus
     /// server function because we need the browser to receive and store
     /// the Set-Cookie headers from the response. Server function calls
@@ -54,12 +54,9 @@ impl AuthProvider {
 
         if !response.ok() {
             let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
             web_sys::console::error_1(&format!("Login failed: {} - {}", status, error_text).into());
-
+            
             return if status == 401 {
                 AuthResult::InvalidCredentials
             } else {
@@ -85,7 +82,7 @@ impl AuthProvider {
             "Teacher" => SystemRole::Teacher,
             "Student" => SystemRole::Student,
             "Parent" => SystemRole::Parent,
-            _ => SystemRole::Student,
+            _ => SystemRole::Student, 
         };
 
         let user = User {
@@ -115,12 +112,13 @@ impl AuthProvider {
         let _ = gloo_net::http::Request::post("/api/auth/logout")
             .send()
             .await;
-
+        
         // Clear global auth state
         AuthState::clear_user();
-
+        
         Ok(())
     }
+
 
     /// Get current authenticated user
     pub async fn get_current_user() -> Result<Option<User>, AuthError> {
@@ -137,7 +135,7 @@ impl AuthProvider {
                     "Teacher" => SystemRole::Teacher,
                     "Student" => SystemRole::Student,
                     "Parent" => SystemRole::Parent,
-                    _ => SystemRole::Student,
+                    _ => SystemRole::Student, 
                 };
 
                 let user = User {
@@ -150,10 +148,10 @@ impl AuthProvider {
                     created_at: None,
                     last_login: None,
                 };
-
+                
                 AuthState::update_user(user.clone());
                 Ok(Some(user))
-            }
+            },
             Err(_) => Ok(None),
         }
     }
@@ -166,10 +164,8 @@ impl AuthProvider {
     /// Refresh the current session
     pub async fn refresh_session() -> Result<UserSession, AuthError> {
         // Server middleware handles refresh automatically via cookies
-        let user = Self::get_current_user()
-            .await?
-            .ok_or(AuthError::SessionExpired)?;
-
+        let user = Self::get_current_user().await?.ok_or(AuthError::SessionExpired)?;
+        
         let session = UserSession::new(user, "cookie-session".to_string());
         Ok(session)
     }

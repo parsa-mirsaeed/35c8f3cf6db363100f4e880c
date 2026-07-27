@@ -1,4 +1,4 @@
-use crate::models::{CreateSchoolRequest, School};
+use crate::models::{School, CreateSchoolRequest};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use async_trait::async_trait;
 use sqlx::PgPool;

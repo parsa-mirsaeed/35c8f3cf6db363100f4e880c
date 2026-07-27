@@ -76,14 +76,16 @@ impl Default for LlmConfig {
 
 impl LlmConfig {
     pub fn from_env() -> Result<Self, LlmError> {
-        let api_key = env::var("AI_GATEWAY_INTERNAL_TOKEN").map_err(|_| LlmError::MissingApiKey)?;
+        let api_key = env::var("AI_GATEWAY_INTERNAL_TOKEN")
+            .map_err(|_| LlmError::MissingApiKey)?;
         if api_key.len() < 32 || looks_like_placeholder(&api_key) {
             return Err(LlmError::MissingApiKey);
         }
-        let base_url =
-            env::var("AI_GATEWAY_URL").unwrap_or_else(|_| INTERNAL_GATEWAY_ORIGIN.to_string());
+        let base_url = env::var("AI_GATEWAY_URL")
+            .unwrap_or_else(|_| INTERNAL_GATEWAY_ORIGIN.to_string());
         validate_internal_gateway_url(&base_url)?;
-        let model = env::var("LLM_MODEL").unwrap_or_else(|_| APPROVED_LLM_MODEL.to_string());
+        let model = env::var("LLM_MODEL")
+            .unwrap_or_else(|_| APPROVED_LLM_MODEL.to_string());
         if model != APPROVED_LLM_MODEL {
             return Err(LlmError::InvalidResponse(format!(
                 "LLM_MODEL must be exactly {APPROVED_LLM_MODEL}"
@@ -125,10 +127,7 @@ impl LlmConfig {
     }
 
     fn chat_url(&self) -> String {
-        format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        )
+        format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'))
     }
 }
 
@@ -298,9 +297,7 @@ impl ExternalLlmClient {
         student_context: &StudentContext,
         material_context: &[MaterialContext],
     ) -> Result<PersonalizedAssignment, LlmError> {
-        if school_id.is_nil()
-            || (!student_context.school_id.is_nil() && school_id != student_context.school_id)
-        {
+        if school_id.is_nil() || (!student_context.school_id.is_nil() && school_id != student_context.school_id) {
             return Err(LlmError::MissingSchoolId);
         }
         let messages = vec![
@@ -521,7 +518,11 @@ impl ExternalLlmClient {
                 .unwrap_or(response)
                 .trim()
         } else if response.contains("```") {
-            response.split("```").nth(1).unwrap_or(response).trim()
+            response
+                .split("```")
+                .nth(1)
+                .unwrap_or(response)
+                .trim()
         } else {
             response.trim()
         };

@@ -1,13 +1,9 @@
-use crate::domain::{
-    AssignmentId, AssignmentStatus, ClassSectionId, LectureId, SubjectId, TeacherId,
-};
-use crate::models::{
-    Assignment, AssignmentWithDetails, CreateAssignmentRequest, UpdateAssignmentRequest,
-};
+use crate::domain::{AssignmentId, TeacherId, ClassSectionId, SubjectId, LectureId, AssignmentStatus};
+use crate::models::{Assignment, AssignmentWithDetails, CreateAssignmentRequest, UpdateAssignmentRequest};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use async_trait::async_trait;
 use chrono::Utc;
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{PgPool, Row, postgres::PgRow};
 use std::sync::Arc;
 
 /// Assignment repository for handling assignment-related database operations
@@ -25,19 +21,10 @@ impl AssignmentRepository {
     }
 
     /// Create a new assignment
-    pub async fn create(
-        &self,
-        teacher_id: TeacherId,
-        request: CreateAssignmentRequest,
-    ) -> RepositoryResult<Assignment> {
-        let material_uuids: Vec<uuid::Uuid> = request
-            .material_ids
+    pub async fn create(&self, teacher_id: TeacherId, request: CreateAssignmentRequest) -> RepositoryResult<Assignment> {
+        let material_uuids: Vec<uuid::Uuid> = request.material_ids
             .as_ref()
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|s| s.parse::<uuid::Uuid>().ok())
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|s| s.parse::<uuid::Uuid>().ok()).collect())
             .unwrap_or_default();
 
         let row = sqlx::query(
@@ -50,7 +37,7 @@ impl AssignmentRepository {
             RETURNING id, teacher_id, class_section_id, subject_id, lecture_id,
                       lecture_title, lecture_number, title, body, due_at, status::text as status,
                       created_at, published_at, material_ids
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(teacher_id.into())
         .bind::<uuid::Uuid>(request.class_section_id.into())
@@ -67,21 +54,15 @@ impl AssignmentRepository {
         .await?;
 
         let status_str: String = row.get("status");
-        let status: AssignmentStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse assignment status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: AssignmentStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
         Ok(Assignment {
             id: row.get::<uuid::Uuid, _>("id").into(),
             teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
             class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
             subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-            lecture_id: row
-                .get::<Option<uuid::Uuid>, _>("lecture_id")
-                .map(|v| v.into()),
+            lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
             lecture_title: row.get("lecture_title"),
             lecture_number: row.get("lecture_number"),
             title: row.get("title"),
@@ -95,10 +76,7 @@ impl AssignmentRepository {
     }
 
     /// Get assignment by ID with details
-    pub async fn find_with_details_by_id(
-        &self,
-        assignment_id: AssignmentId,
-    ) -> RepositoryResult<AssignmentWithDetails> {
+    pub async fn find_with_details_by_id(&self, assignment_id: AssignmentId) -> RepositoryResult<AssignmentWithDetails> {
         let row: Option<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -127,21 +105,15 @@ impl AssignmentRepository {
         })?;
 
         let status_str: String = row.get("status");
-        let status: AssignmentStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse assignment status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: AssignmentStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
         Ok(AssignmentWithDetails {
             id: row.get::<uuid::Uuid, _>("id").into(),
             teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
             class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
             subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-            lecture_id: row
-                .get::<Option<uuid::Uuid>, _>("lecture_id")
-                .map(|v| v.into()),
+            lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
             lecture_title: row.get("lecture_title"),
             lecture_number: row.get("lecture_number"),
             title: row.get("title"),
@@ -167,7 +139,7 @@ impl AssignmentRepository {
                    created_at, published_at, material_ids
             FROM assignments
             WHERE id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(assignment_id.into())
         .fetch_optional(&*self.base.pool())
@@ -179,21 +151,15 @@ impl AssignmentRepository {
         })?;
 
         let status_str: String = row.get("status");
-        let status: AssignmentStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse assignment status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: AssignmentStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
         Ok(Assignment {
             id: row.get::<uuid::Uuid, _>("id").into(),
             teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
             class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
             subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-            lecture_id: row
-                .get::<Option<uuid::Uuid>, _>("lecture_id")
-                .map(|v| v.into()),
+            lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
             lecture_title: row.get("lecture_title"),
             lecture_number: row.get("lecture_number"),
             title: row.get("title"),
@@ -207,11 +173,7 @@ impl AssignmentRepository {
     }
 
     /// Update an assignment
-    pub async fn update(
-        &self,
-        assignment_id: AssignmentId,
-        request: UpdateAssignmentRequest,
-    ) -> RepositoryResult<Assignment> {
+    pub async fn update(&self, assignment_id: AssignmentId, request: UpdateAssignmentRequest) -> RepositoryResult<Assignment> {
         let row: Option<PgRow> = sqlx::query(
             r#"
             UPDATE assignments
@@ -225,7 +187,7 @@ impl AssignmentRepository {
             RETURNING id, teacher_id, class_section_id, subject_id, lecture_id,
                       lecture_title, lecture_number, title, body, due_at, status::text as status,
                       created_at, published_at, material_ids
-            "#,
+            "#
         )
         .bind(&request.title)
         .bind(&request.body)
@@ -242,21 +204,15 @@ impl AssignmentRepository {
         })?;
 
         let status_str: String = row.get("status");
-        let status: AssignmentStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse assignment status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: AssignmentStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
         Ok(Assignment {
             id: row.get::<uuid::Uuid, _>("id").into(),
             teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
             class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
             subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-            lecture_id: row
-                .get::<Option<uuid::Uuid>, _>("lecture_id")
-                .map(|v| v.into()),
+            lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
             lecture_title: row.get("lecture_title"),
             lecture_number: row.get("lecture_number"),
             title: row.get("title"),
@@ -270,11 +226,7 @@ impl AssignmentRepository {
     }
 
     /// Update assignment status
-    pub async fn update_status(
-        &self,
-        assignment_id: AssignmentId,
-        status: AssignmentStatus,
-    ) -> RepositoryResult<Assignment> {
+    pub async fn update_status(&self, assignment_id: AssignmentId, status: AssignmentStatus) -> RepositoryResult<Assignment> {
         let row: Option<PgRow> = sqlx::query(
             r#"
             UPDATE assignments
@@ -283,7 +235,7 @@ impl AssignmentRepository {
             RETURNING id, teacher_id, class_section_id, subject_id, lecture_id,
                       lecture_title, lecture_number, title, body, due_at, status::text as status,
                       created_at, published_at, material_ids
-            "#,
+            "#
         )
         .bind(&status.to_string())
         .bind::<uuid::Uuid>(assignment_id.into())
@@ -296,21 +248,15 @@ impl AssignmentRepository {
         })?;
 
         let status_str: String = row.get("status");
-        let status: AssignmentStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse assignment status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: AssignmentStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
         Ok(Assignment {
             id: row.get::<uuid::Uuid, _>("id").into(),
             teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
             class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
             subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-            lecture_id: row
-                .get::<Option<uuid::Uuid>, _>("lecture_id")
-                .map(|v| v.into()),
+            lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
             lecture_title: row.get("lecture_title"),
             lecture_number: row.get("lecture_number"),
             title: row.get("title"),
@@ -335,7 +281,7 @@ impl AssignmentRepository {
             RETURNING id, teacher_id, class_section_id, subject_id, lecture_id,
                       lecture_title, lecture_number, title, body, due_at, status::text as status,
                       created_at, published_at, material_ids
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(assignment_id.into())
         .fetch_optional(&mut *tx)
@@ -347,12 +293,8 @@ impl AssignmentRepository {
         })?;
 
         let status_str: String = row.get("status");
-        let status: AssignmentStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse assignment status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: AssignmentStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
         let class_section_id: ClassSectionId = row.get::<uuid::Uuid, _>("class_section_id").into();
 
@@ -363,7 +305,7 @@ impl AssignmentRepository {
             FROM students s
             JOIN enrollments e ON s.id = e.student_id
             WHERE e.class_section_id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(class_section_id.into())
         .fetch_all(&mut *tx)
@@ -387,7 +329,7 @@ impl AssignmentRepository {
                     assignment_id, student_id, due_at, status, assigned_at
                 )
                 VALUES ($1, $2, $3, 'Assigned'::custom_status, now())
-                "#,
+                "#
             )
             .bind::<uuid::Uuid>(assignment_id.into())
             .bind(student_id)
@@ -403,9 +345,7 @@ impl AssignmentRepository {
             teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
             class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
             subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-            lecture_id: row
-                .get::<Option<uuid::Uuid>, _>("lecture_id")
-                .map(|v| v.into()),
+            lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
             lecture_title: row.get("lecture_title"),
             lecture_number: row.get("lecture_number"),
             title: row.get("title"),
@@ -419,11 +359,7 @@ impl AssignmentRepository {
     }
 
     /// List assignments with pagination
-    pub async fn list(
-        &self,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<AssignmentWithDetails>> {
+    pub async fn list(&self, limit: i64, offset: i64) -> RepositoryResult<Vec<AssignmentWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -451,21 +387,15 @@ impl AssignmentRepository {
         let mut assignments = Vec::new();
         for row in rows {
             let status_str: String = row.get("status");
-            let status: AssignmentStatus = status_str.parse().map_err(|e| {
-                RepositoryError::Database(sqlx::Error::Protocol(format!(
-                    "Failed to parse assignment status '{}': {}",
-                    status_str, e
-                )))
-            })?;
+            let status: AssignmentStatus = status_str.parse()
+                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
             assignments.push(AssignmentWithDetails {
                 id: row.get::<uuid::Uuid, _>("id").into(),
                 teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
                 class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
                 subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-                lecture_id: row
-                    .get::<Option<uuid::Uuid>, _>("lecture_id")
-                    .map(|v| v.into()),
+                lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
                 lecture_title: row.get("lecture_title"),
                 lecture_number: row.get("lecture_number"),
                 title: row.get("title"),
@@ -486,12 +416,7 @@ impl AssignmentRepository {
     }
 
     /// List assignments by teacher
-    pub async fn list_by_teacher(
-        &self,
-        teacher_id: TeacherId,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<AssignmentWithDetails>> {
+    pub async fn list_by_teacher(&self, teacher_id: TeacherId, limit: i64, offset: i64) -> RepositoryResult<Vec<AssignmentWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -521,21 +446,15 @@ impl AssignmentRepository {
         let mut assignments = Vec::new();
         for row in rows {
             let status_str: String = row.get("status");
-            let status: AssignmentStatus = status_str.parse().map_err(|e| {
-                RepositoryError::Database(sqlx::Error::Protocol(format!(
-                    "Failed to parse assignment status '{}': {}",
-                    status_str, e
-                )))
-            })?;
+            let status: AssignmentStatus = status_str.parse()
+                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
             assignments.push(AssignmentWithDetails {
                 id: row.get::<uuid::Uuid, _>("id").into(),
                 teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
                 class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
                 subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-                lecture_id: row
-                    .get::<Option<uuid::Uuid>, _>("lecture_id")
-                    .map(|v| v.into()),
+                lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
                 lecture_title: row.get("lecture_title"),
                 lecture_number: row.get("lecture_number"),
                 title: row.get("title"),
@@ -556,12 +475,7 @@ impl AssignmentRepository {
     }
 
     /// List assignments by class section
-    pub async fn list_by_class_section(
-        &self,
-        class_section_id: ClassSectionId,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<AssignmentWithDetails>> {
+    pub async fn list_by_class_section(&self, class_section_id: ClassSectionId, limit: i64, offset: i64) -> RepositoryResult<Vec<AssignmentWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT DISTINCT
@@ -591,21 +505,15 @@ impl AssignmentRepository {
         let mut assignments = Vec::new();
         for row in rows {
             let status_str: String = row.get("status");
-            let status: AssignmentStatus = status_str.parse().map_err(|e| {
-                RepositoryError::Database(sqlx::Error::Protocol(format!(
-                    "Failed to parse assignment status '{}': {}",
-                    status_str, e
-                )))
-            })?;
+            let status: AssignmentStatus = status_str.parse()
+                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
             assignments.push(AssignmentWithDetails {
                 id: row.get::<uuid::Uuid, _>("id").into(),
                 teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
                 class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
                 subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-                lecture_id: row
-                    .get::<Option<uuid::Uuid>, _>("lecture_id")
-                    .map(|v| v.into()),
+                lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
                 lecture_title: row.get("lecture_title"),
                 lecture_number: row.get("lecture_number"),
                 title: row.get("title"),
@@ -626,12 +534,7 @@ impl AssignmentRepository {
     }
 
     /// List published assignments for a specific student
-    pub async fn list_published_for_student(
-        &self,
-        student_id: crate::domain::StudentId,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<AssignmentWithDetails>> {
+    pub async fn list_published_for_student(&self, student_id: crate::domain::StudentId, limit: i64, offset: i64) -> RepositoryResult<Vec<AssignmentWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -662,21 +565,15 @@ impl AssignmentRepository {
         let mut assignments = Vec::new();
         for row in rows {
             let status_str: String = row.get("status");
-            let status: AssignmentStatus = status_str.parse().map_err(|e| {
-                RepositoryError::Database(sqlx::Error::Protocol(format!(
-                    "Failed to parse assignment status '{}': {}",
-                    status_str, e
-                )))
-            })?;
+            let status: AssignmentStatus = status_str.parse()
+                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse assignment status '{}': {}", status_str, e))))?;
 
             assignments.push(AssignmentWithDetails {
                 id: row.get::<uuid::Uuid, _>("id").into(),
                 teacher_id: row.get::<uuid::Uuid, _>("teacher_id").into(),
                 class_section_id: row.get::<uuid::Uuid, _>("class_section_id").into(),
                 subject_id: row.get::<uuid::Uuid, _>("subject_id").into(),
-                lecture_id: row
-                    .get::<Option<uuid::Uuid>, _>("lecture_id")
-                    .map(|v| v.into()),
+                lecture_id: row.get::<Option<uuid::Uuid>, _>("lecture_id").map(|v| v.into()),
                 lecture_title: row.get("lecture_title"),
                 lecture_number: row.get("lecture_number"),
                 title: row.get("title"),
@@ -698,10 +595,12 @@ impl AssignmentRepository {
 
     /// Delete an assignment
     pub async fn delete(&self, assignment_id: AssignmentId) -> RepositoryResult<()> {
-        let result = sqlx::query("DELETE FROM assignments WHERE id = $1")
-            .bind::<uuid::Uuid>(assignment_id.into())
-            .execute(&*self.base.pool())
-            .await?;
+        let result = sqlx::query(
+            "DELETE FROM assignments WHERE id = $1"
+        )
+        .bind::<uuid::Uuid>(assignment_id.into())
+        .execute(&*self.base.pool())
+        .await?;
 
         if result.rows_affected() == 0 {
             return Err(RepositoryError::NotFound {

@@ -72,7 +72,7 @@ pub struct ExtractionResult {
 }
 
 /// Document Extraction Service
-///
+/// 
 /// Uses pure Rust libraries with NO external service dependencies.
 pub struct DocumentExtractionService {
     http_client: reqwest::Client,
@@ -92,17 +92,16 @@ impl DocumentExtractionService {
     /// Extract text from a document URL
     pub async fn extract_from_url(&self, url: &str) -> Result<ExtractionResult, ExtractionError> {
         let doc_type = DocumentType::from_extension(url);
-
+        
         if !doc_type.is_supported() {
-            return Err(ExtractionError::UnsupportedFormat(format!(
-                "Cannot extract from: {}",
-                url
-            )));
+            return Err(ExtractionError::UnsupportedFormat(
+                format!("Cannot extract from: {}", url)
+            ));
         }
 
         // Download the file
         let bytes = self.download_file(url).await?;
-
+        
         // Extract based on type
         match doc_type {
             DocumentType::Pdf => self.extract_pdf(&bytes, url),
@@ -115,7 +114,9 @@ impl DocumentExtractionService {
                     source: url.to_string(),
                 })
             }
-            DocumentType::Unknown => Err(ExtractionError::UnsupportedFormat(url.to_string())),
+            DocumentType::Unknown => {
+                Err(ExtractionError::UnsupportedFormat(url.to_string()))
+            }
         }
     }
 
@@ -157,7 +158,7 @@ impl DocumentExtractionService {
     fn clean_extracted_text(&self, text: &str) -> String {
         // Remove form feed characters
         let text = text.replace('\x0c', "\n\n");
-
+        
         // Normalize whitespace while preserving paragraph structure
         let lines: Vec<&str> = text.lines().collect();
         let mut result = String::new();
@@ -185,39 +186,31 @@ impl DocumentExtractionService {
 
     /// Download file from URL
     async fn download_file(&self, url: &str) -> Result<Vec<u8>, ExtractionError> {
-        let response = self
-            .http_client
+        let response = self.http_client
             .get(url)
             .send()
             .await
             .map_err(|e| ExtractionError::DownloadError(e.to_string()))?;
 
         if !response.status().is_success() {
-            return Err(ExtractionError::DownloadError(format!(
-                "HTTP {}: {}",
-                response.status(),
-                url
-            )));
+            return Err(ExtractionError::DownloadError(
+                format!("HTTP {}: {}", response.status(), url)
+            ));
         }
 
-        let bytes = response
-            .bytes()
+        let bytes = response.bytes()
             .await
             .map_err(|e| ExtractionError::DownloadError(e.to_string()))?;
 
         tracing::debug!("Downloaded {} bytes from {}", bytes.len(), url);
-
+        
         Ok(bytes.to_vec())
     }
 
     /// Extract text from local file bytes
-    pub fn extract_from_bytes(
-        &self,
-        bytes: &[u8],
-        filename: &str,
-    ) -> Result<ExtractionResult, ExtractionError> {
+    pub fn extract_from_bytes(&self, bytes: &[u8], filename: &str) -> Result<ExtractionResult, ExtractionError> {
         let doc_type = DocumentType::from_extension(filename);
-
+        
         match doc_type {
             DocumentType::Pdf => self.extract_pdf(bytes, filename),
             DocumentType::Txt | DocumentType::Markdown | DocumentType::Html => {
@@ -229,7 +222,9 @@ impl DocumentExtractionService {
                     source: filename.to_string(),
                 })
             }
-            DocumentType::Unknown => Err(ExtractionError::UnsupportedFormat(filename.to_string())),
+            DocumentType::Unknown => {
+                Err(ExtractionError::UnsupportedFormat(filename.to_string()))
+            }
         }
     }
 }
@@ -249,18 +244,9 @@ mod tests {
         assert_eq!(DocumentType::from_extension("doc.pdf"), DocumentType::Pdf);
         assert_eq!(DocumentType::from_extension("doc.PDF"), DocumentType::Pdf);
         assert_eq!(DocumentType::from_extension("file.txt"), DocumentType::Txt);
-        assert_eq!(
-            DocumentType::from_extension("file.md"),
-            DocumentType::Markdown
-        );
-        assert_eq!(
-            DocumentType::from_extension("file.html"),
-            DocumentType::Html
-        );
-        assert_eq!(
-            DocumentType::from_extension("file.xyz"),
-            DocumentType::Unknown
-        );
+        assert_eq!(DocumentType::from_extension("file.md"), DocumentType::Markdown);
+        assert_eq!(DocumentType::from_extension("file.html"), DocumentType::Html);
+        assert_eq!(DocumentType::from_extension("file.xyz"), DocumentType::Unknown);
     }
 
     #[test]

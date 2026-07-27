@@ -3,9 +3,8 @@ use serde_json::{json, Value};
 
 // Auth module
 pub mod auth;
-pub use auth::{
-    login_handler, logout_handler, AuthenticatedUser, Claims, LoginRequest, LoginResponse,
-};
+pub use auth::{AuthenticatedUser, LoginRequest, LoginResponse, Claims, login_handler, logout_handler};
+
 
 /// Basic health check handler
 pub async fn health_check() -> Result<Json<Value>, StatusCode> {

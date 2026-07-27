@@ -1,6 +1,6 @@
-use crate::i18n::use_locale;
-use crate::views::role_based::components::DashboardSection;
 use dioxus::prelude::*;
+use crate::views::role_based::components::DashboardSection;
+use crate::i18n::use_locale;
 
 /// Schedule section for Student
 #[component]
@@ -134,41 +134,13 @@ pub fn ScheduleItem(
     status: String,
 ) -> Element {
     let (bg_color, border_color, opacity, time_color, title_color) = match status.as_str() {
-        "current" => (
-            "bg-blue-50 dark:bg-blue-900/20",
-            "border-blue-500",
-            "opacity-100",
-            "text-blue-600 dark:text-blue-400",
-            "text-blue-700 dark:text-blue-300",
-        ),
-        "completed" => (
-            "bg-gray-50 dark:bg-gray-800/50",
-            "border-transparent",
-            "opacity-70",
-            "text-gray-500",
-            "text-gray-900 dark:text-white",
-        ),
-        "break" => (
-            "bg-yellow-50 dark:bg-yellow-900/20",
-            "border-yellow-500",
-            "opacity-100",
-            "text-yellow-600 dark:text-yellow-400",
-            "text-gray-900 dark:text-white",
-        ),
-        _ => (
-            "bg-white dark:bg-gray-800",
-            "border-transparent",
-            "opacity-100",
-            "text-gray-500",
-            "text-gray-900 dark:text-white",
-        ),
+        "current" => ("bg-blue-50 dark:bg-blue-900/20", "border-blue-500", "opacity-100", "text-blue-600 dark:text-blue-400", "text-blue-700 dark:text-blue-300"),
+        "completed" => ("bg-gray-50 dark:bg-gray-800/50", "border-transparent", "opacity-70", "text-gray-500", "text-gray-900 dark:text-white"),
+        "break" => ("bg-yellow-50 dark:bg-yellow-900/20", "border-yellow-500", "opacity-100", "text-yellow-600 dark:text-yellow-400", "text-gray-900 dark:text-white"),
+        _ => ("bg-white dark:bg-gray-800", "border-transparent", "opacity-100", "text-gray-500", "text-gray-900 dark:text-white"),
     };
 
-    let border_class = if status == "current" || status == "break" {
-        format!("border-l-4 {}", border_color)
-    } else {
-        "border-l-4 border-transparent".to_string()
-    };
+    let border_class = if status == "current" || status == "break" { format!("border-l-4 {}", border_color) } else { "border-l-4 border-transparent".to_string() };
     let locale = use_locale();
 
     rsx! {
@@ -302,36 +274,21 @@ pub fn WeeklySchedule() -> Element {
 
 /// Day card component for weekly view
 #[component]
-pub fn DayCard(day: String, date: String, classes: i32, status: String) -> Element {
+pub fn DayCard(
+    day: String,
+    date: String,
+    classes: i32,
+    status: String,
+) -> Element {
     let (bg_class, border_class, opacity) = match status.as_str() {
-        "today" => (
-            "bg-blue-50 dark:bg-blue-900/20",
-            "border-blue-500",
-            "opacity-100",
-        ),
-        "past" => (
-            "bg-gray-50 dark:bg-gray-800/50",
-            "border-transparent",
-            "opacity-60",
-        ),
-        _ => (
-            "bg-white dark:bg-gray-800",
-            "border-gray-200 dark:border-gray-700",
-            "opacity-100",
-        ),
+        "today" => ("bg-blue-50 dark:bg-blue-900/20", "border-blue-500", "opacity-100"),
+        "past" => ("bg-gray-50 dark:bg-gray-800/50", "border-transparent", "opacity-60"),
+        _ => ("bg-white dark:bg-gray-800", "border-gray-200 dark:border-gray-700", "opacity-100"),
     };
 
-    let ring_class = if status == "today" {
-        "ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-gray-900"
-    } else {
-        ""
-    };
-
-    let btn_bg = if status == "today" {
-        "bg-blue-500 text-white"
-    } else {
-        "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
-    };
+    let ring_class = if status == "today" { "ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-gray-900" } else { "" };
+    
+    let btn_bg = if status == "today" { "bg-blue-500 text-white" } else { "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400" };
 
     rsx! {
         div {
@@ -424,23 +381,16 @@ pub fn ImportantDates() -> Element {
 
 /// Important date item component
 #[component]
-pub fn ImportantDateItem(title: String, date: String, type_: String, urgency: String) -> Element {
+pub fn ImportantDateItem(
+    title: String,
+    date: String,
+    type_: String,
+    urgency: String,
+) -> Element {
     let (bg_color, border_color, icon_bg) = match urgency.as_str() {
-        "high" => (
-            "bg-red-50 dark:bg-red-900/20",
-            "border-red-500",
-            "bg-red-100 dark:bg-red-900/50 text-red-600",
-        ),
-        "medium" => (
-            "bg-blue-50 dark:bg-blue-900/20",
-            "border-blue-500",
-            "bg-blue-100 dark:bg-blue-900/50 text-blue-600",
-        ),
-        _ => (
-            "bg-green-50 dark:bg-green-900/20",
-            "border-green-500",
-            "bg-green-100 dark:bg-green-900/50 text-green-600",
-        ),
+        "high" => ("bg-red-50 dark:bg-red-900/20", "border-red-500", "bg-red-100 dark:bg-red-900/50 text-red-600"),
+        "medium" => ("bg-blue-50 dark:bg-blue-900/20", "border-blue-500", "bg-blue-100 dark:bg-blue-900/50 text-blue-600"),
+        _ => ("bg-green-50 dark:bg-green-900/20", "border-green-500", "bg-green-100 dark:bg-green-900/50 text-green-600"),
     };
 
     rsx! {

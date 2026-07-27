@@ -39,8 +39,8 @@ pub use document_extraction_service::{
 };
 #[cfg(feature = "server")]
 pub use embedding_profile::{
-    resolve_embedding_profile, validate_profile_overrides, EmbeddingProfile, EmbeddingProfileError,
-    EmbeddingProviderKind, LOCAL_BGE_V1, OPENAI_V1,
+    resolve_embedding_profile, validate_profile_overrides, EmbeddingProfile,
+    EmbeddingProfileError, EmbeddingProviderKind, LOCAL_BGE_V1, OPENAI_V1,
 };
 #[cfg(feature = "server")]
 pub use embedding_service::{

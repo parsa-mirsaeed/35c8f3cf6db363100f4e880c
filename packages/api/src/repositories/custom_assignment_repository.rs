@@ -1,10 +1,10 @@
-use crate::domain::{AssignmentId, CustomAssignmentId, CustomStatus, StudentId};
+use crate::domain::{CustomAssignmentId, AssignmentId, StudentId, CustomStatus};
 use crate::models::{CustomAssignment, CustomAssignmentWithDetails, UpdateCustomAssignmentRequest};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{PgPool, Row, postgres::PgRow};
 use std::sync::Arc;
 
 /// Custom assignment repository for handling custom assignment-related database operations
@@ -23,11 +23,7 @@ impl CustomAssignmentRepository {
 
     /// Create custom assignments for all students in a class section
     /// This is the fan-out operation when an assignment is published
-    pub async fn create_for_class_section(
-        &self,
-        assignment_id: AssignmentId,
-        class_section_id: crate::domain::ClassSectionId,
-    ) -> RepositoryResult<Vec<CustomAssignment>> {
+    pub async fn create_for_class_section(&self, assignment_id: AssignmentId, class_section_id: crate::domain::ClassSectionId) -> RepositoryResult<Vec<CustomAssignment>> {
         let mut tx = self.base.pool().begin().await?;
 
         // Get all enrolled students for this class section
@@ -67,7 +63,7 @@ impl CustomAssignmentRepository {
                 ), 'Assigned'::custom_status, now())
                 RETURNING id, assignment_id, student_id, prompt_ctx, rubric, due_at,
                           status::text as status, assigned_at, submitted_at, graded_at
-                "#,
+                "#
             )
             .bind::<uuid::Uuid>(assignment_id.into())
             .bind::<uuid::Uuid>(student_id.into())
@@ -75,12 +71,8 @@ impl CustomAssignmentRepository {
             .await?;
 
             let status_str: String = row.get("status");
-            let status: CustomStatus = status_str.parse().map_err(|e| {
-                RepositoryError::Database(sqlx::Error::Protocol(format!(
-                    "Failed to parse custom status '{}': {}",
-                    status_str, e
-                )))
-            })?;
+            let status: CustomStatus = status_str.parse()
+                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse custom status '{}': {}", status_str, e))))?;
 
             custom_assignments.push(CustomAssignment {
                 id: row.get::<uuid::Uuid, _>("id").into(),
@@ -101,10 +93,7 @@ impl CustomAssignmentRepository {
     }
 
     /// Get custom assignment by ID with details
-    pub async fn find_with_details_by_id(
-        &self,
-        custom_assignment_id: CustomAssignmentId,
-    ) -> RepositoryResult<CustomAssignmentWithDetails> {
+    pub async fn find_with_details_by_id(&self, custom_assignment_id: CustomAssignmentId) -> RepositoryResult<CustomAssignmentWithDetails> {
         let row: Option<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -117,7 +106,7 @@ impl CustomAssignmentRepository {
             JOIN students s ON ca.student_id = s.id
             JOIN users u ON s.user_id = u.id
             WHERE ca.id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(custom_assignment_id.into())
         .fetch_optional(&*self.base.pool())
@@ -129,12 +118,8 @@ impl CustomAssignmentRepository {
         })?;
 
         let status_str: String = row.get("status");
-        let status: CustomStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse custom status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: CustomStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse custom status '{}': {}", status_str, e))))?;
 
         Ok(CustomAssignmentWithDetails {
             id: row.get::<uuid::Uuid, _>("id").into(),
@@ -155,17 +140,14 @@ impl CustomAssignmentRepository {
     }
 
     /// Get custom assignment by ID
-    pub async fn find_by_id(
-        &self,
-        custom_assignment_id: CustomAssignmentId,
-    ) -> RepositoryResult<CustomAssignment> {
+    pub async fn find_by_id(&self, custom_assignment_id: CustomAssignmentId) -> RepositoryResult<CustomAssignment> {
         let row: Option<PgRow> = sqlx::query(
             r#"
             SELECT id, assignment_id, student_id, prompt_ctx, rubric, due_at,
                    status::text as status, assigned_at, submitted_at, graded_at
             FROM custom_assignments
             WHERE id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(custom_assignment_id.into())
         .fetch_optional(&*self.base.pool())
@@ -177,12 +159,8 @@ impl CustomAssignmentRepository {
         })?;
 
         let status_str: String = row.get("status");
-        let status: CustomStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse custom status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: CustomStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse custom status '{}': {}", status_str, e))))?;
 
         Ok(CustomAssignment {
             id: row.get::<uuid::Uuid, _>("id").into(),
@@ -199,12 +177,7 @@ impl CustomAssignmentRepository {
     }
 
     /// Update custom assignment with AI-generated content
-    pub async fn update_with_ai_content(
-        &self,
-        custom_assignment_id: CustomAssignmentId,
-        prompt_ctx: Value,
-        rubric: Value,
-    ) -> RepositoryResult<CustomAssignment> {
+    pub async fn update_with_ai_content(&self, custom_assignment_id: CustomAssignmentId, prompt_ctx: Value, rubric: Value) -> RepositoryResult<CustomAssignment> {
         let row: Option<PgRow> = sqlx::query(
             r#"
             UPDATE custom_assignments
@@ -212,7 +185,7 @@ impl CustomAssignmentRepository {
             WHERE id = $3
             RETURNING id, assignment_id, student_id, prompt_ctx, rubric, due_at,
                       status::text as status, assigned_at, submitted_at, graded_at
-            "#,
+            "#
         )
         .bind(&prompt_ctx)
         .bind(&rubric)
@@ -226,12 +199,8 @@ impl CustomAssignmentRepository {
         })?;
 
         let status_str: String = row.get("status");
-        let status: CustomStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse custom status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: CustomStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse custom status '{}': {}", status_str, e))))?;
 
         Ok(CustomAssignment {
             id: row.get::<uuid::Uuid, _>("id").into(),
@@ -248,11 +217,7 @@ impl CustomAssignmentRepository {
     }
 
     /// Update custom assignment status
-    pub async fn update_status(
-        &self,
-        custom_assignment_id: CustomAssignmentId,
-        status: CustomStatus,
-    ) -> RepositoryResult<CustomAssignment> {
+    pub async fn update_status(&self, custom_assignment_id: CustomAssignmentId, status: CustomStatus) -> RepositoryResult<CustomAssignment> {
         let status_field = match status {
             CustomStatus::Assigned => None,
             CustomStatus::InProgress => Some("submitted_at"),
@@ -268,8 +233,7 @@ impl CustomAssignmentRepository {
                 WHERE id = $2
                 RETURNING id, assignment_id, student_id, prompt_ctx, rubric, due_at,
                           status::text as status, assigned_at, submitted_at, graded_at
-                "#,
-                timestamp_field
+                "#, timestamp_field
             ))
             .bind(&status.to_string())
             .bind::<uuid::Uuid>(custom_assignment_id.into())
@@ -283,7 +247,7 @@ impl CustomAssignmentRepository {
                 WHERE id = $2
                 RETURNING id, assignment_id, student_id, prompt_ctx, rubric, due_at,
                           status::text as status, assigned_at, submitted_at, graded_at
-                "#,
+                "#
             )
             .bind(&status.to_string())
             .bind::<uuid::Uuid>(custom_assignment_id.into())
@@ -297,12 +261,8 @@ impl CustomAssignmentRepository {
         })?;
 
         let status_str: String = row.get("status");
-        let status: CustomStatus = status_str.parse().map_err(|e| {
-            RepositoryError::Database(sqlx::Error::Protocol(format!(
-                "Failed to parse custom status '{}': {}",
-                status_str, e
-            )))
-        })?;
+        let status: CustomStatus = status_str.parse()
+            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse custom status '{}': {}", status_str, e))))?;
 
         Ok(CustomAssignment {
             id: row.get::<uuid::Uuid, _>("id").into(),
@@ -319,12 +279,7 @@ impl CustomAssignmentRepository {
     }
 
     /// List custom assignments by student
-    pub async fn list_by_student(
-        &self,
-        student_id: StudentId,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<CustomAssignmentWithDetails>> {
+    pub async fn list_by_student(&self, student_id: StudentId, limit: i64, offset: i64) -> RepositoryResult<Vec<CustomAssignmentWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -339,7 +294,7 @@ impl CustomAssignmentRepository {
             WHERE ca.student_id = $1
             ORDER BY ca.assigned_at DESC
             LIMIT $2 OFFSET $3
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(student_id.into())
         .bind(&limit)
@@ -350,12 +305,8 @@ impl CustomAssignmentRepository {
         let mut custom_assignments = Vec::new();
         for row in rows {
             let status_str: String = row.get("status");
-            let status: CustomStatus = status_str.parse().map_err(|e| {
-                RepositoryError::Database(sqlx::Error::Protocol(format!(
-                    "Failed to parse custom status '{}': {}",
-                    status_str, e
-                )))
-            })?;
+            let status: CustomStatus = status_str.parse()
+                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse custom status '{}': {}", status_str, e))))?;
 
             custom_assignments.push(CustomAssignmentWithDetails {
                 id: row.get::<uuid::Uuid, _>("id").into(),
@@ -379,12 +330,7 @@ impl CustomAssignmentRepository {
     }
 
     /// List custom assignments by assignment (for teachers)
-    pub async fn list_by_assignment(
-        &self,
-        assignment_id: AssignmentId,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<CustomAssignmentWithDetails>> {
+    pub async fn list_by_assignment(&self, assignment_id: AssignmentId, limit: i64, offset: i64) -> RepositoryResult<Vec<CustomAssignmentWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -399,7 +345,7 @@ impl CustomAssignmentRepository {
             WHERE ca.assignment_id = $1
             ORDER BY ca.assigned_at DESC
             LIMIT $2 OFFSET $3
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(assignment_id.into())
         .bind(&limit)
@@ -410,12 +356,8 @@ impl CustomAssignmentRepository {
         let mut custom_assignments = Vec::new();
         for row in rows {
             let status_str: String = row.get("status");
-            let status: CustomStatus = status_str.parse().map_err(|e| {
-                RepositoryError::Database(sqlx::Error::Protocol(format!(
-                    "Failed to parse custom status '{}': {}",
-                    status_str, e
-                )))
-            })?;
+            let status: CustomStatus = status_str.parse()
+                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse custom status '{}': {}", status_str, e))))?;
 
             custom_assignments.push(CustomAssignmentWithDetails {
                 id: row.get::<uuid::Uuid, _>("id").into(),
@@ -439,10 +381,7 @@ impl CustomAssignmentRepository {
     }
 
     /// Get custom assignments pending AI customization
-    pub async fn list_pending_customization(
-        &self,
-        limit: i64,
-    ) -> RepositoryResult<Vec<CustomAssignment>> {
+    pub async fn list_pending_customization(&self, limit: i64) -> RepositoryResult<Vec<CustomAssignment>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT id, assignment_id, student_id, prompt_ctx, rubric, due_at,
@@ -451,7 +390,7 @@ impl CustomAssignmentRepository {
             WHERE status = 'Assigned' AND (prompt_ctx IS NULL OR rubric IS NULL)
             ORDER BY assigned_at ASC
             LIMIT $1
-            "#,
+            "#
         )
         .bind(&limit)
         .fetch_all(&*self.base.pool())
@@ -460,12 +399,8 @@ impl CustomAssignmentRepository {
         let mut custom_assignments = Vec::new();
         for row in rows {
             let status_str: String = row.get("status");
-            let status: CustomStatus = status_str.parse().map_err(|e| {
-                RepositoryError::Database(sqlx::Error::Protocol(format!(
-                    "Failed to parse custom status '{}': {}",
-                    status_str, e
-                )))
-            })?;
+            let status: CustomStatus = status_str.parse()
+                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse custom status '{}': {}", status_str, e))))?;
 
             custom_assignments.push(CustomAssignment {
                 id: row.get::<uuid::Uuid, _>("id").into(),
@@ -486,10 +421,12 @@ impl CustomAssignmentRepository {
 
     /// Delete custom assignment
     pub async fn delete(&self, custom_assignment_id: CustomAssignmentId) -> RepositoryResult<()> {
-        let result = sqlx::query("DELETE FROM custom_assignments WHERE id = $1")
-            .bind::<uuid::Uuid>(custom_assignment_id.into())
-            .execute(&*self.base.pool())
-            .await?;
+        let result = sqlx::query(
+            "DELETE FROM custom_assignments WHERE id = $1"
+        )
+        .bind::<uuid::Uuid>(custom_assignment_id.into())
+        .execute(&*self.base.pool())
+        .await?;
 
         if result.rows_affected() == 0 {
             return Err(RepositoryError::NotFound {

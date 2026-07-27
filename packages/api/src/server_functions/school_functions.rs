@@ -1,9 +1,9 @@
 //! School server functions.
 
+use dioxus::prelude::*;
+use crate::models::{School, CreateSchoolRequest};
 #[cfg(feature = "server")]
 use crate::app_state::extract_server_state;
-use crate::models::{CreateSchoolRequest, School};
-use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use uuid::Uuid;
 
@@ -13,11 +13,8 @@ pub async fn get_all() -> Result<Vec<School>, ServerFnError> {
     {
         let state = extract_server_state()?;
         let repo = &state.services.school;
-
-        let schools = repo
-            .list()
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        
+        let schools = repo.list().await.map_err(|e| ServerFnError::new(e.to_string()))?;
         Ok(schools)
     }
     #[cfg(not(feature = "server"))]
@@ -31,7 +28,7 @@ pub async fn get_by_id(id: String) -> Result<Option<School>, ServerFnError> {
         let state = extract_server_state()?;
         let repo = &state.services.school;
         let school_id = Uuid::parse_str(&id).map_err(|_| ServerFnError::new("Invalid ID"))?;
-
+        
         match repo.find_by_id(school_id).await {
             Ok(school) => Ok(Some(school)),
             Err(crate::repositories::RepositoryError::NotFound { .. }) => Ok(None),
@@ -48,11 +45,8 @@ pub async fn create(data: CreateSchoolRequest) -> Result<School, ServerFnError> 
     {
         let state = extract_server_state()?;
         let repo = &state.services.school;
-
-        let school = repo
-            .create(data)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        
+        let school = repo.create(data).await.map_err(|e| ServerFnError::new(e.to_string()))?;
         Ok(school)
     }
     #[cfg(not(feature = "server"))]

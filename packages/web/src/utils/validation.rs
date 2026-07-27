@@ -99,19 +99,13 @@ impl ValidationRule {
         // Length validation
         if let Some(min) = self.min_length {
             if value.len() < min {
-                return Err(format!(
-                    "{} must be at least {} characters",
-                    self.field, min
-                ));
+                return Err(format!("{} must be at least {} characters", self.field, min));
             }
         }
 
         if let Some(max) = self.max_length {
             if value.len() > max {
-                return Err(format!(
-                    "{} must be no more than {} characters",
-                    self.field, max
-                ));
+                return Err(format!("{} must be no more than {} characters", self.field, max));
             }
         }
 
@@ -133,10 +127,7 @@ impl ValidationRule {
         // UUID validation
         if self.uuid_format {
             // Basic UUID format validation (8-4-4-4-12 hex digits)
-            let uuid_regex = regex::Regex::new(
-                r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-            )
-            .unwrap();
+            let uuid_regex = regex::Regex::new(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$").unwrap();
             if !uuid_regex.is_match(value) {
                 return Err("Invalid UUID format".to_string());
             }
@@ -161,10 +152,7 @@ impl FormValidator {
         self
     }
 
-    pub fn validate_form(
-        &self,
-        data: &std::collections::HashMap<String, String>,
-    ) -> FormValidationState {
+    pub fn validate_form(&self, data: &std::collections::HashMap<String, String>) -> FormValidationState {
         let mut state = FormValidationState::new();
         let mut all_valid = true;
 

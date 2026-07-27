@@ -1,5 +1,5 @@
-use crate::domain::{SchoolId, StudentId, UserId};
-use crate::models::{CreateStudentRequest, Student, StudentWithUser};
+use crate::domain::{UserId, StudentId, SchoolId};
+use crate::models::{Student, StudentWithUser, CreateStudentRequest};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
@@ -22,16 +22,13 @@ impl StudentRepository {
     }
 
     /// Create a new student
-    pub async fn create_internal(
-        &self,
-        request: CreateStudentRequest,
-    ) -> RepositoryResult<Student> {
+    pub async fn create_internal(&self, request: CreateStudentRequest) -> RepositoryResult<Student> {
         let row = sqlx::query(
             r#"
             INSERT INTO students (user_id, school_id, parent_id, talent_profile_ref)
             VALUES ($1, $2, $3, $4)
             RETURNING id, user_id, school_id, parent_id, talent_profile_ref, created_at
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(request.user_id.into())
         .bind(Uuid::from(request.school_id))
@@ -44,9 +41,7 @@ impl StudentRepository {
             id: row.get::<uuid::Uuid, _>("id").into(),
             user_id: row.get::<uuid::Uuid, _>("user_id").into(),
             school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
-            parent_id: row
-                .get::<Option<uuid::Uuid>, _>("parent_id")
-                .map(|uuid| uuid.into()),
+            parent_id: row.get::<Option<uuid::Uuid>, _>("parent_id").map(|uuid| uuid.into()),
             talent_profile_ref: row.get("talent_profile_ref"),
             created_at: row.get("created_at"),
         };
@@ -55,10 +50,7 @@ impl StudentRepository {
     }
 
     /// Get student by ID with user information
-    pub async fn find_with_user_by_id(
-        &self,
-        student_id: StudentId,
-    ) -> RepositoryResult<StudentWithUser> {
+    pub async fn find_with_user_by_id(&self, student_id: StudentId) -> RepositoryResult<StudentWithUser> {
         let row = sqlx::query(
             r#"
             SELECT
@@ -69,7 +61,7 @@ impl StudentRepository {
             FROM students s
             JOIN users u ON s.user_id = u.id
             WHERE s.id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(student_id.into())
         .fetch_optional(&*self.base.pool())
@@ -83,9 +75,7 @@ impl StudentRepository {
             id: row.get::<uuid::Uuid, _>("id").into(),
             user_id: row.get::<uuid::Uuid, _>("user_id").into(),
             school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
-            parent_id: row
-                .get::<Option<uuid::Uuid>, _>("parent_id")
-                .map(|uuid| uuid.into()),
+            parent_id: row.get::<Option<uuid::Uuid>, _>("parent_id").map(|uuid| uuid.into()),
             talent_profile_ref: row.get("talent_profile_ref"),
             created_at: row.get("created_at"),
             user_name: row.get("user_name"),
@@ -103,7 +93,7 @@ impl StudentRepository {
             SELECT id, user_id, school_id, parent_id, talent_profile_ref, created_at
             FROM students
             WHERE user_id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(user_id.into())
         .fetch_optional(&*self.base.pool())
@@ -117,9 +107,7 @@ impl StudentRepository {
             id: row.get::<uuid::Uuid, _>("id").into(),
             user_id: row.get::<uuid::Uuid, _>("user_id").into(),
             school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
-            parent_id: row
-                .get::<Option<uuid::Uuid>, _>("parent_id")
-                .map(|uuid| uuid.into()),
+            parent_id: row.get::<Option<uuid::Uuid>, _>("parent_id").map(|uuid| uuid.into()),
             talent_profile_ref: row.get("talent_profile_ref"),
             created_at: row.get("created_at"),
         };
@@ -145,12 +133,7 @@ impl StudentRepository {
     }
 
     /// List students by school
-    pub async fn list_by_school(
-        &self,
-        school_id: uuid::Uuid,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<StudentWithUser>> {
+    pub async fn list_by_school(&self, school_id: uuid::Uuid, limit: i64, offset: i64) -> RepositoryResult<Vec<StudentWithUser>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -163,7 +146,7 @@ impl StudentRepository {
             WHERE s.school_id = $1
             ORDER BY s.created_at DESC
             LIMIT $2 OFFSET $3
-            "#,
+            "#
         )
         .bind(school_id)
         .bind(limit)
@@ -171,31 +154,25 @@ impl StudentRepository {
         .fetch_all(&*self.base.pool())
         .await?;
 
-        let students: Vec<StudentWithUser> = rows
-            .into_iter()
-            .map(|row| StudentWithUser {
+        let students: Vec<StudentWithUser> = rows.into_iter().map(|row| {
+            StudentWithUser {
                 id: row.get::<uuid::Uuid, _>("id").into(),
                 user_id: row.get::<uuid::Uuid, _>("user_id").into(),
                 school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
-                parent_id: row
-                    .get::<Option<uuid::Uuid>, _>("parent_id")
-                    .map(|uuid| uuid.into()),
+                parent_id: row.get::<Option<uuid::Uuid>, _>("parent_id").map(|uuid| uuid.into()),
                 talent_profile_ref: row.get("talent_profile_ref"),
                 created_at: row.get("created_at"),
                 user_name: row.get("user_name"),
                 user_email: row.get("user_email"),
                 user_is_active: row.get("user_is_active"),
-            })
-            .collect();
+            }
+        }).collect();
 
         Ok(students)
     }
 
     /// Get students by parent ID
-    pub async fn find_by_parent_id(
-        &self,
-        parent_id: UserId,
-    ) -> RepositoryResult<Vec<StudentWithUser>> {
+    pub async fn find_by_parent_id(&self, parent_id: UserId) -> RepositoryResult<Vec<StudentWithUser>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -207,28 +184,25 @@ impl StudentRepository {
             JOIN users u ON s.user_id = u.id
             WHERE s.parent_id = $1
             ORDER BY s.created_at DESC
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(parent_id.into())
         .fetch_all(&*self.base.pool())
         .await?;
 
-        let students: Vec<StudentWithUser> = rows
-            .into_iter()
-            .map(|row| StudentWithUser {
+        let students: Vec<StudentWithUser> = rows.into_iter().map(|row| {
+            StudentWithUser {
                 id: row.get::<uuid::Uuid, _>("id").into(),
                 user_id: row.get::<uuid::Uuid, _>("user_id").into(),
                 school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
-                parent_id: row
-                    .get::<Option<uuid::Uuid>, _>("parent_id")
-                    .map(|uuid| uuid.into()),
+                parent_id: row.get::<Option<uuid::Uuid>, _>("parent_id").map(|uuid| uuid.into()),
                 talent_profile_ref: row.get("talent_profile_ref"),
                 created_at: row.get("created_at"),
                 user_name: row.get("user_name"),
                 user_email: row.get("user_email"),
                 user_is_active: row.get("user_is_active"),
-            })
-            .collect();
+            }
+        }).collect();
 
         Ok(students)
     }
@@ -246,7 +220,7 @@ impl crate::repositories::traits::StudentRepository for StudentRepository {
             SELECT id, user_id, school_id, parent_id, talent_profile_ref, created_at
             FROM students
             WHERE id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(id.into())
         .fetch_optional(&*self.base.pool())
@@ -257,37 +231,26 @@ impl crate::repositories::traits::StudentRepository for StudentRepository {
             id: row.get::<uuid::Uuid, _>("id").into(),
             user_id: row.get::<uuid::Uuid, _>("user_id").into(),
             school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
-            parent_id: row
-                .get::<Option<uuid::Uuid>, _>("parent_id")
-                .map(|uuid| uuid.into()),
+            parent_id: row.get::<Option<uuid::Uuid>, _>("parent_id").map(|uuid| uuid.into()),
             talent_profile_ref: row.get("talent_profile_ref"),
             created_at: row.get("created_at"),
         }))
     }
 
     async fn find_by_user_id(&self, user_id: UserId) -> Result<Option<Student>, AppError> {
-        self.find_by_user_id_internal(user_id)
-            .await
-            .map(Some)
-            .map_err(AppError::from)
+        self.find_by_user_id_internal(user_id).await.map(Some).map_err(AppError::from)
     }
 
     async fn find_all(&self) -> Result<Vec<Student>, AppError> {
-        self.list_by_school(uuid::Uuid::new_v4(), 1000, 0)
-            .await
-            .map(|students| {
-                students
-                    .into_iter()
-                    .map(|s| Student {
-                        id: s.id,
-                        user_id: s.user_id,
-                        school_id: s.school_id,
-                        parent_id: s.parent_id,
-                        talent_profile_ref: s.talent_profile_ref,
-                        created_at: s.created_at,
-                    })
-                    .collect()
-            })
+        self.list_by_school(uuid::Uuid::new_v4(), 1000, 0).await
+            .map(|students| students.into_iter().map(|s| Student {
+                id: s.id,
+                user_id: s.user_id,
+                school_id: s.school_id,
+                parent_id: s.parent_id,
+                talent_profile_ref: s.talent_profile_ref,
+                created_at: s.created_at,
+            }).collect())
             .map_err(AppError::from)
     }
 }

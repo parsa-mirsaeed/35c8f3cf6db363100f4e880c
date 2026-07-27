@@ -1,6 +1,6 @@
-use crate::domain::{AuthCredentials, AuthError, AuthResult, SystemRole, User, UserSession};
-use crate::infrastructure::auth_provider::AuthProvider;
 use dioxus::prelude::*;
+use crate::domain::{AuthResult, AuthCredentials, AuthError, User, UserSession, SystemRole};
+use crate::infrastructure::auth_provider::AuthProvider;
 
 /// Application authentication service
 pub struct AppAuthService;
@@ -76,25 +76,18 @@ impl AuthHooks {
     /// Hook to get current user state
     pub fn use_current_user() -> Result<Option<User>, AuthError> {
         // Read directly from global state for performance
-        let user = crate::infrastructure::auth_provider::CURRENT_USER_STATE
-            .read()
-            .clone();
+        let user = crate::infrastructure::auth_provider::CURRENT_USER_STATE.read().clone();
         Ok(user)
     }
 
     /// Hook to check authentication status
     pub fn use_is_authenticated() -> bool {
-        crate::infrastructure::auth_provider::CURRENT_USER_STATE
-            .read()
-            .is_some()
+        crate::infrastructure::auth_provider::CURRENT_USER_STATE.read().is_some()
     }
 
     /// Hook to check if user has specific role
     pub fn use_has_role(required_role: SystemRole) -> bool {
-        if let Some(user) = crate::infrastructure::auth_provider::CURRENT_USER_STATE
-            .read()
-            .as_ref()
-        {
+        if let Some(user) = crate::infrastructure::auth_provider::CURRENT_USER_STATE.read().as_ref() {
             user.role == required_role
         } else {
             false
@@ -103,10 +96,7 @@ impl AuthHooks {
 
     /// Hook to check if user has specific permission
     pub fn use_has_permission(permission: String) -> bool {
-        if let Some(user) = crate::infrastructure::auth_provider::CURRENT_USER_STATE
-            .read()
-            .as_ref()
-        {
+        if let Some(user) = crate::infrastructure::auth_provider::CURRENT_USER_STATE.read().as_ref() {
             user.has_permission(&permission)
         } else {
             false

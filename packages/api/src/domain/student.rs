@@ -1,7 +1,7 @@
 //! Student domain models.
 
-use crate::domain::{StudentId, UserId};
 use serde::{Deserialize, Serialize};
+use crate::domain::{StudentId, UserId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Student {

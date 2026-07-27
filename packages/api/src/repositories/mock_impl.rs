@@ -1,12 +1,12 @@
 //! Mock repository implementations for testing and development
 //! These provide in-memory storage for demonstration purposes
 
-use crate::domain::{AuditLogId, ParentId, RoleId, SchoolId, StudentId, TeacherId, UserId};
+use crate::models::user::{User, CreateUserRequest, UpdateUserRequest, UserResponse};
+use crate::models::student::{Student, CreateStudentRequest};
+use crate::models::teacher::{Teacher, CreateTeacherRequest};
+use crate::models::parent::{Parent, CreateParentRequest};
 use crate::models::audit_log::{AuditLog, CreateAuditLogRequest};
-use crate::models::parent::{CreateParentRequest, Parent};
-use crate::models::student::{CreateStudentRequest, Student};
-use crate::models::teacher::{CreateTeacherRequest, Teacher};
-use crate::models::user::{CreateUserRequest, UpdateUserRequest, User, UserResponse};
+use crate::domain::{UserId, SchoolId, RoleId, StudentId, TeacherId, ParentId, AuditLogId};
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
 use std::collections::HashMap;

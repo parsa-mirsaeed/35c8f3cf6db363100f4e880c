@@ -1,10 +1,11 @@
-use crate::components::skeleton::SkeletonCard;
+use dioxus::prelude::*;
 use crate::views::role_based::components::DashboardSection;
 use crate::views::role_based::shared::common::Modal;
+use crate::components::skeleton::SkeletonCard;
 use api::server_functions::dashboard_functions::{
-    get_class_grades_for_student, get_student_classes_view, ClassGradeInfo, StudentClassView,
+    get_student_classes_view, StudentClassView,
+    get_class_grades_for_student, ClassGradeInfo,
 };
-use dioxus::prelude::*;
 
 use crate::i18n::use_locale;
 
@@ -36,8 +37,10 @@ enum GradeModal {
 pub fn StudentGrades() -> Element {
     let mut active_modal = use_signal(|| GradeModal::None);
     let locale = use_locale();
-
-    let classes_resource = use_resource(move || async move { get_student_classes_view().await });
+    
+    let classes_resource = use_resource(move || async move {
+        get_student_classes_view().await
+    });
 
     rsx! {
         div {
@@ -48,14 +51,14 @@ pub fn StudentGrades() -> Element {
 
             div {
                 class: "grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-8",
-
+                
                 div {
                     class: "lg:col-span-2 space-y-4 md:space-y-6",
                     h2 {
                         class: "text-lg md:text-xl font-bold text-gray-900 dark:text-white",
                         "{locale.t(\"grades.by_class\")}"
                     }
-
+                    
                     match &*classes_resource.read() {
                         None => rsx! {
                             for _ in 0..3 {
@@ -93,7 +96,7 @@ pub fn StudentGrades() -> Element {
                     }
                 }
             }
-
+            
             // Modals
             match active_modal() {
                 GradeModal::ClassDetails(class) => rsx! {
@@ -123,7 +126,7 @@ pub fn GPAOverview() -> Element {
 
             // Decorative background - hide on mobile
             div { class: "absolute right-0 top-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 hidden sm:block" }
-
+            
             h2 {
                 class: "text-lg md:text-2xl font-bold mb-4 md:mb-8 relative z-10",
                 "{locale.t(\"grades.current_performance\")}"
@@ -161,7 +164,7 @@ fn ClassGradeCard(
     on_view_details: EventHandler<StudentClassView>,
 ) -> Element {
     let class_for_handler = class.clone();
-
+    
     rsx! {
         div {
             class: "glass-card p-4 md:p-6 hover:-translate-y-1 transition-transform",
@@ -255,14 +258,14 @@ fn GradeTrends(on_view_trends: EventHandler) -> Element {
 #[component]
 fn ClassGradeDetailsModal(class: StudentClassView, on_close: EventHandler) -> Element {
     let class_id = class.id.clone();
-
+    
     let grades_resource = use_resource(move || {
         let id = class_id.clone();
         async move { get_class_grades_for_student(id).await }
     });
-
+    
     let locale = use_locale();
-
+    
     rsx! {
         Modal {
             title: format!("{} - {}", class.name, locale.t("grades.grade_details")),
@@ -271,7 +274,7 @@ fn ClassGradeDetailsModal(class: StudentClassView, on_close: EventHandler) -> El
             children: rsx! {
                 div {
                     class: "space-y-4 max-h-96 overflow-y-auto",
-
+                    
                     // Class info header
                     div {
                         class: "p-4 bg-gradient-to-r from-primary/10 to-purple-500/10 rounded-xl mb-4",
@@ -283,7 +286,7 @@ fn ClassGradeDetailsModal(class: StudentClassView, on_close: EventHandler) -> El
                             }
                         }
                     }
-
+                    
                     match &*grades_resource.read() {
                         None => rsx! {
                             div { class: "text-center py-8 text-gray-500", "{locale.t(\"grades.loading\")}" }
@@ -329,28 +332,28 @@ fn GradeTrendsModal(on_close: EventHandler) -> Element {
             children: rsx! {
                 div {
                     class: "space-y-6",
-
+                    
                     // Summary stats
                     div {
                         class: "grid grid-cols-2 gap-4",
-
+                        
                         div {
                             class: "p-4 bg-green-50 dark:bg-green-900/20 rounded-xl text-center",
                             p { class: "text-2xl font-bold text-green-600 dark:text-green-400", "+0.3" }
                             p { class: "text-xs text-green-600 dark:text-green-400 font-medium", "{locale.t(\"grades.gpa_change\")}" }
                         }
-
+                        
                         div {
                             class: "p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl text-center",
                             p { class: "text-2xl font-bold text-blue-600 dark:text-blue-400", "87%" }
                             p { class: "text-xs text-blue-600 dark:text-blue-400 font-medium", "{locale.t(\"grades.avg_score\")}" }
                         }
                     }
-
+                    
                     // Trend indicators
                     div {
                         class: "space-y-3",
-
+                        
                         div {
                             class: "flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg",
                             span { class: "material-icons-outlined text-green-500", "trending_up" }
@@ -359,7 +362,7 @@ fn GradeTrendsModal(on_close: EventHandler) -> Element {
                                 p { class: "text-xs text-gray-500", "{locale.t(\"grades.improvement_desc\")}" }
                             }
                         }
-
+                        
                         div {
                             class: "flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg",
                             span { class: "material-icons-outlined text-blue-500", "schedule" }
@@ -368,7 +371,7 @@ fn GradeTrendsModal(on_close: EventHandler) -> Element {
                                 p { class: "text-xs text-gray-500", "95% {locale.t(\"grades.on_time_desc\")}" }
                             }
                         }
-
+                        
                         div {
                             class: "flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg",
                             span { class: "material-icons-outlined text-purple-500", "star" }
@@ -378,14 +381,14 @@ fn GradeTrendsModal(on_close: EventHandler) -> Element {
                             }
                         }
                     }
-
+                    
                     // Note about future features
                     div {
                         class: "p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800/50",
                         div {
                             class: "flex items-start gap-2",
                             span { class: "material-icons-outlined text-yellow-600 dark:text-yellow-400 text-base", "info" }
-                            p { class: "text-sm text-yellow-700 dark:text-yellow-300",
+                            p { class: "text-sm text-yellow-700 dark:text-yellow-300", 
                                 "{locale.t(\"grades.coming_soon\")}"
                             }
                         }

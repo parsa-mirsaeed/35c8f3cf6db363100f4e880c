@@ -1,7 +1,7 @@
-use api::models::Subject;
-use api::server_functions::class_functions::ClassSectionResponse;
-use api::server_functions::user_management::{UserListItem, UserStats};
 use dioxus::prelude::*;
+use api::server_functions::user_management::{UserListItem, UserStats};
+use api::server_functions::class_functions::ClassSectionResponse;
+use api::models::Subject;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct UserFilters {

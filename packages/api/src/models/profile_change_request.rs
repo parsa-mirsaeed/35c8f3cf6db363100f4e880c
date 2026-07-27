@@ -1,4 +1,4 @@
-use crate::domain::{PcrStatus, ProfileChangeRequestId, UserId};
+use crate::domain::{UserId, PcrStatus, ProfileChangeRequestId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

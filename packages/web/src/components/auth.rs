@@ -1,11 +1,11 @@
 //! Authentication Components
 
+use dioxus::prelude::*;
+use crate::utils::auth::*;
 use crate::application::auth_service::AppAuthService;
 use crate::domain::auth::{AuthCredentials, AuthResult};
-use crate::infrastructure::auth_provider::{CURRENT_USER_STATE, IS_INITIALIZING};
-use crate::utils::auth::*;
+use crate::infrastructure::auth_provider::{IS_INITIALIZING, CURRENT_USER_STATE};
 use api::server_functions::user_creation::*;
-use dioxus::prelude::*;
 
 /// Login Form Component
 #[component]
@@ -24,9 +24,7 @@ pub fn LoginForm() -> Element {
         *is_loading.write() = true;
         *error_message.write() = None;
 
-        web_sys::console::log_1(
-            &format!("LoginForm: Attempting login for email: {}", email.read()).into(),
-        );
+        web_sys::console::log_1(&format!("LoginForm: Attempting login for email: {}", email.read()).into());
 
         let email_val = email.read().clone();
         let password_val = password.read().clone();
@@ -40,20 +38,17 @@ pub fn LoginForm() -> Element {
             match AppAuthService::login(credentials).await {
                 AuthResult::Success(session) => {
                     // Redirect based on role
-                    let redirect_path =
-                        crate::application::auth_service::AuthUtils::get_login_redirect(
-                            &session.user,
-                        );
-
+                    let redirect_path = crate::application::auth_service::AuthUtils::get_login_redirect(&session.user);
+                    
                     let nav = use_navigator();
                     nav.push(&*redirect_path);
-                }
+                },
                 AuthResult::InvalidCredentials => {
                     *error_message.write() = Some("Invalid email or password".to_string());
-                }
+                },
                 AuthResult::ServerError(msg) => {
                     *error_message.write() = Some(format!("Login failed: {}", msg));
-                }
+                },
                 _ => {
                     *error_message.write() = Some("An unexpected error occurred".to_string());
                 }
@@ -66,7 +61,7 @@ pub fn LoginForm() -> Element {
     rsx! {
         div {
             class: "min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4",
-
+            
             div {
                 class: "w-full max-w-md bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 border border-gray-100 dark:border-gray-700",
 
@@ -266,9 +261,7 @@ pub fn PasswordResetRequest() -> Element {
         let email_to_send = email.read().clone();
 
         spawn(async move {
-            let reset_request = api::server_functions::user_creation::PasswordResetRequest {
-                email: email_to_send,
-            };
+            let reset_request = api::server_functions::user_creation::PasswordResetRequest { email: email_to_send };
             match send_password_reset(reset_request).await {
                 Ok(response) => {
                     *is_success.write() = response.success;
@@ -307,7 +300,7 @@ pub fn PasswordResetRequest() -> Element {
                 div {
                     class: format!(
                         "mb-6 p-4 rounded-xl flex items-center gap-3 text-sm animate-fade-in {}",
-                        if *is_success.read() { "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" }
+                        if *is_success.read() { "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" } 
                         else { "bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400" }
                     ),
                     span { class: "material-icons-outlined", if *is_success.read() { "check_circle" } else { "error_outline" } }

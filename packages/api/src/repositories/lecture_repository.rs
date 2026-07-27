@@ -1,5 +1,5 @@
-use crate::domain::{ClassSectionId, LectureId};
-use crate::models::{CreateLectureRequest, Lecture};
+use crate::domain::{LectureId, ClassSectionId};
+use crate::models::{Lecture, CreateLectureRequest};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
@@ -22,16 +22,13 @@ impl LectureRepository {
     }
 
     /// Create a new lecture
-    pub async fn create_internal(
-        &self,
-        request: CreateLectureRequest,
-    ) -> RepositoryResult<Lecture> {
+    pub async fn create_internal(&self, request: CreateLectureRequest) -> RepositoryResult<Lecture> {
         let row = sqlx::query(
             r#"
             INSERT INTO lectures (class_section_id, topic, sequence_no, held_on)
             VALUES ($1, $2, $3, $4)
             RETURNING id, class_section_id, topic, sequence_no, held_on
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(request.class_section_id.into())
         .bind(&request.topic)
@@ -58,7 +55,7 @@ impl LectureRepository {
             SELECT id, class_section_id, topic, sequence_no, held_on
             FROM lectures
             WHERE id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(lecture_id.into())
         .fetch_optional(&*self.base.pool())
@@ -80,17 +77,14 @@ impl LectureRepository {
     }
 
     /// List lectures by class section
-    pub async fn list_by_class_section(
-        &self,
-        class_section_id: ClassSectionId,
-    ) -> RepositoryResult<Vec<Lecture>> {
+    pub async fn list_by_class_section(&self, class_section_id: ClassSectionId) -> RepositoryResult<Vec<Lecture>> {
         let rows = sqlx::query(
             r#"
             SELECT id, class_section_id, topic, sequence_no, held_on
             FROM lectures
             WHERE class_section_id = $1
             ORDER BY sequence_no, held_on
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(class_section_id.into())
         .fetch_all(&*self.base.pool())
@@ -111,12 +105,7 @@ impl LectureRepository {
     }
 
     /// List lectures by school (through class sections)
-    pub async fn list_by_school(
-        &self,
-        school_id: Uuid,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<Lecture>> {
+    pub async fn list_by_school(&self, school_id: Uuid, limit: i64, offset: i64) -> RepositoryResult<Vec<Lecture>> {
         let rows = sqlx::query(
             r#"
             SELECT l.id, l.class_section_id, l.topic, l.sequence_no, l.held_on
@@ -125,7 +114,7 @@ impl LectureRepository {
             WHERE cs.school_id = $1
             ORDER BY l.held_on DESC, l.sequence_no
             LIMIT $2 OFFSET $3
-            "#,
+            "#
         )
         .bind(school_id)
         .bind(limit)
@@ -148,20 +137,14 @@ impl LectureRepository {
     }
 
     /// Update a lecture
-    pub async fn update(
-        &self,
-        lecture_id: LectureId,
-        topic: String,
-        sequence_no: i32,
-        held_on: chrono::NaiveDate,
-    ) -> RepositoryResult<Lecture> {
+    pub async fn update(&self, lecture_id: LectureId, topic: String, sequence_no: i32, held_on: chrono::NaiveDate) -> RepositoryResult<Lecture> {
         let row = sqlx::query(
             r#"
             UPDATE lectures
             SET topic = $2, sequence_no = $3, held_on = $4
             WHERE id = $1
             RETURNING id, class_section_id, topic, sequence_no, held_on
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(lecture_id.into())
         .bind(&topic)
@@ -191,7 +174,7 @@ impl LectureRepository {
             r#"
             DELETE FROM lectures
             WHERE id = $1
-            "#,
+            "#
         )
         .bind::<uuid::Uuid>(lecture_id.into())
         .execute(&*self.base.pool())

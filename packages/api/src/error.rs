@@ -61,10 +61,7 @@ impl IntoResponse for AppError {
         let (status, error_message) = match self {
             AppError::Database(err) => {
                 tracing::error!("Database error: {:?}", err);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".to_string(),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
             }
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
@@ -73,32 +70,20 @@ impl IntoResponse for AppError {
             AppError::Authorization(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".to_string(),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
             }
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::SupabaseError(msg) => {
                 tracing::error!("Supabase error: {}", msg);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "External service error".to_string(),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, "External service error".to_string())
             }
             AppError::Jwt(err) => {
                 tracing::error!("JWT error: {:?}", err);
-                (
-                    StatusCode::UNAUTHORIZED,
-                    "Invalid authentication token".to_string(),
-                )
+                (StatusCode::UNAUTHORIZED, "Invalid authentication token".to_string())
             }
             AppError::Repository(err) => {
                 tracing::error!("Repository error: {:?}", err);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".to_string(),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
             }
         };
 

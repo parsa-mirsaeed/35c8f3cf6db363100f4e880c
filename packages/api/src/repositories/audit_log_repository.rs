@@ -3,12 +3,12 @@ use crate::models::{AuditLog, CreateAuditLogRequest};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde_json::Value;
-use sqlx::types::ipnetwork::IpNetwork;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use uuid::Uuid;
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+use sqlx::types::ipnetwork::IpNetwork;
 
 /// Audit log repository for handling audit log database operations
 #[derive(Clone)]
@@ -25,10 +25,7 @@ impl AuditLogRepository {
     }
 
     /// Create a new audit log entry
-    pub async fn create_internal(
-        &self,
-        request: CreateAuditLogRequest,
-    ) -> RepositoryResult<AuditLog> {
+    pub async fn create_internal(&self, request: CreateAuditLogRequest) -> RepositoryResult<AuditLog> {
         let row = sqlx::query!(
             r#"
             INSERT INTO audit_logs (actor_id, action, entity, entity_id, before, after, ip, user_agent, at)
@@ -63,10 +60,7 @@ impl AuditLogRepository {
     }
 
     /// Get audit log by ID
-    pub async fn find_by_id_internal(
-        &self,
-        audit_log_id: AuditLogId,
-    ) -> RepositoryResult<AuditLog> {
+    pub async fn find_by_id_internal(&self, audit_log_id: AuditLogId) -> RepositoryResult<AuditLog> {
         let uuid = Uuid::from(audit_log_id);
         let row = sqlx::query!(
             r#"
@@ -133,20 +127,17 @@ impl AuditLogRepository {
 
     /// Count total audit logs
     pub async fn count(&self) -> RepositoryResult<i64> {
-        let row: sqlx::postgres::PgRow = sqlx::query("SELECT COUNT(*) as count FROM audit_logs")
-            .fetch_one(&*self.base.pool())
-            .await?;
+        let row: sqlx::postgres::PgRow = sqlx::query(
+            "SELECT COUNT(*) as count FROM audit_logs"
+        )
+        .fetch_one(&*self.base.pool())
+        .await?;
 
         Ok(row.get("count"))
     }
 
     /// Get audit logs by actor
-    pub async fn find_by_actor(
-        &self,
-        actor_id: UserId,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<AuditLog>> {
+    pub async fn find_by_actor(&self, actor_id: UserId, limit: i64, offset: i64) -> RepositoryResult<Vec<AuditLog>> {
         let uuid = Uuid::from(actor_id);
         let rows = sqlx::query!(
             r#"
@@ -183,13 +174,7 @@ impl AuditLogRepository {
     }
 
     /// Get audit logs by entity
-    pub async fn find_by_entity(
-        &self,
-        entity: &str,
-        entity_id: Option<uuid::Uuid>,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<AuditLog>> {
+    pub async fn find_by_entity(&self, entity: &str, entity_id: Option<uuid::Uuid>, limit: i64, offset: i64) -> RepositoryResult<Vec<AuditLog>> {
         let rows = if let Some(id) = entity_id {
             sqlx::query(
                 r#"
@@ -198,7 +183,7 @@ impl AuditLogRepository {
                 WHERE entity = $1 AND entity_id = $2
                 ORDER BY at DESC
                 LIMIT $3 OFFSET $4
-                "#,
+                "#
             )
             .bind(entity)
             .bind(id)
@@ -214,7 +199,7 @@ impl AuditLogRepository {
                 WHERE entity = $1 AND entity_id IS NULL
                 ORDER BY at DESC
                 LIMIT $2 OFFSET $3
-                "#,
+                "#
             )
             .bind(entity)
             .bind(limit)
@@ -255,13 +240,7 @@ impl AuditLogRepository {
     }
 
     /// Get audit logs by date range
-    pub async fn find_by_date_range(
-        &self,
-        start_date: DateTime<Utc>,
-        end_date: DateTime<Utc>,
-        limit: i64,
-        offset: i64,
-    ) -> RepositoryResult<Vec<AuditLog>> {
+    pub async fn find_by_date_range(&self, start_date: DateTime<Utc>, end_date: DateTime<Utc>, limit: i64, offset: i64) -> RepositoryResult<Vec<AuditLog>> {
         let rows = sqlx::query!(
             r#"
             SELECT id, actor_id, action, entity, entity_id, before, after, ip, user_agent, at
@@ -320,10 +299,7 @@ impl crate::repositories::traits::AuditLogRepository for AuditLogRepository {
     }
 
     async fn find_by_id(&self, id: AuditLogId) -> Result<Option<AuditLog>, AppError> {
-        self.find_by_id_internal(id)
-            .await
-            .map(Some)
-            .map_err(AppError::from)
+        self.find_by_id_internal(id).await.map(Some).map_err(AppError::from)
     }
 
     async fn find_all(&self) -> Result<Vec<AuditLog>, AppError> {

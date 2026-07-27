@@ -1,11 +1,11 @@
-use crate::application::AuthHooks;
+use dioxus::prelude::*;
 use crate::domain::User;
-use crate::i18n::use_locale;
+use crate::application::AuthHooks;
 use crate::views::role_based::components::ResponsiveDashboardLayout;
 use api::server_functions::dashboard_functions::{
-    get_teacher_assignments, get_teacher_classes, get_teacher_dashboard_stats,
+    get_teacher_dashboard_stats, get_teacher_classes, get_teacher_assignments,
 };
-use dioxus::prelude::*;
+use crate::i18n::use_locale;
 
 /// Main Teacher dashboard component - follows school manager template
 #[component]
@@ -27,7 +27,7 @@ pub fn TeacherDashboard() -> Element {
             "assignments" => rsx! { super::assignments::Assignments {} },
             "students" => rsx! { super::students::Students {} },
             "submissions" => rsx! { super::submissions::Submissions {} },
-            _ => rsx! { TeacherOverviewSection {} },
+            _ => rsx! { TeacherOverviewSection {} }
         };
 
         rsx! {
@@ -50,30 +50,34 @@ pub fn TeacherDashboard() -> Element {
 /// Teacher specific overview section - matches school manager structure
 #[component]
 pub fn TeacherOverviewSection() -> Element {
-    let stats_resource =
-        use_resource(move || async move { get_teacher_dashboard_stats().await.ok() });
+    let stats_resource = use_resource(move || async move {
+        get_teacher_dashboard_stats().await.ok()
+    });
 
-    let classes_resource = use_resource(move || async move { get_teacher_classes().await.ok() });
+    let classes_resource = use_resource(move || async move {
+        get_teacher_classes().await.ok()
+    });
 
-    let assignments_resource =
-        use_resource(move || async move { get_teacher_assignments().await.ok() });
-
+    let assignments_resource = use_resource(move || async move {
+        get_teacher_assignments().await.ok()
+    });
+    
     let locale = use_locale();
 
     rsx! {
         div {
             class: "grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-8",
-
+            
             // Main Column (2/3 width)
             div {
                 class: "lg:col-span-2 space-y-8",
-
+                
                 // Stats Cards Section
                 section {
                     h3 { class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-4 md:mb-6", "{locale.t(\"dashboard.overview\")}" }
                     div {
                         class: "grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-6",
-
+                        
                         match stats_resource.read().as_ref() {
                             Some(Some(stats)) => rsx! {
                                 StatCard {
@@ -118,7 +122,7 @@ pub fn TeacherOverviewSection() -> Element {
                     h3 { class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-4 md:mb-6", "{locale.t(\"assignments.title\")}" }
                     div {
                         class: "glass-card p-4 md:p-6",
-
+                        
                         match assignments_resource.read().as_ref() {
                             Some(Some(assignments)) if !assignments.is_empty() => rsx! {
                                 div {
@@ -138,7 +142,7 @@ pub fn TeacherOverviewSection() -> Element {
                             Some(Some(_)) => rsx! {
                                 div {
                                     class: "text-center py-12 text-gray-500 dark:text-gray-400",
-                                    div {
+                                    div { 
                                         class: "w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4",
                                         span { class: "material-icons-outlined text-2xl", "assignment" }
                                     }
@@ -162,7 +166,7 @@ pub fn TeacherOverviewSection() -> Element {
             // Right Column (1/3 width) - Quick Actions & My Classes
             div {
                 class: "lg:col-span-1 space-y-8",
-
+                
                 // Quick Actions
                 section {
                     h3 { class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-4 md:mb-6", "{locale.t(\"dashboard.quick_actions\")}" }
@@ -232,15 +236,7 @@ pub fn TeacherOverviewSection() -> Element {
 }
 
 #[component]
-fn StatCard(
-    title: String,
-    value: String,
-    icon: String,
-    color: String,
-    text_color: String,
-    status: String,
-    status_color: String,
-) -> Element {
+fn StatCard(title: String, value: String, icon: String, color: String, text_color: String, status: String, status_color: String) -> Element {
     rsx! {
         div {
             class: "glass-card p-3 md:p-5 border-l-4 {color} flex flex-col justify-between h-28 md:h-32 hover:-translate-y-1 hover:shadow-lg transition-all duration-300",
@@ -274,20 +270,9 @@ fn StatCardSkeleton() -> Element {
 }
 
 #[component]
-fn AssignmentStatusItem(
-    title: String,
-    class_name: String,
-    due_date: String,
-    submitted: i32,
-    total: i32,
-    status: String,
-) -> Element {
+fn AssignmentStatusItem(title: String, class_name: String, due_date: String, submitted: i32, total: i32, status: String) -> Element {
     let locale = use_locale();
-    let progress_percent = if total > 0 {
-        (submitted * 100) / total
-    } else {
-        0
-    };
+    let progress_percent = if total > 0 { (submitted * 100) / total } else { 0 };
     let status_config = match status.as_str() {
         "completed" => ("bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800", locale.t("assignments.completed")),
         "grading" => ("bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800", locale.t("assignments.grading")),
@@ -354,13 +339,7 @@ fn AssignmentStatusSkeleton() -> Element {
 }
 
 #[component]
-fn QuickActionButton(
-    icon: String,
-    label: String,
-    description: String,
-    icon_bg: &'static str,
-    icon_color: String,
-) -> Element {
+fn QuickActionButton(icon: String, label: String, description: String, icon_bg: &'static str, icon_color: String) -> Element {
     rsx! {
         button {
             class: "w-full flex items-center gap-4 p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-white/5 transition-all duration-200 group text-left",
@@ -372,9 +351,9 @@ fn QuickActionButton(
                 h4 { class: "font-semibold text-gray-900 dark:text-white text-sm", "{label}" }
                 p { class: "text-xs text-gray-500 dark:text-gray-400", "{description}" }
             }
-            span {
-                class: "material-icons-outlined text-gray-400 dark:text-gray-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity",
-                "chevron_right"
+            span { 
+                class: "material-icons-outlined text-gray-400 dark:text-gray-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity", 
+                "chevron_right" 
             }
         }
     }

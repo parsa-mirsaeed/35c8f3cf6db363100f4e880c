@@ -1,9 +1,9 @@
-use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use chrono::{DateTime, Utc, Duration};
 use uuid::Uuid;
+use tracing::{info, warn};
 
 /// Simple in-memory rate limiter for user creation
 #[derive(Debug, Clone)]
@@ -30,9 +30,7 @@ impl RateLimiter {
         let window_start = now - Duration::seconds(self.window_seconds);
 
         // Get or create the request history for this identifier
-        let user_requests = requests
-            .entry(identifier.to_string())
-            .or_insert_with(Vec::new);
+        let user_requests = requests.entry(identifier.to_string()).or_insert_with(Vec::new);
 
         // Remove old requests outside the window
         user_requests.retain(|&timestamp| timestamp > window_start);
@@ -45,10 +43,7 @@ impl RateLimiter {
 
             warn!(
                 "Rate limit exceeded for {}: {} requests in last {} seconds. Reset in {} seconds",
-                identifier,
-                user_requests.len(),
-                self.window_seconds,
-                wait_seconds
+                identifier, user_requests.len(), self.window_seconds, wait_seconds
             );
 
             return Err(format!(
@@ -62,9 +57,7 @@ impl RateLimiter {
 
         info!(
             "Request allowed for {}: {}/{} requests in current window",
-            identifier,
-            user_requests.len(),
-            self.max_requests
+            identifier, user_requests.len(), self.max_requests
         );
 
         Ok(())
@@ -182,11 +175,8 @@ mod tests {
 
         // First 3 requests should succeed
         for i in 0..3 {
-            assert!(
-                limiter.can_create_user(&manager_id).await.is_ok(),
-                "Request {} should succeed",
-                i + 1
-            );
+            assert!(limiter.can_create_user(&manager_id).await.is_ok(),
+                   "Request {} should succeed", i + 1);
         }
 
         // 4th request should fail

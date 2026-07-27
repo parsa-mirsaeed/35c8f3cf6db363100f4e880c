@@ -1,16 +1,13 @@
-use crate::error::AppError;
-use crate::utils::validation::validate_request;
 use axum::{
-    extract::{
-        rejection::{JsonRejection, PathRejection, QueryRejection},
-        Request,
-    },
+    extract::{rejection::{JsonRejection, PathRejection, QueryRejection}, Request},
     http::StatusCode,
-    middleware::Next,
     response::{IntoResponse, Response},
+    middleware::Next,
     Json,
 };
 use serde_json::json;
+use crate::error::AppError;
+use crate::utils::validation::validate_request;
 use validator::Validate;
 
 /// Convert JSON rejections into 422 Unprocessable Entity errors

@@ -1,4 +1,4 @@
-use crate::domain::{ClassSectionId, LectureId};
+use crate::domain::{LectureId, ClassSectionId};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 

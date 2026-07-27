@@ -1,7 +1,7 @@
 //! User domain models.
 
-use crate::domain::{Role, UserId};
 use serde::{Deserialize, Serialize};
+use crate::domain::{UserId, Role};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {

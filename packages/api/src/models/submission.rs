@@ -1,4 +1,4 @@
-use crate::domain::{CustomAssignmentId, StudentId, SubmissionId, TeacherId};
+use crate::domain::{SubmissionId, CustomAssignmentId, StudentId, TeacherId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

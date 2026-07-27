@@ -1,23 +1,23 @@
 //! Domain models and types for the education management system.
 
-pub mod assignment;
-pub mod class_section;
+pub mod types;
 pub mod enums;
+pub mod user;
+pub mod student;
+pub mod assignment;
+pub mod submission;
 pub mod invite;
 pub mod school;
-pub mod student;
 pub mod subject;
-pub mod submission;
-pub mod types;
-pub mod user;
+pub mod class_section;
 
-pub use assignment::*;
-pub use class_section::*;
+pub use types::*;
 pub use enums::*;
+pub use user::*;
+pub use student::*;
+pub use assignment::*;
+pub use submission::*;
 pub use invite::*;
 pub use school::*;
-pub use student::*;
 pub use subject::*;
-pub use submission::*;
-pub use types::*;
-pub use user::*;
+pub use class_section::*;

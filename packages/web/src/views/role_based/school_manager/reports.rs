@@ -1,10 +1,10 @@
-use crate::i18n::use_locale;
+use dioxus::prelude::*;
 use crate::views::role_based::components::DashboardSection;
 use api::server_functions::admin_functions::get_reports;
 use api::server_functions::class_functions::get_school_classes;
 use api::server_functions::user_management::get_school_users;
-use dioxus::prelude::*;
 use gloo_storage::{LocalStorage, Storage};
+use crate::i18n::use_locale;
 
 /// Reports section for School Manager
 #[component]
@@ -28,51 +28,33 @@ pub fn ReportsSection() -> Element {
         let student_filter = student_filter_for_reports.clone();
 
         async move {
-            let class_id = if class_filter() != "all" {
-                Some(class_filter())
-            } else {
-                None
-            };
-            let teacher_id = if teacher_filter() != "all" {
-                Some(teacher_filter())
-            } else {
-                None
-            };
-            let student_id = if student_filter() != "all" {
-                Some(student_filter())
-            } else {
-                None
-            };
+            let class_id = if class_filter() != "all" { Some(class_filter()) } else { None };
+            let teacher_id = if teacher_filter() != "all" { Some(teacher_filter()) } else { None };
+            let student_id = if student_filter() != "all" { Some(student_filter()) } else { None };
 
-            get_reports(class_id, teacher_id, student_id, Some(50))
-                .await
-                .ok()
+            get_reports(class_id, teacher_id, student_id, Some(50)).await.ok()
         }
     });
 
     // Fetch classes for filter
-    let classes_resource = use_resource(move || async move { get_school_classes().await.ok() });
+    let classes_resource = use_resource(move || {
+        async move {
+            get_school_classes().await.ok()
+        }
+    });
 
     // Fetch teachers for filter
-    let teachers_resource = use_resource(move || async move {
-        get_school_users(
-            Some("Teacher".to_string()),
-            Some("active".to_string()),
-            None,
-        )
-        .await
-        .ok()
+    let teachers_resource = use_resource(move || {
+        async move {
+            get_school_users(Some("Teacher".to_string()), Some("active".to_string()), None).await.ok()
+        }
     });
 
     // Fetch students for filter
-    let students_resource = use_resource(move || async move {
-        get_school_users(
-            Some("Student".to_string()),
-            Some("active".to_string()),
-            None,
-        )
-        .await
-        .ok()
+    let students_resource = use_resource(move || {
+        async move {
+            get_school_users(Some("Student".to_string()), Some("active".to_string()), None).await.ok()
+        }
     });
 
     rsx! {
@@ -269,17 +251,11 @@ pub fn ReportsSection() -> Element {
 }
 
 #[component]
-fn ReportTypeCard(
-    title: String,
-    description: String,
-    icon: String,
-    active: bool,
-    onclick: EventHandler,
-) -> Element {
-    let active_class = if active {
-        "bg-blue-50 dark:bg-blue-900/20 border-blue-500 dark:border-blue-400 ring-1 ring-blue-500/50"
-    } else {
-        "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700"
+fn ReportTypeCard(title: String, description: String, icon: String, active: bool, onclick: EventHandler) -> Element {
+    let active_class = if active { 
+        "bg-blue-50 dark:bg-blue-900/20 border-blue-500 dark:border-blue-400 ring-1 ring-blue-500/50" 
+    } else { 
+        "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700" 
     };
 
     rsx! {
@@ -311,40 +287,37 @@ fn ClassPerformanceReport(
     class_filter: String,
     teacher_filter: String,
     student_filter: String,
-    date_range: String,
+    date_range: String
 ) -> Element {
     let locale = use_locale();
     let report_subtitle = if class_filter != "all" {
-        locale
-            .t("school_manager.reports.class_performance.subtitle_filtered")
+        locale.t("school_manager.reports.class_performance.subtitle_filtered")
             .replace("{filter}", &class_filter)
             .replace("{date}", &date_range)
     } else {
-        locale
-            .t("school_manager.reports.class_performance.subtitle_all")
+        locale.t("school_manager.reports.class_performance.subtitle_all")
             .replace("{date}", &date_range)
     };
 
     // Calculate statistics from real data
-    let (report_count, unique_students, unique_teachers) =
-        match reports_data.as_ref().and_then(|r| r.as_ref()) {
-            Some(reports) => {
-                let mut students = std::collections::HashSet::new();
-                let mut teachers = std::collections::HashSet::new();
+    let (report_count, unique_students, unique_teachers) = match reports_data.as_ref().and_then(|r| r.as_ref()) {
+        Some(reports) => {
+            let mut students = std::collections::HashSet::new();
+            let mut teachers = std::collections::HashSet::new();
 
-                for report in reports {
-                    if let Some(student_id) = report.get("student_id").and_then(|v| v.as_str()) {
-                        students.insert(student_id);
-                    }
-                    if let Some(teacher_id) = report.get("teacher_id").and_then(|v| v.as_str()) {
-                        teachers.insert(teacher_id);
-                    }
+            for report in reports {
+                if let Some(student_id) = report.get("student_id").and_then(|v| v.as_str()) {
+                    students.insert(student_id);
                 }
-
-                (reports.len(), students.len(), teachers.len())
+                if let Some(teacher_id) = report.get("teacher_id").and_then(|v| v.as_str()) {
+                    teachers.insert(teacher_id);
+                }
             }
-            None => (0, 0, 0),
-        };
+
+            (reports.len(), students.len(), teachers.len())
+        },
+        None => (0, 0, 0)
+    };
 
     rsx! {
         div {
@@ -499,19 +472,9 @@ fn ClassPerformanceReport(
 }
 
 #[component]
-fn ReportTableRow(
-    student_name: String,
-    teacher_name: String,
-    student_email: String,
-    ai_summary: String,
-    created_at: String,
-) -> Element {
+fn ReportTableRow(student_name: String, teacher_name: String, student_email: String, ai_summary: String, created_at: String) -> Element {
     // Format created_at date
-    let formatted_date = created_at
-        .split('T')
-        .next()
-        .unwrap_or("Unknown")
-        .to_string();
+    let formatted_date = created_at.split('T').next().unwrap_or("Unknown").to_string();
     let truncated_summary = if ai_summary.len() > 50 {
         format!("{}...", &ai_summary[..50])
     } else {
@@ -548,11 +511,7 @@ fn ReportTableRow(
 }
 
 #[component]
-fn TeacherWorkloadReport(
-    class_filter: String,
-    teacher_filter: String,
-    date_range: String,
-) -> Element {
+fn TeacherWorkloadReport(class_filter: String, teacher_filter: String, date_range: String) -> Element {
     let locale = use_locale();
     rsx! {
         div {
@@ -639,15 +598,9 @@ fn ParentEngagementReport(date_range: String) -> Element {
 }
 
 #[component]
-fn StatCard(
-    label: String,
-    value: String,
-    change: String,
-    color: String,
-    text_color: Option<String>,
-) -> Element {
+fn StatCard(label: String, value: String, change: String, color: String, text_color: Option<String>) -> Element {
     let t_color = text_color.unwrap_or_else(|| "text-gray-900 dark:text-white".to_string());
-
+    
     rsx! {
         div {
             class: "bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl border-l-4 {color}",

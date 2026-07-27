@@ -153,17 +153,29 @@ jobs:
         run: pg_restore --clean --if-exists --no-owner --no-acl --dbname="$DATABASE_URL" edutalent-full-schema.dump
 
       - name: Run complete Rust validation
+        shell: bash
         run: |
           set -euo pipefail
-          cargo check --workspace --all-targets --locked --message-format=short
-          cargo check -p api --features server --all-targets --locked --message-format=short
-          cargo clippy -p api --features server --lib --tests --locked --message-format=short -- \
-            -A warnings -D clippy::correctness -D clippy::suspicious
-          cargo test -p api --features server --lib --locked
-          cargo check -p web --features server --all-targets --locked --message-format=short
-          cargo clippy -p web --features server --all-targets --locked --message-format=short -- \
-            -A warnings -D clippy::correctness -D clippy::suspicious
-          cargo test -p web --features server --locked
+          {
+            cargo check --workspace --all-targets --locked --message-format=short
+            cargo check -p api --features server --all-targets --locked --message-format=short
+            cargo clippy -p api --features server --lib --tests --locked --message-format=short -- \
+              -A warnings -D clippy::correctness -D clippy::suspicious
+            cargo test -p api --features server --lib --locked
+            cargo check -p web --features server --all-targets --locked --message-format=short
+            cargo clippy -p web --features server --all-targets --locked --message-format=short -- \
+              -A warnings -D clippy::correctness -D clippy::suspicious
+            cargo test -p web --features server --locked
+          } 2>&1 | tee full-rust-validation.log
+
+      - name: Upload full Rust diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-validation-rust-diagnostics
+          path: full-rust-validation.log
+          if-no-files-found: warn
+          retention-days: 7
 
   gate:
     name: Full validation gate

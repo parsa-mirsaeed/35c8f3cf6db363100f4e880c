@@ -70,14 +70,6 @@ set_env() {
   rm -f "${file}.bak"
 }
 
-random_uuid() {
-  local hex
-  hex="$(openssl rand -hex 16)"
-  printf '%s-%s-4%s-%s%s-%s\n' \
-    "${hex:0:8}" "${hex:8:4}" "${hex:13:3}" \
-    "$(( (0x${hex:16:1} & 3) | 8 ))" "${hex:17:3}" "${hex:20:12}"
-}
-
 app_domain="$(read_env APP_DOMAIN)"
 supabase_domain="$(read_env SUPABASE_DOMAIN)"
 admin_domain="$(read_env ADMIN_DOMAIN)"
@@ -138,7 +130,6 @@ set_env "${SUPABASE_ENV}" REGION "local"
 set_env "${APP_ENV}" DATABASE_APP_PASSWORD "$(openssl rand -hex 32)"
 set_env "${APP_ENV}" QDRANT_API_KEY "$(openssl rand -hex 32)"
 set_env "${APP_ENV}" AI_GATEWAY_INTERNAL_TOKEN "$(openssl rand -hex 32)"
-set_env "${APP_ENV}" AI_GATEWAY_DEFAULT_SCHOOL_ID "$(random_uuid)"
 chmod 600 "${SUPABASE_ENV}" "${APP_ENV}"
 
 initialization_complete=true

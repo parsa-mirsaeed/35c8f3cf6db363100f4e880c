@@ -60,6 +60,7 @@ pub struct EmbeddingConfig {
     pub profile: EmbeddingProfile,
     pub collection_name: String,
     pub request_timeout: Duration,
+    pub default_school_id: Option<Uuid>,
 }
 
 impl EmbeddingConfig {
@@ -111,6 +112,10 @@ impl EmbeddingConfig {
                     .unwrap_or(60)
                     .clamp(5, 180),
             ),
+            default_school_id: env::var("AI_GATEWAY_DEFAULT_SCHOOL_ID")
+                .ok()
+                .and_then(|value| Uuid::parse_str(&value).ok())
+                .filter(|value| !value.is_nil()),
         })
     }
 
@@ -162,6 +167,31 @@ impl EmbeddingClient {
             "Embedding gateway client configured"
         );
         Ok(Self { client, config })
+    }
+
+    fn configured_school_id(&self) -> Result<Uuid, EmbeddingError> {
+        self.config
+            .default_school_id
+            .filter(|value| !value.is_nil())
+            .ok_or(EmbeddingError::MissingSchoolId)
+    }
+
+    pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        self.embed_text_for_school(self.configured_school_id()?, text)
+            .await
+    }
+
+    pub async fn embed_query(&self, query: &str) -> Result<Vec<f32>, EmbeddingError> {
+        self.embed_query_for_school(self.configured_school_id()?, query)
+            .await
+    }
+
+    pub async fn embed_batch(
+        &self,
+        texts: Vec<String>,
+    ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+        self.embed_batch_for_school(self.configured_school_id()?, texts)
+            .await
     }
 
     pub async fn embed_text_for_school(
@@ -257,14 +287,9 @@ impl EmbeddingClient {
             return Err(EmbeddingError::InvalidResponse);
         }
         body.data.sort_by_key(|item| item.index);
-        if body
-            .data
-            .iter()
-            .enumerate()
-            .any(|(index, item)| {
-                item.index != index || item.embedding.len() as u64 != self.config.vector_size
-            })
-        {
+        if body.data.iter().enumerate().any(|(index, item)| {
+            item.index != index || item.embedding.len() as u64 != self.config.vector_size
+        }) {
             return Err(EmbeddingError::InvalidResponse);
         }
         Ok(body.data.into_iter().map(|item| item.embedding).collect())
@@ -378,7 +403,10 @@ mod tests {
         );
         assert!(!chunks.is_empty());
         assert!(chunks.iter().all(|chunk| !chunk.text.is_empty()));
-        assert_eq!(chunks[0].metadata.material_id.as_deref(), Some("material-test"));
+        assert_eq!(
+            chunks[0].metadata.material_id.as_deref(),
+            Some("material-test")
+        );
     }
 
     #[test]
@@ -388,6 +416,7 @@ mod tests {
 
     #[test]
     fn gateway_url_is_internal_and_profile_bound() {
+        let school_id = Uuid::new_v4();
         let config = EmbeddingConfig {
             provider: EmbeddingProvider::Gateway,
             api_key: Some("abcdefghijklmnopqrstuvwxyz123456".to_string()),
@@ -397,12 +426,35 @@ mod tests {
             profile: LOCAL_BGE_V1,
             collection_name: LOCAL_BGE_V1.collection.to_string(),
             request_timeout: Duration::from_secs(10),
+            default_school_id: Some(school_id),
         };
+        let client = EmbeddingClient::with_config(config.clone()).unwrap();
         assert_eq!(
             config.embeddings_url(),
             "http://ai-gateway:8090/v1/embeddings"
         );
+        assert_eq!(client.configured_school_id().unwrap(), school_id);
         assert_ne!(OPENAI_V1.collection, LOCAL_BGE_V1.collection);
         assert_ne!(OPENAI_V1.vector_size, LOCAL_BGE_V1.vector_size);
+    }
+
+    #[test]
+    fn compatibility_paths_require_an_appliance_school_id() {
+        let config = EmbeddingConfig {
+            provider: EmbeddingProvider::Gateway,
+            api_key: Some("abcdefghijklmnopqrstuvwxyz123456".to_string()),
+            base_url: "http://ai-gateway:8090".to_string(),
+            model: LOCAL_BGE_V1.model.to_string(),
+            vector_size: LOCAL_BGE_V1.vector_size,
+            profile: LOCAL_BGE_V1,
+            collection_name: LOCAL_BGE_V1.collection.to_string(),
+            request_timeout: Duration::from_secs(10),
+            default_school_id: None,
+        };
+        let client = EmbeddingClient::with_config(config).unwrap();
+        assert!(matches!(
+            client.configured_school_id(),
+            Err(EmbeddingError::MissingSchoolId)
+        ));
     }
 }

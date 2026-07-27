@@ -205,7 +205,7 @@ impl AssignmentPersonalizationService {
             "Starting school-scoped batch personalization"
         );
 
-        let mut results = Vec::with_capacity(total);
+        let mut results: Vec<PersonalizationResult> = Vec::with_capacity(total);
         for (index, enrollment) in enrollments.into_iter().enumerate() {
             if let Some(callback) = progress_callback.as_ref() {
                 callback(PersonalizationProgress {
@@ -296,17 +296,22 @@ impl AssignmentPersonalizationService {
         assignment_body: &str,
         material_ids: &[uuid::Uuid],
     ) -> Vec<MaterialContext> {
-        let vectorization_service = match MaterialVectorizationService::new(Arc::clone(&self.pool)).await {
-            Ok(service) if service.is_available() => service,
-            Ok(_) => {
-                tracing::debug!("Vector retrieval is unavailable; continuing without RAG context");
-                return Vec::new();
-            }
-            Err(_) => {
-                tracing::debug!("Vector retrieval could not initialize; continuing without RAG context");
-                return Vec::new();
-            }
-        };
+        let vectorization_service =
+            match MaterialVectorizationService::new(Arc::clone(&self.pool)).await {
+                Ok(service) if service.is_available() => service,
+                Ok(_) => {
+                    tracing::debug!(
+                        "Vector retrieval is unavailable; continuing without RAG context"
+                    );
+                    return Vec::new();
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        "Vector retrieval could not initialize; continuing without RAG context"
+                    );
+                    return Vec::new();
+                }
+            };
         let material_filter = (!material_ids.is_empty()).then(|| material_ids.to_vec());
         match vectorization_service
             .search_relevant_chunks(
@@ -333,7 +338,9 @@ impl AssignmentPersonalizationService {
                     .collect()
             }
             Err(_) => {
-                tracing::warn!("Authorized vector retrieval failed; continuing without RAG context");
+                tracing::warn!(
+                    "Authorized vector retrieval failed; continuing without RAG context"
+                );
                 Vec::new()
             }
         }
@@ -489,7 +496,10 @@ mod tests {
             controlled_personalization_message(&error),
             "Personalization could not be generated"
         );
-        assert_eq!(fallback_assignment("Title", "Body").personalization_notes, "AI service temporarily unavailable");
+        assert_eq!(
+            fallback_assignment("Title", "Body").personalization_notes,
+            "AI service temporarily unavailable"
+        );
     }
 
     #[test]

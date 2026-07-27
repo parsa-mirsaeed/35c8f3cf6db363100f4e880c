@@ -34,14 +34,22 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      - name: Apply unresolved final-review fixes once
+      - name: Isolate and apply unresolved final-review fixes
         id: final_fix
         shell: bash
         run: |
           set -euo pipefail
+
+          # The preceding bot commit used workspace-wide formatting. Restore its
+          # parent, then reapply only the reviewed source changes.
+          git checkout 3c4e4a1ae77da95f9ca9c71d400c349c92f0c6e5 -- .
           python3 scripts/apply_final_review_fixes.py
           rustup component add rustfmt
-          cargo fmt --all
+          rustfmt --edition 2021 \
+            packages/api/src/ai_gateway_runtime.rs \
+            packages/api/src/services/embedding_profile.rs \
+            packages/api/src/services/knowledge_vector_store_service.rs \
+            packages/api/src/services/vector_store_service.rs
           bash -n edutalent
           python3 -m py_compile deploy/production/validate-rendered-compose.py
           git diff --check
@@ -51,15 +59,10 @@ jobs:
           grep -Fq '.chunk()' packages/api/src/ai_gateway_runtime.rs
           grep -Fq 'chunked_provider_body_stops_at_the_configured_limit' packages/api/src/ai_gateway_runtime.rs
 
-          if git diff --quiet; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -u ':!.github/workflows'
-          git commit -m 'fix(ai): close final review gaps'
+          git add -A -- . ':(exclude).github/workflows'
+          git commit -m 'fix(ai): isolate final review changes'
           git push origin HEAD:"$HEAD_REF"
           echo 'changed=true' >> "$GITHUB_OUTPUT"
 

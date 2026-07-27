@@ -30,8 +30,6 @@ pub enum KnowledgeAssetError {
     EmptyText,
     #[error("At least one published and enabled knowledge asset is required")]
     NoEnabledAssets,
-    #[error("Embedding provider must use the OpenAI-compatible protocol")]
-    NonOpenAiCompatibleProvider,
 }
 
 #[derive(Clone)]
@@ -46,9 +44,6 @@ pub struct KnowledgeAssetService {
 impl KnowledgeAssetService {
     pub async fn new(pool: Arc<PgPool>) -> Result<Self, KnowledgeAssetError> {
         let embedding_config = EmbeddingConfig::from_env()?;
-        if embedding_config.provider.as_str() != "local" {
-            return Err(KnowledgeAssetError::NonOpenAiCompatibleProvider);
-        }
         let embedding_client = EmbeddingClient::with_config(embedding_config.clone())?;
         let vector_store = KnowledgeVectorStoreService::new().await?;
         Ok(Self {
@@ -85,9 +80,6 @@ impl KnowledgeAssetService {
         Ok(())
     }
 
-    /// Process a job that has already been atomically claimed by a worker.
-    /// Queueing, retries, and stale-lock recovery are handled by the ingestion
-    /// job repository rather than by the request path.
     pub async fn process_embedding_job(
         &self,
         job_id: Uuid,
@@ -127,12 +119,16 @@ impl KnowledgeAssetService {
             return Err(KnowledgeAssetError::EmptyText);
         }
 
+        let school_id = source.asset.school_id;
         let mut embeddings = Vec::with_capacity(chunks.len());
         let batch_size = self.embedding_client.recommended_batch_size();
         for batch in chunks.chunks(batch_size) {
             embeddings.extend(
                 self.embedding_client
-                    .embed_batch(batch.iter().map(|chunk| chunk.text.clone()).collect())
+                    .embed_batch_for_school(
+                        school_id,
+                        batch.iter().map(|chunk| chunk.text.clone()).collect(),
+                    )
                     .await?,
             );
         }
@@ -146,6 +142,8 @@ impl KnowledgeAssetService {
             "template_type": source.asset.template_type,
             "published": false,
             "tags": source.asset.tags,
+            "embedding_profile": self.embedding_config.profile.id,
+            "embedding_collection": self.embedding_config.collection_name,
         });
 
         let vector_points = chunks
@@ -175,7 +173,12 @@ impl KnowledgeAssetService {
                 token_count: estimate_token_count(&chunk.text) as i32,
                 vector_id: format!("knowledge:{}:{}", asset_id, chunk.chunk_index),
                 text: chunk.text,
-                embedding_provider: self.embedding_config.provider.as_str().to_string(),
+                embedding_provider: self
+                    .embedding_config
+                    .profile
+                    .provider
+                    .as_str()
+                    .to_string(),
                 embedding_model: self.embedding_config.model.clone(),
                 metadata: metadata_base.clone(),
             })
@@ -199,8 +202,6 @@ impl KnowledgeAssetService {
             .await
         {
             tracing::error!(asset_id = %asset_id, error = %error, "Failed to publish Qdrant payload");
-            // Compensate so the database never advertises an asset that retrieval
-            // still considers unpublished.
             sqlx::query(
                 "UPDATE knowledge_assets SET status = 'embedded', published_at = NULL WHERE id = $1",
             )
@@ -252,7 +253,10 @@ impl KnowledgeAssetService {
             .fetch_one(&*self.pool)
             .await?
             .try_get("school_id")?;
-        let query_embedding = self.embedding_client.embed_query(query).await?;
+        let query_embedding = self
+            .embedding_client
+            .embed_query_for_school(school_id, query)
+            .await?;
         let authorized_strings = authorized.iter().map(Uuid::to_string).collect::<Vec<_>>();
         let results = self
             .vector_store
@@ -290,8 +294,6 @@ pub fn normalize_persian_text(input: &str) -> String {
 }
 
 fn estimate_token_count(text: &str) -> usize {
-    // Provider-neutral approximation used for observability and budget controls.
-    // The embedding provider remains authoritative for billing/token accounting.
     text.chars().count().div_ceil(4)
 }
 

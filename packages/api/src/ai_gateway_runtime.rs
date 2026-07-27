@@ -139,11 +139,9 @@ impl Config {
         } else {
             "local-bge-v1"
         };
-        let embedding_profile = resolve_embedding_profile(&env_value(
-            "EMBEDDING_PROFILE",
-            default_profile,
-        ))
-        .map_err(|error| StartupError::InvalidConfig(error.to_string()))?;
+        let embedding_profile =
+            resolve_embedding_profile(&env_value("EMBEDDING_PROFILE", default_profile))
+                .map_err(|error| StartupError::InvalidConfig(error.to_string()))?;
         validate_mode_profile(mode, embedding_profile)?;
 
         let embedding_provider = match mode {
@@ -198,18 +196,8 @@ impl Config {
             embedding_profile,
             embedding_provider,
             llm_provider,
-            connect_timeout: Duration::from_secs(env_u64(
-                "AI_CONNECT_TIMEOUT_SECONDS",
-                5,
-                1,
-                30,
-            )),
-            request_timeout: Duration::from_secs(env_u64(
-                "AI_REQUEST_TIMEOUT_SECONDS",
-                45,
-                5,
-                180,
-            )),
+            connect_timeout: Duration::from_secs(env_u64("AI_CONNECT_TIMEOUT_SECONDS", 5, 1, 30)),
+            request_timeout: Duration::from_secs(env_u64("AI_REQUEST_TIMEOUT_SECONDS", 45, 5, 180)),
             max_retries: env_u64("AI_MAX_RETRIES", 2, 0, 3) as u32,
             retry_base_delay: Duration::from_millis(env_u64(
                 "AI_RETRY_BASE_DELAY_MS",
@@ -217,24 +205,9 @@ impl Config {
                 25,
                 5_000,
             )),
-            circuit_failure_threshold: env_u64(
-                "AI_CIRCUIT_FAILURE_THRESHOLD",
-                3,
-                1,
-                20,
-            ) as u32,
-            circuit_open_for: Duration::from_secs(env_u64(
-                "AI_CIRCUIT_OPEN_SECONDS",
-                30,
-                1,
-                600,
-            )),
-            embedding_concurrency: env_u64(
-                "AI_EMBEDDING_CONCURRENCY",
-                4,
-                1,
-                32,
-            ) as usize,
+            circuit_failure_threshold: env_u64("AI_CIRCUIT_FAILURE_THRESHOLD", 3, 1, 20) as u32,
+            circuit_open_for: Duration::from_secs(env_u64("AI_CIRCUIT_OPEN_SECONDS", 30, 1, 600)),
+            embedding_concurrency: env_u64("AI_EMBEDDING_CONCURRENCY", 4, 1, 32) as usize,
             llm_concurrency: env_u64("AI_LLM_CONCURRENCY", 2, 1, 16) as usize,
             embedding_quota: QuotaPolicy {
                 requests_per_hour: env_u64(
@@ -251,12 +224,7 @@ impl Config {
                 ),
             },
             llm_quota: QuotaPolicy {
-                requests_per_hour: env_u64(
-                    "AI_LLM_QUOTA_REQUESTS_PER_HOUR",
-                    500,
-                    1,
-                    1_000_000,
-                ),
+                requests_per_hour: env_u64("AI_LLM_QUOTA_REQUESTS_PER_HOUR", 500, 1, 1_000_000),
                 characters_per_hour: env_u64(
                     "AI_LLM_QUOTA_CHARS_PER_HOUR",
                     2_000_000,
@@ -264,43 +232,19 @@ impl Config {
                     100_000_000,
                 ),
             },
-            max_body_bytes: env_u64(
-                "AI_MAX_BODY_BYTES",
-                262_144,
-                1_024,
-                4_194_304,
-            ) as usize,
+            max_body_bytes: env_u64("AI_MAX_BODY_BYTES", 262_144, 1_024, 4_194_304) as usize,
             max_provider_response_bytes: env_u64(
                 "AI_MAX_PROVIDER_RESPONSE_BYTES",
                 16_777_216,
                 65_536,
                 33_554_432,
             ) as usize,
-            max_embedding_inputs: env_u64(
-                "AI_MAX_EMBEDDING_INPUTS",
-                64,
-                1,
-                256,
-            ) as usize,
-            max_embedding_chars: env_u64(
-                "AI_MAX_EMBEDDING_CHARS",
-                120_000,
-                1_000,
-                1_000_000,
-            ) as usize,
+            max_embedding_inputs: env_u64("AI_MAX_EMBEDDING_INPUTS", 64, 1, 256) as usize,
+            max_embedding_chars: env_u64("AI_MAX_EMBEDDING_CHARS", 120_000, 1_000, 1_000_000)
+                as usize,
             max_chat_messages: env_u64("AI_MAX_CHAT_MESSAGES", 24, 2, 64) as usize,
-            max_prompt_chars: env_u64(
-                "AI_MAX_PROMPT_CHARS",
-                80_000,
-                1_000,
-                500_000,
-            ) as usize,
-            max_output_tokens: env_u64(
-                "AI_MAX_OUTPUT_TOKENS",
-                4_096,
-                128,
-                16_384,
-            ) as u32,
+            max_prompt_chars: env_u64("AI_MAX_PROMPT_CHARS", 80_000, 1_000, 500_000) as usize,
+            max_output_tokens: env_u64("AI_MAX_OUTPUT_TOKENS", 4_096, 128, 16_384) as u32,
         })
     }
 
@@ -406,8 +350,7 @@ where
             };
         }
         if window.requests.saturating_add(1) > self.policy.requests_per_hour
-            || window.characters.saturating_add(characters)
-                > self.policy.characters_per_hour
+            || window.characters.saturating_add(characters) > self.policy.characters_per_hour
         {
             let retry_after =
                 3_600u64.saturating_sub(now.duration_since(window.started_at).as_secs());
@@ -919,7 +862,10 @@ fn validate_chat_request(config: &Config, request: &GatewayChatRequest) -> Resul
             || message.content.trim().is_empty()
     });
     if request.messages[0].role != "system"
-        || !request.messages.iter().any(|message| message.role == "user")
+        || !request
+            .messages
+            .iter()
+            .any(|message| message.role == "user")
         || invalid_role_or_content
     {
         return Err(bad_request(
@@ -994,16 +940,14 @@ async fn forward_embeddings(
         match outbound.send().await {
             Ok(response) if response.status().is_success() => {
                 let body = bounded_body(response, state.config.max_provider_response_bytes).await?;
-                let parsed: GatewayEmbeddingResponse = serde_json::from_slice(&body)
-                    .map_err(|_| ProviderFailure::InvalidResponse)?;
+                let parsed: GatewayEmbeddingResponse =
+                    serde_json::from_slice(&body).map_err(|_| ProviderFailure::InvalidResponse)?;
                 validate_embedding_response(state.config.embedding_profile, request, &parsed)?;
                 return Ok(parsed);
             }
             Ok(response) => {
-                let failure = status_failure(
-                    response.status(),
-                    retry_after_seconds(response.headers()),
-                );
+                let failure =
+                    status_failure(response.status(), retry_after_seconds(response.headers()));
                 if failure.retryable() && attempt < state.config.max_retries {
                     sleep_before_retry(&state.config, attempt, failure.retry_after()).await;
                     continue;
@@ -1047,16 +991,14 @@ async fn forward_chat(
         {
             Ok(response) if response.status().is_success() => {
                 let body = bounded_body(response, state.config.max_provider_response_bytes).await?;
-                let parsed: GatewayChatResponse = serde_json::from_slice(&body)
-                    .map_err(|_| ProviderFailure::InvalidResponse)?;
+                let parsed: GatewayChatResponse =
+                    serde_json::from_slice(&body).map_err(|_| ProviderFailure::InvalidResponse)?;
                 validate_chat_response(provider, &parsed)?;
                 return Ok(parsed);
             }
             Ok(response) => {
-                let failure = status_failure(
-                    response.status(),
-                    retry_after_seconds(response.headers()),
-                );
+                let failure =
+                    status_failure(response.status(), retry_after_seconds(response.headers()));
                 if failure.retryable() && attempt < state.config.max_retries {
                     sleep_before_retry(&state.config, attempt, failure.retry_after()).await;
                     continue;
@@ -1178,10 +1120,10 @@ fn exact_external_url(value: &str, approved: &'static str) -> Result<Url, Startu
 
 fn exact_local_tei_url(value: &str) -> Result<Url, StartupError> {
     let requested = normalized_url(value)?;
-    if requested.as_str() != LOCAL_TEI_BASE_URL
-        || requested.scheme() != "http"
+    if requested.scheme() != "http"
         || requested.host_str() != Some("embedding")
         || requested.port_or_known_default() != Some(80)
+        || requested.path() != "/v1/"
     {
         return Err(StartupError::InvalidConfig(format!(
             "Offline embedding URL must be exactly {LOCAL_TEI_BASE_URL}"
@@ -1225,11 +1167,9 @@ fn required_internal_token() -> Result<String, StartupError> {
 fn optional_secret(name: &str) -> Result<Option<String>, StartupError> {
     match env::var(name) {
         Ok(value) if value.trim().is_empty() => Ok(None),
-        Ok(value) if value.len() < 24 || placeholder(&value) => {
-            Err(StartupError::InvalidConfig(format!(
-                "{name} is configured with an unsafe value"
-            )))
-        }
+        Ok(value) if value.len() < 24 || placeholder(&value) => Err(StartupError::InvalidConfig(
+            format!("{name} is configured with an unsafe value"),
+        )),
         Ok(value) => Ok(Some(value)),
         Err(env::VarError::NotPresent) => Ok(None),
         Err(error) => Err(StartupError::InvalidConfig(format!(
@@ -1297,9 +1237,7 @@ fn unauthorized() -> HttpError {
 mod tests {
     use super::*;
     use crate::{
-        ai_gateway_protocol::{
-            GatewayChatChoice, GatewayChatMessage, GatewayEmbeddingData,
-        },
+        ai_gateway_protocol::{GatewayChatChoice, GatewayChatMessage, GatewayEmbeddingData},
         services::embedding_profile::{LOCAL_BGE_V1, OPENAI_V1},
     };
     use axum::routing::post;
@@ -1323,13 +1261,33 @@ mod tests {
     #[test]
     fn external_origins_are_fixed() {
         assert!(exact_external_url(OPENAI_BASE_URL, OPENAI_BASE_URL).is_ok());
-        assert!(exact_external_url(
-            "https://api.openai.com.evil.invalid/v1/",
-            OPENAI_BASE_URL
-        )
-        .is_err());
+        assert!(
+            exact_external_url("https://api.openai.com.evil.invalid/v1/", OPENAI_BASE_URL).is_err()
+        );
         assert!(exact_external_url("http://api.openai.com/v1/", OPENAI_BASE_URL).is_err());
         assert!(exact_external_url("https://user@api.openai.com/v1/", OPENAI_BASE_URL).is_err());
+    }
+
+    #[test]
+    fn local_tei_origin_accepts_normalized_default_port_only() {
+        let explicit = exact_local_tei_url(LOCAL_TEI_BASE_URL)
+            .expect("explicit default port must be accepted");
+        assert_eq!(explicit.scheme(), "http");
+        assert_eq!(explicit.host_str(), Some("embedding"));
+        assert_eq!(explicit.port_or_known_default(), Some(80));
+        assert_eq!(explicit.path(), "/v1/");
+        assert!(exact_local_tei_url("http://embedding/v1/").is_ok());
+        for rejected in [
+            "http://embedding/v2/",
+            "http://other:80/v1/",
+            "https://embedding/v1/",
+            "http://user@embedding:80/v1/",
+        ] {
+            assert!(
+                exact_local_tei_url(rejected).is_err(),
+                "accepted {rejected}"
+            );
+        }
     }
 
     #[test]
@@ -1463,9 +1421,7 @@ mod tests {
                 }
             }),
         );
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind mock");
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind mock");
         let address = listener.local_addr().expect("mock address");
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve mock");
@@ -1476,14 +1432,7 @@ mod tests {
     #[tokio::test]
     async fn outage_opens_circuit_and_recovery_resumes() {
         let attempts = Arc::new(AtomicUsize::new(0));
-        let provider = spawn_embedding_mock(
-            Arc::clone(&attempts),
-            true,
-            false,
-            false,
-            false,
-        )
-        .await;
+        let provider = spawn_embedding_mock(Arc::clone(&attempts), true, false, false, false).await;
         let state = AppState::new(Config::test(provider)).expect("state");
         assert_eq!(
             state
@@ -1512,14 +1461,7 @@ mod tests {
     #[tokio::test]
     async fn rate_limit_retries_are_bounded() {
         let attempts = Arc::new(AtomicUsize::new(0));
-        let provider = spawn_embedding_mock(
-            Arc::clone(&attempts),
-            false,
-            true,
-            false,
-            false,
-        )
-        .await;
+        let provider = spawn_embedding_mock(Arc::clone(&attempts), false, true, false, false).await;
         let mut config = Config::test(provider);
         config.max_retries = 2;
         let state = AppState::new(config).expect("state");

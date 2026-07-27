@@ -22,11 +22,11 @@ pub use server_functions::{form_data::*, validation::*};
 // --- SERVER-ONLY MODULES ---
 // These are correctly hidden from the client.
 #[cfg(feature = "server")]
-pub mod ai_gateway;
-#[cfg(feature = "server")]
 pub mod app_state;
 #[cfg(feature = "server")]
 pub mod config;
+#[cfg(feature = "server")]
+pub mod controlled_ai_gateway;
 #[cfg(feature = "server")]
 pub mod error; // Your middleware needs this
 #[cfg(feature = "server")]

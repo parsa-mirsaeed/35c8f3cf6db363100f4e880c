@@ -1,7 +1,10 @@
+pub mod ai_outage_queue;
 pub mod assignment_personalization_service;
 pub mod audit_service;
 #[cfg(feature = "server")]
 pub mod document_extraction_service;
+#[cfg(feature = "server")]
+pub mod embedding_profile;
 #[cfg(feature = "server")]
 pub mod embedding_service;
 #[cfg(feature = "server")]
@@ -24,7 +27,7 @@ pub use assignment_personalization_service::{
     AssignmentPersonalizationService, PersonalizationError, PersonalizationResult,
 };
 pub use audit_service::AuditService;
-pub use llm_service::{DeepSeekClient, LlmConfig, LlmError};
+pub use llm_service::{DeepSeekClient, ExternalLlmClient, LlmConfig, LlmError};
 pub use student_context_service::{StudentContextError, StudentContextService};
 pub use supabase_auth::SupabaseAdminService;
 pub use validation_service::ValidationService;
@@ -35,9 +38,14 @@ pub use document_extraction_service::{
     DocumentExtractionService, DocumentType, ExtractionError, ExtractionResult,
 };
 #[cfg(feature = "server")]
+pub use embedding_profile::{
+    resolve_embedding_profile, validate_profile_overrides, EmbeddingProfile,
+    EmbeddingProfileError, EmbeddingProviderKind, LOCAL_BGE_V1, OPENAI_V1,
+};
+#[cfg(feature = "server")]
 pub use embedding_service::{
-    chunk_document, ChunkMetadata, EmbeddingClient, EmbeddingConfig, EmbeddingError,
-    EmbeddingProvider, TextChunk, VoyageClient,
+    chunk_document, ChunkMetadata, EmbeddingClient, EmbeddingConfig, EmbeddingError, TextChunk,
+    VoyageClient,
 };
 #[cfg(feature = "server")]
 pub use knowledge_asset_service::{KnowledgeAssetError, KnowledgeAssetService};

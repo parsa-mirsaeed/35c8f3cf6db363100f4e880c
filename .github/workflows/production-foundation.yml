@@ -6,11 +6,23 @@ on:
       - deploy/production/**
       - docs/adr/**
       - docs/security/**
+      - packages/api/src/ai_gateway_protocol.rs
+      - packages/api/src/ai_gateway_runtime.rs
+      - packages/api/src/bin/ai_gateway.rs
+      - packages/api/src/services/ai_outage_queue.rs
+      - packages/api/src/services/embedding_profile.rs
+      - packages/api/src/services/embedding_service.rs
+      - packages/api/src/services/knowledge_ingestion_worker.rs
+      - packages/api/src/services/knowledge_vector_store_service.rs
+      - packages/api/src/services/llm_service.rs
+      - packages/api/src/services/material_vectorization_service.rs
       - packages/api/src/services/supabase_auth.rs
       - scripts/ci/apply_migrations.sh
       - scripts/ci/configure_database_role.sh
       - docker/entrypoint.sh
       - Dockerfile
+      - compose.yaml
+      - compose.release.yaml
       - edutalent
       - Makefile
       - README.md
@@ -20,11 +32,23 @@ on:
       - main
     paths:
       - deploy/production/**
+      - packages/api/src/ai_gateway_protocol.rs
+      - packages/api/src/ai_gateway_runtime.rs
+      - packages/api/src/bin/ai_gateway.rs
+      - packages/api/src/services/ai_outage_queue.rs
+      - packages/api/src/services/embedding_profile.rs
+      - packages/api/src/services/embedding_service.rs
+      - packages/api/src/services/knowledge_ingestion_worker.rs
+      - packages/api/src/services/knowledge_vector_store_service.rs
+      - packages/api/src/services/llm_service.rs
+      - packages/api/src/services/material_vectorization_service.rs
       - packages/api/src/services/supabase_auth.rs
       - scripts/ci/apply_migrations.sh
       - scripts/ci/configure_database_role.sh
       - docker/entrypoint.sh
       - Dockerfile
+      - compose.yaml
+      - compose.release.yaml
       - edutalent
       - Makefile
       - .github/workflows/production-foundation.yml
@@ -101,11 +125,14 @@ jobs:
           grep -Fxq 'd863da8680f24ceb4bb6e13134bc8a2d8835bcf4' deploy/production/runtime/supabase/UPSTREAM_COMMIT
           ! grep -R --line-number --fixed-strings '/var/run/docker.sock' deploy/production/compose.production.yaml
           ! grep -R --line-number --fixed-strings 'rm -rf "${RUNTIME_DIR}"' deploy/production/bootstrap-supabase.sh
+          ! grep -R --line-number --fixed-strings 'AI_GATEWAY_DEFAULT_SCHOOL_ID' deploy/production .env.example compose.yaml compose.release.yaml
+          ! grep -R --line-number -E 'AI_ALLOWED_(EMBEDDING|LLM)_BASE_URLS' deploy/production .env.example compose.yaml compose.release.yaml
           grep -Fq 'ports: !reset []' deploy/production/compose.production.yaml
           grep -Fq 'internal: true' deploy/production/compose.production.yaml
           grep -Fq 'SUPABASE_JWT_ISSUER' deploy/production/compose.production.yaml
           grep -Fq 'production-database-check' edutalent
           grep -Fq 'production-gateway-check' edutalent
+          grep -Fq 'production-ai-check' edutalent
           grep -Fq 'production-qdrant-check' edutalent
           grep -Fq 'chown -R "$${GATEWAY_UID}:$${GATEWAY_GID}" /data /config' deploy/production/compose.production.yaml
           grep -Fq 'caddy-data:/data' deploy/production/compose.production.yaml
@@ -113,6 +140,8 @@ jobs:
           grep -Fq 'NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS' scripts/ci/configure_database_role.sh
           grep -Fq 'true|false|false|false|false|false|true' scripts/ci/configure_database_role.sh
           grep -Fq '[ "${super}" = "false" ]' deploy/production/edutalent-production
+          grep -Fq 'compose stop ai-gateway' deploy/production/edutalent-production
+          grep -Fq 'Core application remained healthy during complete AI gateway outage.' deploy/production/edutalent-production
 
       - name: Upload preflight diagnostics
         if: always()
@@ -125,7 +154,7 @@ jobs:
 
   supabase-migrations:
     name: Apply migrations and roles on pinned Supabase PostgreSQL 17
-    if: github.event_name != 'pull_request'
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-validation') }}
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -201,7 +230,6 @@ jobs:
             supabase-db \
             bash scripts/ci/configure_database_role.sh 2>&1 | tee -a supabase-migrations.log
 
-          # PostgreSQL boolean values explicitly cast to text are true/false.
           role_row="$(docker exec \
             --env "PGPASSWORD=${app_password}" \
             supabase-db \
@@ -253,7 +281,7 @@ jobs:
 
   smoke:
     name: Start complete production stack
-    if: github.event_name != 'pull_request'
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-validation') }}
     needs:
       - validate
       - supabase-migrations
@@ -322,6 +350,12 @@ jobs:
         run: |
           set -o pipefail
           bash edutalent production-qdrant-check 2>&1 | tee -a production-startup.log
+
+      - name: Verify AI isolation, outage tolerance, and recovery
+        shell: bash
+        run: |
+          set -o pipefail
+          bash edutalent production-ai-check 2>&1 | tee -a production-startup.log
 
       - name: Verify public, authentication, and administrative boundaries
         shell: bash
@@ -412,10 +446,10 @@ jobs:
           assert kid, header
           keys = json.load(open(jwks_path, encoding="utf-8")).get("keys", [])
           assert any(
-              key.get("kid") == kid
-              and key.get("kty") == "EC"
-              and key.get("alg") == "ES256"
-              for key in keys
+            key.get("kid") == kid
+            and key.get("kty") == "EC"
+            and key.get("alg") == "ES256"
+            for key in keys
           ), "token kid missing from local ES256 JWKS"
           print("Supabase password login and local ES256 JWKS boundary verified.")
           PY

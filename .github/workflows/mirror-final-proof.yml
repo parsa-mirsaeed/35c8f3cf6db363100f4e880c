@@ -51,8 +51,7 @@ jobs:
                 --event workflow_dispatch \
                 --limit 30 \
                 --json databaseId,headSha \
-                --jq ".[] | select(.headSha == \"$HEAD_SHA\") | .databaseId" \
-                | head -n 1)"
+                --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end")"
               if [[ -n "$run_id" ]]; then
                 printf '%s\n' "$run_id"
                 return 0

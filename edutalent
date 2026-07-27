@@ -44,6 +44,7 @@ Self-hosted production commands:
   production-migrate   Re-run migrations and backend-role configuration
   production-database-check Verify the constrained backend database identity
   production-gateway-check Verify non-root, capability-free TLS gateway state
+  production-ai-check  Verify AI isolation, authentication, outage, and recovery
   production-qdrant-check Verify private Qdrant readiness from the app container
 
   help                 Show this help
@@ -157,12 +158,12 @@ case "${command}" in
     dev)
         ensure_docker
         ensure_env
-        exec docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" --profile dev up --build dev
+        exec docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" --profile dev up --build ai-gateway dev
         ;;
     up)
         ensure_docker
         ensure_env
-        compose_dev --profile app up --build --detach app
+        compose_dev --profile app up --build --detach ai-gateway app
         require_command curl
         wait_for_health
         ;;
@@ -218,7 +219,6 @@ case "${command}" in
         echo "Release bundle: dist/edutalent-${version}.tar.gz"
         ;;
     publish)
-        ensure_docker
         repository="${IMAGE_REPOSITORY:-}"
         if [[ -z "${repository}" ]]; then
             echo "IMAGE_REPOSITORY is required, for example ghcr.io/owner/edutalent-dx" >&2
@@ -239,7 +239,7 @@ case "${command}" in
     smoke)
         ensure_docker
         ensure_env
-        compose_dev --profile app up --build --detach app
+        compose_dev --profile app up --build --detach ai-gateway app
         require_command curl
         wait_for_health
         ;;
@@ -264,6 +264,9 @@ case "${command}" in
         grep -Fq 'dx bundle --web --release --package web' Dockerfile
         grep -Fq 'target/dx/web/release/web' Dockerfile
         grep -Fq 'bash edutalent package' .github/workflows/package.yml
+        grep -Fq 'production-ai-check' edutalent
+        grep -Fq -- '--profile dev up --build ai-gateway dev' edutalent
+        grep -Fq -- '--profile app up --build --detach ai-gateway app' edutalent
         grep -Eq '^[0-9a-f]{40}$' deploy/production/SUPABASE_UPSTREAM
         echo "Packaging and production command definitions are valid."
         ;;
@@ -304,6 +307,9 @@ case "${command}" in
         ;;
     production-gateway-check)
         run_production gateway-check "$@"
+        ;;
+    production-ai-check)
+        run_production ai-check "$@"
         ;;
     production-qdrant-check)
         run_production qdrant-check "$@"

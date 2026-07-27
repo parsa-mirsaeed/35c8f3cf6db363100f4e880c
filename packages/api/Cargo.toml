@@ -3,6 +3,11 @@ name = "api"
 version = "0.2.0"
 edition = "2021"
 
+[[bin]]
+name = "ai_gateway"
+path = "src/bin/ai_gateway.rs"
+required-features = ["server"]
+
 [dependencies]
 # Dioxus
 dioxus = { workspace = true, features = ["fullstack"] }

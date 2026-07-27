@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed on production Compose exposure and privilege regressions."""
+"""Fail closed on production Compose exposure, privilege, and AI egress drift."""
 
 from __future__ import annotations
 
@@ -43,22 +43,29 @@ def volume_mounts(service: dict[str, Any]) -> list[dict[str, Any]]:
     return mounts
 
 
-def mount_for_target(
-    service: dict[str, Any], target: str
-) -> dict[str, Any] | None:
+def mount_for_target(service: dict[str, Any], target: str) -> dict[str, Any] | None:
     return next(
         (mount for mount in volume_mounts(service) if mount.get("target") == target),
         None,
     )
 
 
+def dependencies(service: dict[str, Any]) -> dict[str, Any]:
+    value = service.get("depends_on", {}) or {}
+    return value if isinstance(value, dict) else {}
+
+
 def dependency_condition(service: dict[str, Any], dependency: str) -> str | None:
-    dependencies = service.get("depends_on", {}) or {}
-    entry = dependencies.get(dependency)
+    entry = dependencies(service).get(dependency)
     if isinstance(entry, dict):
         value = entry.get("condition")
         return str(value) if value is not None else None
     return None
+
+
+def attached_network_names(service: dict[str, Any]) -> set[str]:
+    attached = service.get("networks", {}) or {}
+    return set(attached) if isinstance(attached, dict) else set(attached)
 
 
 def parse_database_user(database_url: str, label: str) -> str:
@@ -74,6 +81,26 @@ def parse_database_user(database_url: str, label: str) -> str:
     if not parsed.username:
         fail(f"{label} is missing a database username")
     return parsed.username
+
+
+def require_exact_network(
+    services: dict[str, dict[str, Any]], network: str, expected: set[str]
+) -> None:
+    actual = {
+        name
+        for name, service in services.items()
+        if network in attached_network_names(service)
+    }
+    if actual != expected:
+        fail(f"network {network} membership must be {sorted(expected)}, got {sorted(actual)}")
+
+
+def require_no_capabilities(service: dict[str, Any], name: str) -> None:
+    if service.get("cap_add"):
+        fail(f"{name} must not receive Linux capabilities")
+    cap_drop = {str(value).upper() for value in service.get("cap_drop", []) or []}
+    if "ALL" not in cap_drop:
+        fail(f"{name} must drop all Linux capabilities")
 
 
 def main() -> None:
@@ -104,13 +131,14 @@ def main() -> None:
         fail("inactive Edge Functions must not have a public Caddy route")
     if "http_port 8080" not in caddyfile_text or "https_port 8443" not in caddyfile_text:
         fail("Caddy must listen on unprivileged internal ports 8080 and 8443")
-    state_owner_command = (
-        'chown -R "$${GATEWAY_UID}:$${GATEWAY_GID}" /data /config'
-    )
-    if state_owner_command not in overlay_text:
+    if 'chown -R "$${GATEWAY_UID}:$${GATEWAY_GID}" /data /config' not in overlay_text:
         fail("gateway initialization must own persistent Caddy state volumes")
     if "chmod 0700 /data /config" not in overlay_text:
         fail("gateway initialization must restrict persistent Caddy state volumes")
+    if "AI_GATEWAY_DEFAULT_SCHOOL_ID" in overlay_text:
+        fail("production topology must not contain a shared AI tenant fallback")
+    if "AI_ALLOWED_EMBEDDING_BASE_URLS" in overlay_text or "AI_ALLOWED_LLM_BASE_URLS" in overlay_text:
+        fail("production topology must not contain operator-defined AI allowlists")
 
     document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     services = document.get("services")
@@ -122,6 +150,7 @@ def main() -> None:
         "gateway-tls",
         "gateway",
         "app",
+        "ai-gateway",
         "migrate",
         "database-access",
         "qdrant",
@@ -140,6 +169,10 @@ def main() -> None:
     if missing:
         fail(f"missing required services: {', '.join(missing)}")
 
+    allowed_external_memberships = {
+        ("gateway", "ingress"),
+        ("ai-gateway", "ai_egress"),
+    }
     for name, service in services.items():
         if service.get("privileged"):
             fail(f"service {name} is privileged")
@@ -156,23 +189,16 @@ def main() -> None:
         if name != "gateway" and ports:
             fail(f"service {name} publishes host ports: {ports}")
 
-        attached_networks = service.get("networks", {}) or {}
-        attached_names = (
-            attached_networks.keys()
-            if isinstance(attached_networks, dict)
-            else attached_networks
-        )
-        for network_key in attached_names:
+        for network_key in attached_network_names(service):
             network = networks.get(network_key)
             if not isinstance(network, dict):
                 fail(f"service {name} references missing network {network_key}")
             if network.get("internal") is True:
                 continue
-            if name == "gateway" and network_key == "ingress":
-                continue
-            fail(f"service {name} is attached to non-internal network {network_key}")
+            if (name, network_key) not in allowed_external_memberships:
+                fail(f"service {name} is attached to non-internal network {network_key}")
 
-        if name in {"gateway", "app", "qdrant", "embedding"}:
+        if name in {"gateway", "app", "ai-gateway", "qdrant", "embedding"}:
             limit = service_cpu_limit(service)
             if limit is None:
                 fail(f"service {name} is missing an explicit CPU limit")
@@ -207,10 +233,7 @@ def main() -> None:
             or state_mount.get("type") != "volume"
             or state_mount.get("read_only") is True
         ):
-            fail(
-                "gateway initialization must mount writable Caddy state volume "
-                f"{state_target}"
-            )
+            fail(f"gateway initialization needs writable state at {state_target}")
         staged_state_mounts[state_target] = state_mount
     for source_target in ("/source/fullchain.pem", "/source/privkey.pem"):
         source_mount = mount_for_target(gateway_tls, source_target)
@@ -224,24 +247,16 @@ def main() -> None:
     gateway = services["gateway"]
     expected_gateway_user = f"{gateway_uid}:{gateway_gid}"
     if str(gateway.get("user", "")) != expected_gateway_user:
-        fail(
-            "gateway user must match the numeric owner prepared at initialization "
-            f"({expected_gateway_user})"
-        )
-    if gateway.get("cap_add"):
-        fail("gateway must not require Linux capabilities")
+        fail(f"gateway user must match initialization owner {expected_gateway_user}")
+    require_no_capabilities(gateway, "gateway")
     gateway_ports = gateway.get("ports", []) or []
     port_map = {
         str(item.get("published")): str(item.get("target"))
         for item in gateway_ports
         if isinstance(item, dict)
     }
-    expected_port_map = {"80": "8080", "443": "8443"}
-    if port_map != expected_port_map:
-        fail(
-            "gateway must map host 80/443 to unprivileged container 8080/8443, "
-            f"got {port_map}"
-        )
+    if port_map != {"80": "8080", "443": "8443"}:
+        fail(f"gateway port map is invalid: {port_map}")
     if any(
         str(item.get("host_ip", "")) != "0.0.0.0"
         for item in gateway_ports
@@ -254,164 +269,216 @@ def main() -> None:
         or tls_mount.get("type") != "volume"
         or tls_mount.get("read_only") is not True
     ):
-        fail("gateway must read TLS material from a read-only Docker volume")
+        fail("gateway must read TLS from a read-only Docker volume")
     if mount_for_target(gateway, "/etc/caddy/tls/privkey.pem"):
-        fail("gateway must not bind-mount the operator private-key file directly")
-    for state_target, staged_state_mount in staged_state_mounts.items():
-        gateway_state_mount = mount_for_target(gateway, state_target)
+        fail("gateway must not bind-mount the operator private key directly")
+    for target, staged_mount in staged_state_mounts.items():
+        runtime_mount = mount_for_target(gateway, target)
         if (
-            not gateway_state_mount
-            or gateway_state_mount.get("type") != "volume"
-            or gateway_state_mount.get("read_only") is True
+            not runtime_mount
+            or runtime_mount.get("type") != "volume"
+            or runtime_mount.get("read_only") is True
+            or runtime_mount.get("source") != staged_mount.get("source")
         ):
-            fail(f"gateway requires writable persistent state at {state_target}")
-        if gateway_state_mount.get("source") != staged_state_mount.get("source"):
-            fail(
-                "gateway initialization and runtime must share the same volume at "
-                f"{state_target}"
-            )
+            fail(f"gateway state volume mismatch at {target}")
     if dependency_condition(gateway, "gateway-tls") != "service_completed_successfully":
-        fail("gateway must wait for successful state and TLS initialization")
+        fail("gateway must wait for successful TLS initialization")
     if gateway.get("entrypoint") != ["/etc/caddy/tls/caddy"]:
-        fail("gateway must execute the capability-free Caddy binary staged by initialization")
-    gateway_networks = gateway.get("networks", {}) or {}
-    gateway_network_names = (
-        set(gateway_networks)
-        if isinstance(gateway_networks, dict)
-        else set(gateway_networks)
-    )
-    if "ingress" not in gateway_network_names:
-        fail("gateway must attach to the dedicated host-ingress network")
+        fail("gateway must execute the staged capability-free Caddy binary")
 
     for network_name in (
         "edutalent-edge",
         "edutalent-supabase-api",
         "edutalent-data",
         "edutalent-admin",
+        "edutalent-ai-internal",
     ):
-        matches = [
-            value for value in networks.values() if value.get("name") == network_name
-        ]
+        matches = [value for value in networks.values() if value.get("name") == network_name]
         if len(matches) != 1 or matches[0].get("internal") is not True:
             fail(f"network {network_name} must exist and be internal")
-    non_internal_networks = {
+    non_internal = {
         key
         for key, value in networks.items()
         if not isinstance(value, dict) or value.get("internal") is not True
     }
-    if non_internal_networks != {"ingress"}:
-        fail(
-            "ingress must be the only non-internal network, "
-            f"got {sorted(non_internal_networks)}"
-        )
-    ingress_matches = [
-        value for value in networks.values() if value.get("name") == "edutalent-ingress"
-    ]
-    if (
-        len(ingress_matches) != 1
-        or ingress_matches[0].get("internal") is True
-        or ingress_matches[0].get("driver") != "bridge"
+    if non_internal != {"ingress", "ai_egress"}:
+        fail(f"only ingress and ai_egress may be non-internal, got {sorted(non_internal)}")
+    for key, expected_name in (
+        ("ingress", "edutalent-ingress"),
+        ("ai_egress", "edutalent-ai-egress"),
     ):
-        fail("edutalent-ingress must be the single non-internal bridge network")
+        network = networks.get(key, {})
+        if network.get("name") != expected_name or network.get("driver") != "bridge":
+            fail(f"{key} must be the named bridge {expected_name}")
 
-    gateway_env = gateway.get("environment", {}) or {}
-    if not str(gateway_env.get("ADMIN_ALLOWED_CIDRS", "")).strip():
-        fail("administration source-network allowlist is missing")
-
-    functions_service = services.get("functions")
-    if functions_service is not None:
-        functions_profiles = functions_service.get("profiles", []) or []
-        if functions_profiles != ["edge-functions"]:
-            fail("Edge Functions must remain disabled behind the explicit profile")
+    require_exact_network(services, "ingress", {"gateway"})
+    require_exact_network(services, "ai_egress", {"ai-gateway"})
+    require_exact_network(
+        services,
+        "ai_internal",
+        {"app", "ai-gateway"} | ({"embedding"} if "embedding" in services else set()),
+    )
 
     auth_env = services["auth"].get("environment", {}) or {}
-    auth_expectations = {
+    for key, expected in {
         "GOTRUE_DISABLE_SIGNUP": "true",
         "GOTRUE_EXTERNAL_EMAIL_ENABLED": "true",
         "GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED": "false",
         "GOTRUE_EXTERNAL_PHONE_ENABLED": "false",
-    }
-    for key, expected in auth_expectations.items():
+    }.items():
         actual = str(auth_env.get(key, "")).lower()
         if actual != expected:
-            fail(
-                f"Supabase Auth setting {key} must render as {expected}, "
-                f"got {actual or 'missing'}"
-            )
+            fail(f"Supabase Auth setting {key} must be {expected}, got {actual or 'missing'}")
 
-    pooler_ulimits = services["supavisor"].get("ulimits", {}) or {}
-    pooler_nofile = pooler_ulimits.get("nofile", {}) or {}
-    if not isinstance(pooler_nofile, dict) or {
+    pooler_nofile = (services["supavisor"].get("ulimits", {}) or {}).get("nofile", {}) or {}
+    if {
         str(pooler_nofile.get("soft")),
         str(pooler_nofile.get("hard")),
     } != {"100000"}:
-        fail("Supavisor must receive a 100000 soft/hard nofile limit without extra capabilities")
+        fail("Supavisor must receive a 100000 soft/hard nofile limit")
 
-    qdrant_service = services["qdrant"]
-    qdrant_env = qdrant_service.get("environment", {}) or {}
-    qdrant_key = qdrant_env.get("QDRANT__SERVICE__API_KEY", "")
-    if not qdrant_key or "replace" in str(qdrant_key).lower():
+    qdrant = services["qdrant"]
+    qdrant_env = qdrant.get("environment", {}) or {}
+    qdrant_key = str(qdrant_env.get("QDRANT__SERVICE__API_KEY", ""))
+    if not qdrant_key or "replace" in qdrant_key.lower():
         fail("Qdrant API key is missing or still a placeholder")
-    if qdrant_service.get("healthcheck"):
+    if qdrant.get("healthcheck"):
         fail("Qdrant must not rely on unavailable in-image shell health tooling")
 
-    migrate_service = services["migrate"]
-    migrate_env = migrate_service.get("environment", {}) or {}
+    migrate = services["migrate"]
     migrate_user = parse_database_user(
-        str(migrate_env.get("DATABASE_URL", "")), "migration DATABASE_URL"
+        str((migrate.get("environment", {}) or {}).get("DATABASE_URL", "")),
+        "migration DATABASE_URL",
     )
     if migrate_user != "postgres":
         fail("migration service must use the bootstrap postgres identity")
 
     database_access = services["database-access"]
     if database_access.get("restart") not in {"no", "none", False}:
-        fail("database-access must be a one-shot service")
+        fail("database-access must be one-shot")
     if dependency_condition(database_access, "migrate") != "service_completed_successfully":
-        fail("database-access must run only after migrations complete")
+        fail("database-access must wait for migrations")
     access_env = database_access.get("environment", {}) or {}
-    admin_user = parse_database_user(
-        str(access_env.get("DATABASE_ADMIN_URL", "")),
-        "database-access DATABASE_ADMIN_URL",
-    )
-    if admin_user != "postgres":
-        fail("database-access must use the bootstrap postgres identity")
+    if parse_database_user(str(access_env.get("DATABASE_ADMIN_URL", "")), "admin URL") != "postgres":
+        fail("database-access must use postgres")
     app_role = str(access_env.get("DATABASE_APP_USER", ""))
     app_password = str(access_env.get("DATABASE_APP_PASSWORD", ""))
     if not app_role or app_role == "postgres":
         fail("database-access must configure a distinct application role")
     if len(app_password) < 32 or "replace" in app_password.lower():
-        fail("database-access application password is missing or unsafe")
+        fail("application database password is missing or unsafe")
 
-    app_service = services["app"]
-    if dependency_condition(app_service, "database-access") != "service_completed_successfully":
-        fail("app must wait for dedicated database role configuration")
-    qdrant_dependency = dependency_condition(app_service, "qdrant")
-    if qdrant_dependency != "service_started":
-        fail("core app startup must treat Qdrant readiness as degradable")
-
-    app_env = app_service.get("environment", {}) or {}
+    app = services["app"]
+    app_env = app.get("environment", {}) or {}
+    if dependency_condition(app, "database-access") != "service_completed_successfully":
+        fail("app must wait for role configuration")
+    if "ai-gateway" in dependencies(app):
+        fail("app must start independently of AI gateway health")
+    if dependency_condition(app, "qdrant") != "service_started":
+        fail("Qdrant readiness must remain degradable")
     if "DATABASE_ADMIN_URL" in app_env or "POSTGRES_PASSWORD" in app_env:
-        fail("long-running app must not receive database bootstrap credentials")
-    database_url = str(app_env.get("DATABASE_URL", ""))
-    app_database_user = parse_database_user(database_url, "app DATABASE_URL")
-    if app_database_user != app_role:
-        fail("app DATABASE_URL must use the generated backend role")
-    if app_database_user == "postgres":
-        fail("long-running app must never connect as postgres")
-    if str(app_env.get("DATABASE_APP_USER", "")) != app_role:
-        fail("app role metadata must match its DATABASE_URL identity")
-    if app_password not in database_url:
-        fail("app DATABASE_URL must use the generated application credential")
+        fail("app must not receive database bootstrap credentials")
+    app_database_user = parse_database_user(str(app_env.get("DATABASE_URL", "")), "app URL")
+    if app_database_user != app_role or app_database_user == "postgres":
+        fail("app must use the generated backend role")
+    if app_password not in str(app_env.get("DATABASE_URL", "")):
+        fail("app DATABASE_URL must use the generated credential")
     if app_env.get("SUPABASE_URL") != "http://kong:8000":
-        fail("EduTalent server must use private-network Supabase Kong")
-    if not str(app_env.get("SUPABASE_JWT_ISSUER", "")).endswith("/auth/v1"):
-        fail("EduTalent self-hosted Supabase JWT issuer is missing")
-    if not str(app_env.get("JWT_SECRET", "")).strip():
-        fail("EduTalent legacy JWT secret is missing")
+        fail("app must use private Kong")
     if app_env.get("QDRANT_URL") != "http://qdrant:6334":
-        fail("EduTalent must use private-network Qdrant")
+        fail("app must use private Qdrant")
+    if app_env.get("AI_GATEWAY_URL") != "http://ai-gateway:8090":
+        fail("app must use only the internal AI gateway")
+    forbidden_app_ai_keys = {
+        "OPENAI_API_KEY",
+        "LLM_API_KEY",
+        "AI_EMBEDDING_BASE_URL",
+        "AI_LLM_BASE_URL",
+        "AI_ALLOWED_EMBEDDING_BASE_URLS",
+        "AI_ALLOWED_LLM_BASE_URLS",
+        "AI_GATEWAY_DEFAULT_SCHOOL_ID",
+    }
+    leaked = sorted(forbidden_app_ai_keys & set(app_env))
+    if leaked:
+        fail(f"provider credentials/destinations or shared tenant identity reached app: {leaked}")
 
-    print("Rendered production Compose security invariants verified.")
+    ai_gateway = services["ai-gateway"]
+    ai_env = ai_gateway.get("environment", {}) or {}
+    if ai_gateway.get("command") != ["ai-gateway"]:
+        fail("AI gateway must run the dedicated gateway binary")
+    if str(ai_gateway.get("user", "")) in {"", "0", "0:0", "root"}:
+        fail("AI gateway must run as a numeric non-root identity")
+    require_no_capabilities(ai_gateway, "AI gateway")
+    if ai_gateway.get("read_only") is not True:
+        fail("AI gateway root filesystem must be read-only")
+    if not ai_gateway.get("healthcheck"):
+        fail("AI gateway must expose a provider-independent local health check")
+    for forbidden in (
+        "DATABASE_URL",
+        "DATABASE_ADMIN_URL",
+        "POSTGRES_PASSWORD",
+        "QDRANT_API_KEY",
+        "SUPABASE_SECRET_KEY",
+        "AI_GATEWAY_DEFAULT_SCHOOL_ID",
+        "AI_ALLOWED_EMBEDDING_BASE_URLS",
+        "AI_ALLOWED_LLM_BASE_URLS",
+    ):
+        if forbidden in ai_env:
+            fail(f"AI gateway must not receive {forbidden}")
+    if ai_env.get("AI_GATEWAY_INTERNAL_TOKEN") != app_env.get("AI_GATEWAY_INTERNAL_TOKEN"):
+        fail("app and AI gateway internal credentials must match")
+    token = str(ai_env.get("AI_GATEWAY_INTERNAL_TOKEN", ""))
+    if len(token) < 24 or "replace" in token.lower():
+        fail("AI gateway internal credential is missing or unsafe")
+
+    profile = str(app_env.get("EMBEDDING_PROFILE", ""))
+    profile_contracts = {
+        "local-bge-v1": (
+            "offline",
+            "BAAI/bge-small-en-v1.5",
+            "384",
+            "edutalent_materials_local_v1",
+        ),
+        "openai-v1": (
+            "connected",
+            "text-embedding-3-small",
+            "1536",
+            "edutalent_openai_v1",
+        ),
+    }
+    if profile not in profile_contracts:
+        fail(f"unsupported production embedding profile {profile!r}")
+    expected_mode, expected_model, expected_size, expected_collection = profile_contracts[profile]
+    observed = (
+        str(ai_env.get("AI_GATEWAY_MODE", "")),
+        str(app_env.get("EMBEDDING_MODEL", "")),
+        str(app_env.get("EMBEDDING_VECTOR_SIZE", "")),
+        str(app_env.get("QDRANT_COLLECTION", "")),
+    )
+    expected = (expected_mode, expected_model, expected_size, expected_collection)
+    if observed != expected:
+        fail(f"embedding profile contract mismatch: expected {expected}, got {observed}")
+    if str(app_env.get("QDRANT_VECTOR_SIZE", "")) != expected_size:
+        fail("Qdrant vector size must match the active embedding profile")
+    if str(ai_env.get("EMBEDDING_PROFILE", "")) != profile:
+        fail("app and AI gateway embedding profiles must match")
+
+    if expected_mode == "connected":
+        for key in ("OPENAI_API_KEY", "LLM_API_KEY"):
+            value = str(ai_env.get(key, ""))
+            if len(value) < 24 or "replace" in value.lower():
+                fail(f"connected mode requires safe {key}")
+        if ai_env.get("AI_EMBEDDING_BASE_URL") != "https://api.openai.com/v1/":
+            fail("connected embeddings must use the exact approved OpenAI origin")
+        if ai_env.get("AI_LLM_BASE_URL") != "https://api.deepseek.com/v1/":
+            fail("connected LLM requests must use the exact approved LLM origin")
+    else:
+        if ai_env.get("AI_EMBEDDING_BASE_URL") != "http://embedding:80/v1/":
+            fail("offline profile must use the internal TEI service")
+        if "embedding" not in services:
+            fail("offline profile must render the local TEI service")
+
+    print("Rendered production Compose security and AI egress invariants verified.")
 
 
 if __name__ == "__main__":

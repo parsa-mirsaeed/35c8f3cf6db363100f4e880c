@@ -15,6 +15,7 @@ use crate::services::llm_service::{
 use sqlx::PgPool;
 use std::sync::Arc;
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Errors that can occur when building student context.
 #[derive(Debug, Error)]
@@ -66,6 +67,7 @@ impl StudentContextService {
         let previous_performance = self.calculate_performance_metrics(student_id).await?;
 
         Ok(StudentContext {
+            school_id: Uuid::from(student.school_id),
             student_id: student_id.to_string(),
             student_name: student.user_name,
             talent_profile,
@@ -221,6 +223,7 @@ impl StudentContextService {
         let talent_profile = Self::parse_talent_profile(&student.talent_profile_ref);
 
         Ok(StudentContext {
+            school_id: Uuid::from(student.school_id),
             student_id: student_id.to_string(),
             student_name: student.user_name,
             talent_profile,

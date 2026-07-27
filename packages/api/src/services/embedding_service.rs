@@ -2,7 +2,8 @@
 //!
 //! Provider URLs and provider API keys are intentionally unsupported here. The
 //! application authenticates to the fixed local gateway, which owns external
-//! egress, retries, quotas, and circuit breakers.
+//! egress, retries, quotas, and circuit breakers. Every request must carry the
+//! authoritative school identifier resolved by the calling service.
 
 use crate::ai_gateway_protocol::{
     GatewayEmbeddingRequest, GatewayEmbeddingResponse, GatewayErrorEnvelope,
@@ -64,7 +65,6 @@ pub struct EmbeddingConfig {
     pub profile: EmbeddingProfile,
     pub collection_name: String,
     pub request_timeout: Duration,
-    pub default_school_id: Option<Uuid>,
 }
 
 impl EmbeddingConfig {
@@ -100,8 +100,8 @@ impl EmbeddingConfig {
                 "AI_GATEWAY_INTERNAL_TOKEN is missing or unsafe".to_string(),
             ));
         }
-        let base_url = env::var("AI_GATEWAY_URL")
-            .unwrap_or_else(|_| INTERNAL_GATEWAY_ORIGIN.to_string());
+        let base_url =
+            env::var("AI_GATEWAY_URL").unwrap_or_else(|_| INTERNAL_GATEWAY_ORIGIN.to_string());
         validate_internal_gateway_url(&base_url)?;
 
         Ok(Self {
@@ -119,10 +119,6 @@ impl EmbeddingConfig {
                     .unwrap_or(60)
                     .clamp(5, 180),
             ),
-            default_school_id: env::var("AI_GATEWAY_DEFAULT_SCHOOL_ID")
-                .ok()
-                .and_then(|value| Uuid::parse_str(&value).ok())
-                .filter(|value| !value.is_nil()),
         })
     }
 
@@ -177,29 +173,25 @@ impl EmbeddingClient {
         Ok(Self { client, config })
     }
 
-    fn configured_school_id(&self) -> Result<Uuid, EmbeddingError> {
-        self.config
-            .default_school_id
-            .filter(|value| !value.is_nil())
-            .ok_or(EmbeddingError::MissingSchoolId)
+    /// Compatibility entry point retained only to fail closed. Callers must use
+    /// `embed_text_for_school` with an authoritative school ID.
+    pub async fn embed_text(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Err(EmbeddingError::MissingSchoolId)
     }
 
-    pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        self.embed_text_for_school(self.configured_school_id()?, text)
-            .await
+    /// Compatibility entry point retained only to fail closed. Callers must use
+    /// `embed_query_for_school` with an authoritative school ID.
+    pub async fn embed_query(&self, _query: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Err(EmbeddingError::MissingSchoolId)
     }
 
-    pub async fn embed_query(&self, query: &str) -> Result<Vec<f32>, EmbeddingError> {
-        self.embed_query_for_school(self.configured_school_id()?, query)
-            .await
-    }
-
+    /// Compatibility entry point retained only to fail closed. Callers must use
+    /// `embed_batch_for_school` with an authoritative school ID.
     pub async fn embed_batch(
         &self,
-        texts: Vec<String>,
+        _texts: Vec<String>,
     ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
-        self.embed_batch_for_school(self.configured_school_id()?, texts)
-            .await
+        Err(EmbeddingError::MissingSchoolId)
     }
 
     pub async fn embed_text_for_school(
@@ -249,11 +241,9 @@ impl EmbeddingClient {
                 .send_dimensions
                 .then_some(self.config.vector_size),
         };
-        let token = self
-            .config
-            .api_key
-            .as_deref()
-            .ok_or_else(|| EmbeddingError::MissingConfig("AI_GATEWAY_INTERNAL_TOKEN".to_string()))?;
+        let token = self.config.api_key.as_deref().ok_or_else(|| {
+            EmbeddingError::MissingConfig("AI_GATEWAY_INTERNAL_TOKEN".to_string())
+        })?;
         let response = self
             .client
             .post(self.config.embeddings_url())
@@ -274,9 +264,11 @@ impl EmbeddingClient {
                 .as_ref()
                 .and_then(|body| body.error.retry_after_seconds);
             return match code {
-                "provider_rate_limited" | "quota_exceeded" => Err(EmbeddingError::RateLimited {
-                    retry_after_seconds: retry_after.unwrap_or(60),
-                }),
+                "provider_rate_limited" | "quota_exceeded" => {
+                    Err(EmbeddingError::RateLimited {
+                        retry_after_seconds: retry_after.unwrap_or(60),
+                    })
+                }
                 "ai_temporarily_unavailable"
                 | "circuit_open"
                 | "provider_unconfigured"
@@ -303,7 +295,11 @@ impl EmbeddingClient {
         }) {
             return Err(EmbeddingError::InvalidResponse);
         }
-        Ok(body.data.into_iter().map(|item| item.embedding).collect())
+        Ok(body
+            .data
+            .into_iter()
+            .map(|item| item.embedding)
+            .collect())
     }
 
     pub fn is_configured(&self) -> bool {
@@ -422,6 +418,19 @@ mod tests {
     use super::*;
     use crate::services::embedding_profile::{LOCAL_BGE_V1, OPENAI_V1};
 
+    fn config(profile: EmbeddingProfile) -> EmbeddingConfig {
+        EmbeddingConfig {
+            provider: EmbeddingProvider::Gateway,
+            api_key: Some("abcdefghijklmnopqrstuvwxyz123456".to_string()),
+            base_url: INTERNAL_GATEWAY_ORIGIN.to_string(),
+            model: profile.model.to_string(),
+            vector_size: profile.vector_size,
+            profile,
+            collection_name: profile.collection.to_string(),
+            request_timeout: Duration::from_secs(10),
+        }
+    }
+
     #[test]
     fn chunks_preserve_metadata_and_non_empty_content() {
         let metadata = ChunkMetadata {
@@ -451,24 +460,13 @@ mod tests {
 
     #[test]
     fn gateway_url_is_fixed_and_profile_bound() {
-        let school_id = Uuid::new_v4();
-        let config = EmbeddingConfig {
-            provider: EmbeddingProvider::Gateway,
-            api_key: Some("abcdefghijklmnopqrstuvwxyz123456".to_string()),
-            base_url: INTERNAL_GATEWAY_ORIGIN.to_string(),
-            model: LOCAL_BGE_V1.model.to_string(),
-            vector_size: LOCAL_BGE_V1.vector_size,
-            profile: LOCAL_BGE_V1,
-            collection_name: LOCAL_BGE_V1.collection.to_string(),
-            request_timeout: Duration::from_secs(10),
-            default_school_id: Some(school_id),
-        };
-        let client = EmbeddingClient::with_config(config.clone()).unwrap();
+        let config = config(LOCAL_BGE_V1);
+        let client = EmbeddingClient::with_config(config.clone()).expect("client");
         assert_eq!(
             config.embeddings_url(),
             "http://ai-gateway:8090/v1/embeddings"
         );
-        assert_eq!(client.configured_school_id().unwrap(), school_id);
+        assert!(client.is_configured());
         assert_ne!(OPENAI_V1.collection, LOCAL_BGE_V1.collection);
         assert_ne!(OPENAI_V1.vector_size, LOCAL_BGE_V1.vector_size);
     }
@@ -484,22 +482,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compatibility_paths_require_an_appliance_school_id() {
-        let config = EmbeddingConfig {
-            provider: EmbeddingProvider::Gateway,
-            api_key: Some("abcdefghijklmnopqrstuvwxyz123456".to_string()),
-            base_url: INTERNAL_GATEWAY_ORIGIN.to_string(),
-            model: LOCAL_BGE_V1.model.to_string(),
-            vector_size: LOCAL_BGE_V1.vector_size,
-            profile: LOCAL_BGE_V1,
-            collection_name: LOCAL_BGE_V1.collection.to_string(),
-            request_timeout: Duration::from_secs(10),
-            default_school_id: None,
-        };
-        let client = EmbeddingClient::with_config(config).unwrap();
+    #[tokio::test]
+    async fn unscoped_compatibility_calls_fail_closed() {
+        let client = EmbeddingClient::with_config(config(LOCAL_BGE_V1)).expect("client");
         assert!(matches!(
-            client.configured_school_id(),
+            client.embed_text("text").await,
+            Err(EmbeddingError::MissingSchoolId)
+        ));
+        assert!(matches!(
+            client.embed_query("query").await,
+            Err(EmbeddingError::MissingSchoolId)
+        ));
+        assert!(matches!(
+            client.embed_batch(vec!["text".to_string()]).await,
             Err(EmbeddingError::MissingSchoolId)
         ));
     }

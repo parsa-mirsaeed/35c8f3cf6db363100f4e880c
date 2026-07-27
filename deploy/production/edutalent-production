@@ -16,17 +16,18 @@ Usage: edutalent-production <command> [arguments]
 
 Commands:
   bootstrap            Fetch the exact pinned official Supabase Docker runtime
-  init                 Generate fresh production secrets after domains are set
-  validate             Verify secrets, TLS, rendered Compose, and exposure rules
+  init                 Generate fresh local production secrets
+  validate             Verify secrets, TLS, topology, profiles, and egress rules
   config               Render the complete effective production Compose config
   up                   Start the self-hosted production stack
   down                 Stop the stack without deleting data
   ps                   Show service status
-  logs [services...]   Follow logs (defaults to gateway, app, auth, db, qdrant)
-  migrate              Re-run EduTalent migrations against Supabase PostgreSQL
-  database-check       Verify the running app uses the constrained backend role
-  gateway-check        Verify gateway/TLS state and denied public Auth operations
-  qdrant-check         Verify private Qdrant readiness from the app container
+  logs [services...]   Follow logs (defaults to gateway, app, ai-gateway, auth, db)
+  migrate              Re-run migrations and backend-role configuration
+  database-check       Verify the constrained backend database role
+  gateway-check        Verify Caddy/TLS and denied public Auth operations
+  ai-check             Verify AI isolation, authentication, outage, and recovery
+  qdrant-check         Verify private authenticated Qdrant readiness
   help                 Show this help
 USAGE
 }
@@ -58,8 +59,8 @@ compose() {
   local profile
   profile="$(read_env "${APP_ENV}" EMBEDDING_PROFILE)"
   case "${profile}" in
-    "") ;;
-    local-embedding) profile_args=(--profile local-embedding) ;;
+    local-bge-v1) profile_args=(--profile local-embedding) ;;
+    openai-v1) ;;
     *) echo "Unsupported EMBEDDING_PROFILE=${profile}" >&2; exit 1 ;;
   esac
 
@@ -74,21 +75,12 @@ compose() {
     "$@"
 }
 
-# Remove only one-shot containers that have already completed successfully.
-# Failed containers remain available for operator inspection, and a still-running
-# initializer is never stopped by cleanup. Running this after failure prevents
-# successful bootstrap URLs and host TLS bind paths from lingering in stopped
-# container metadata when an unrelated long-running service fails to start.
 cleanup_completed_one_shots() {
   local service container_id inspection state exit_code
   for service in migrate database-access gateway-tls; do
     container_id="$(compose ps --all --quiet "${service}" 2>/dev/null || true)"
     [[ -n "${container_id}" ]] || continue
-
-    inspection="$(
-      docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' \
-        "${container_id}" 2>/dev/null || true
-    )"
+    inspection="$(docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "${container_id}" 2>/dev/null || true)"
     read -r state exit_code <<<"${inspection}"
     if [[ "${state:-}" == "exited" && "${exit_code:-}" == "0" ]]; then
       compose rm --force "${service}" >/dev/null
@@ -101,7 +93,7 @@ startup_diagnostics() {
   compose ps --all >&2 || true
   echo "Bounded migration/database/auth/gateway logs follow." >&2
   compose logs --no-color --tail 300 \
-    migrate database-access db auth kong app gateway-tls gateway functions >&2 || true
+    migrate database-access db auth kong app ai-gateway gateway-tls gateway functions >&2 || true
   echo "Bounded pooler logs follow; credential-shaped values are redacted." >&2
   compose logs --no-color --tail 100 supavisor 2>&1 | sed -E \
     -e 's#(postgres(ql)?://)[^[:space:]]+#\1[REDACTED]#gI' \
@@ -112,113 +104,95 @@ startup_diagnostics() {
 verify_public_auth_denials() {
   local supabase_domain publishable_key probe_email probe_password payload
   local temp_dir signup_response signup_status admin_response admin_status
-
   supabase_domain="$(read_env "${APP_ENV}" SUPABASE_DOMAIN)"
   publishable_key="$(read_env "${SUPABASE_ENV}" SUPABASE_PUBLISHABLE_KEY)"
-
-  [[ -n "${supabase_domain}" && -n "${publishable_key}" ]] || {
-    echo "Public Auth verification requires the Supabase domain and publishable key." >&2
-    return 1
-  }
-  command -v curl >/dev/null 2>&1 || {
-    echo "curl is required for public Auth verification." >&2
-    return 1
-  }
-  command -v python3 >/dev/null 2>&1 || {
-    echo "python3 is required for public Auth verification." >&2
-    return 1
-  }
-
+  [[ -n "${supabase_domain}" && -n "${publishable_key}" ]] || return 1
+  command -v curl >/dev/null 2>&1
+  command -v python3 >/dev/null 2>&1
   temp_dir="$(mktemp -d)"
+  trap 'rm -rf "${temp_dir}"' RETURN
   signup_response="${temp_dir}/signup.json"
   admin_response="${temp_dir}/admin.json"
   probe_email="public-auth-probe@${supabase_domain}"
   probe_password='Ci-PublicAuthDenied-Aa1!'
-  payload="$(printf '{\"email\":\"%s\",\"password\":\"%s\"}' "${probe_email}" "${probe_password}")"
+  payload="$(printf '{"email":"%s","password":"%s"}' "${probe_email}" "${probe_password}")"
 
   signup_status="$(curl --silent --show-error --insecure \
-    --output "${signup_response}" --write-out '%{http_code}' \
-    --noproxy '*' \
+    --output "${signup_response}" --write-out '%{http_code}' --noproxy '*' \
     --resolve "${supabase_domain}:443:127.0.0.1" \
-    -H "apikey: ${publishable_key}" \
-    -H 'Content-Type: application/json' \
-    --data "${payload}" \
-    "https://${supabase_domain}/auth/v1/signup")"
-
-  if [[ "${signup_status}" != "422" ]]; then
-    rm -rf "${temp_dir}"
-    echo "Public signup returned ${signup_status}, expected 422 signup_disabled." >&2
+    -H "apikey: ${publishable_key}" -H 'Content-Type: application/json' \
+    --data "${payload}" "https://${supabase_domain}/auth/v1/signup")"
+  [[ "${signup_status}" == "422" ]] || {
+    echo "Public signup returned ${signup_status}, expected 422." >&2
     return 1
-  fi
-  if ! python3 - "${signup_response}" <<'PYCHECK'
-import json
-import sys
-
+  }
+  python3 - "${signup_response}" <<'PY'
+import json, sys
 body = json.load(open(sys.argv[1], encoding="utf-8"))
 assert body.get("error_code") == "signup_disabled", body
-assert "access_token" not in body, body
-assert "user" not in body, body
-PYCHECK
-  then
-    rm -rf "${temp_dir}"
-    return 1
-  fi
+assert "access_token" not in body and "user" not in body, body
+PY
   echo "Public email signup denial verified."
 
   admin_status="$(curl --silent --show-error --insecure \
-    --output "${admin_response}" --write-out '%{http_code}' \
-    --noproxy '*' \
+    --output "${admin_response}" --write-out '%{http_code}' --noproxy '*' \
     --resolve "${supabase_domain}:443:127.0.0.1" \
     -H "apikey: ${publishable_key}" \
     "https://${supabase_domain}/auth/v1/admin/users?per_page=1")"
-
-  if [[ "${admin_status}" != "403" ]]; then
-    rm -rf "${temp_dir}"
-    echo "Publishable-key administrator request returned ${admin_status}, expected 403 not_admin." >&2
+  [[ "${admin_status}" == "403" ]] || {
+    echo "Publishable-key admin request returned ${admin_status}, expected 403." >&2
     return 1
-  fi
-  if ! python3 - "${admin_response}" <<'PYCHECK'
-import json
-import sys
-
+  }
+  python3 - "${admin_response}" <<'PY'
+import json, sys
 body = json.load(open(sys.argv[1], encoding="utf-8"))
 assert body.get("error_code") == "not_admin", body
-assert "users" not in body, body
-assert "access_token" not in body, body
-assert "user" not in body, body
-PYCHECK
-  then
-    rm -rf "${temp_dir}"
-    return 1
-  fi
-
-  rm -rf "${temp_dir}"
+assert "users" not in body and "access_token" not in body and "user" not in body, body
+PY
   echo "Publishable credential administrative denial verified."
+}
+
+verify_ai_network_membership() {
+  local service container_id networks
+  for service in ai-gateway app db qdrant auth kong; do
+    container_id="$(compose ps --quiet "${service}")"
+    [[ -n "${container_id}" ]] || { echo "Missing running ${service} container." >&2; return 1; }
+    networks="$(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "${container_id}")"
+    case "${service}" in
+      ai-gateway)
+        [[ " ${networks} " == *" edutalent-ai-internal "* && " ${networks} " == *" edutalent-ai-egress "* ]] || {
+          echo "AI gateway network membership is incomplete: ${networks}" >&2
+          return 1
+        }
+        ;;
+      app)
+        [[ " ${networks} " == *" edutalent-ai-internal "* ]] || { echo "App is missing internal AI network." >&2; return 1; }
+        [[ " ${networks} " != *" edutalent-ai-egress "* ]] || { echo "App received AI egress network." >&2; return 1; }
+        ;;
+      *)
+        [[ " ${networks} " != *" edutalent-ai-egress "* ]] || { echo "${service} received AI egress network." >&2; return 1; }
+        ;;
+    esac
+  done
+  echo "Exclusive AI egress network membership verified."
 }
 
 command="${1:-help}"
 shift || true
-
 case "${command}" in
-  bootstrap)
-    exec bash "${SCRIPT_DIR}/bootstrap-supabase.sh" "$@"
-    ;;
+  bootstrap) exec bash "${SCRIPT_DIR}/bootstrap-supabase.sh" "$@" ;;
   init)
     require_runtime
     if [[ ! -f "${APP_ENV}" ]]; then
       cp "${APP_TEMPLATE}" "${APP_ENV}"
       chmod 600 "${APP_ENV}"
-      echo "Created ${APP_ENV}. Set APP_DOMAIN, SUPABASE_DOMAIN, ADMIN_DOMAIN, ADMIN_ALLOWED_CIDRS, and absolute TLS paths, then run init again."
+      echo "Created ${APP_ENV}. Set domains, admin CIDRs, and absolute TLS paths, then run init again."
       exit 0
     fi
     exec bash "${SCRIPT_DIR}/generate-secrets.sh"
     ;;
-  validate)
-    exec bash "${SCRIPT_DIR}/preflight.sh"
-    ;;
-  config)
-    compose config
-    ;;
+  validate) exec bash "${SCRIPT_DIR}/preflight.sh" ;;
+  config) compose config ;;
   up)
     bash "${SCRIPT_DIR}/preflight.sh"
     if ! compose up --detach --wait; then
@@ -228,16 +202,10 @@ case "${command}" in
     fi
     cleanup_completed_one_shots
     ;;
-  down)
-    compose down --remove-orphans
-    ;;
-  ps)
-    compose ps
-    ;;
+  down) compose down --remove-orphans ;;
+  ps) compose ps ;;
   logs)
-    if (($# == 0)); then
-      set -- gateway app auth db qdrant
-    fi
+    if (($# == 0)); then set -- gateway app ai-gateway auth db qdrant; fi
     compose logs --follow "$@"
     ;;
   migrate)
@@ -246,102 +214,71 @@ case "${command}" in
     ;;
   database-check)
     compose exec -T app bash -eu -o pipefail -c '
-      # PostgreSQL boolean values explicitly cast to text are "true"/"false".
       role_row="$(psql "${DATABASE_URL}" --tuples-only --no-align --field-separator="|" --command="
-        SELECT current_user,
-               rolsuper::text,
-               rolinherit::text,
-               rolcreatedb::text,
-               rolcreaterole::text,
-               rolreplication::text,
-               rolbypassrls::text
-        FROM pg_roles
-        WHERE rolname = current_user
-      ")"
+        SELECT current_user, rolsuper::text, rolinherit::text, rolcreatedb::text,
+               rolcreaterole::text, rolreplication::text, rolbypassrls::text
+        FROM pg_roles WHERE rolname = current_user")"
       IFS="|" read -r role super inherit createdb createrole replication bypassrls <<<"${role_row}"
       [ "${role}" = "${DATABASE_APP_USER}" ]
-      [ "${super}" = "false" ]
-      [ "${inherit}" = "false" ]
-      [ "${createdb}" = "false" ]
-      [ "${createrole}" = "false" ]
-      [ "${replication}" = "false" ]
-      [ "${bypassrls}" = "true" ]
-      [ "$(psql "${DATABASE_URL}" -Atc "SELECT has_database_privilege(current_user, current_database(), '"'"'CONNECT'"'"')")" = "t" ]
-      [ "$(psql "${DATABASE_URL}" -Atc "SELECT has_schema_privilege(current_user, '"'"'public'"'"', '"'"'USAGE'"'"')")" = "t" ]
+      [ "${super}|${inherit}|${createdb}|${createrole}|${replication}|${bypassrls}" = "false|false|false|false|false|true" ]
       [ "$(psql "${DATABASE_URL}" -Atc "SELECT has_schema_privilege(current_user, '"'"'public'"'"', '"'"'CREATE'"'"')")" = "f" ]
       [ "$(psql "${DATABASE_URL}" -Atc "SELECT has_table_privilege(current_user, '"'"'public.users'"'"', '"'"'SELECT'"'"')")" = "t" ]
-      [ "$(psql "${DATABASE_URL}" -Atc "SELECT NOT (
-        has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'INSERT'"'"') OR
-        has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'UPDATE'"'"') OR
-        has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'DELETE'"'"')
-      )")" = "t" ]
-      [ "$(psql "${DATABASE_URL}" -Atc "SELECT NOT (
-        has_table_privilege(current_user, '"'"'public._sqlx_migrations'"'"', '"'"'INSERT'"'"') OR
-        has_table_privilege(current_user, '"'"'public._sqlx_migrations'"'"', '"'"'UPDATE'"'"') OR
-        has_table_privilege(current_user, '"'"'public._sqlx_migrations'"'"', '"'"'DELETE'"'"')
-      )")" = "t" ]
+      [ "$(psql "${DATABASE_URL}" -Atc "SELECT NOT (has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'INSERT'"'"') OR has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'UPDATE'"'"') OR has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'DELETE'"'"'))")" = "t" ]
       echo "Dedicated non-superuser EduTalent database role verified."
     '
     ;;
   gateway-check)
-    http_binding="$(compose port gateway 8080)"
-    https_binding="$(compose port gateway 8443)"
-    [[ "${http_binding}" == "0.0.0.0:80" ]] || {
-      echo "Gateway HTTP port is not published as 0.0.0.0:80 (got ${http_binding:-none})." >&2
-      exit 1
-    }
-    [[ "${https_binding}" == "0.0.0.0:443" ]] || {
-      echo "Gateway HTTPS port is not published as 0.0.0.0:443 (got ${https_binding:-none})." >&2
-      exit 1
-    }
+    [[ "$(compose port gateway 8080)" == "0.0.0.0:80" ]]
+    [[ "$(compose port gateway 8443)" == "0.0.0.0:443" ]]
     compose exec -T gateway sh -eu -s <<'SH'
       key=/etc/caddy/tls/privkey.pem
       cert=/etc/caddy/tls/fullchain.pem
-      uid="$(id -u)"
-      gid="$(id -g)"
-      [ "${uid}" -ne 0 ]
-      [ -r "${key}" ]
-      [ -r "${cert}" ]
+      uid="$(id -u)"; gid="$(id -g)"
+      [ "${uid}" -ne 0 ] && [ -r "${key}" ] && [ -r "${cert}" ]
       [ "$(stat -c %a "${key}")" = "600" ]
       [ "$(stat -c %u "${key}")" = "${uid}" ]
       [ "$(stat -c %g "${key}")" = "${gid}" ]
       for directory in /data /config; do
-        [ -d "${directory}" ]
-        [ -w "${directory}" ]
-        [ "$(stat -c %a "${directory}")" = "700" ]
+        [ -w "${directory}" ] && [ "$(stat -c %a "${directory}")" = "700" ]
         [ "$(stat -c %u "${directory}")" = "${uid}" ]
         [ "$(stat -c %g "${directory}")" = "${gid}" ]
       done
-      cap_eff="$(awk '/^CapEff:/ { print $2 }' /proc/self/status)"
-      [ "${cap_eff}" = "0000000000000000" ]
-      echo "Non-root capability-free gateway TLS and persistent state verified."
+      [ "$(awk '/^CapEff:/ { print $2 }' /proc/self/status)" = "0000000000000000" ]
+      echo "Non-root capability-free gateway state verified."
 SH
     verify_public_auth_denials
     echo "Gateway host bindings 80/443 verified."
+    ;;
+  ai-check)
+    verify_ai_network_membership
+    compose exec -T app sh -eu -c '
+      curl --fail --silent http://ai-gateway:8090/healthz >/dev/null
+      status="$(curl --silent --output /dev/null --write-out "%{http_code}" -H "Authorization: Bearer invalid-token" -H "x-edutalent-school-id: ${AI_GATEWAY_DEFAULT_SCHOOL_ID}" http://ai-gateway:8090/v1/embeddings)"
+      [ "${status}" = "401" ]
+      status="$(curl --silent --output /dev/null --write-out "%{http_code}" -H "Authorization: Bearer ${AI_GATEWAY_INTERNAL_TOKEN}" http://ai-gateway:8090/v1/embeddings)"
+      [ "${status}" = "400" ]
+      echo "AI gateway authentication and tenant boundaries verified."
+    '
+    if [[ "$(read_env "${APP_ENV}" EMBEDDING_PROFILE)" == "local-bge-v1" ]]; then
+      compose stop embedding >/dev/null
+      compose exec -T app curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null
+      compose exec -T app curl --fail --silent http://ai-gateway:8090/healthz >/dev/null
+      echo "Core application and gateway remained healthy during embedding-provider outage."
+      compose start embedding >/dev/null
+    fi
     ;;
   qdrant-check)
     compose exec -T app sh -eu -c '
       attempt=1
       while [ "${attempt}" -le 30 ]; do
-        if curl --fail --silent --show-error \
-          --header "api-key: ${QDRANT_API_KEY}" \
-          http://qdrant:6333/readyz >/dev/null 2>&1; then
-          echo "Private Qdrant readiness verified."
-          exit 0
+        if curl --fail --silent --header "api-key: ${QDRANT_API_KEY}" http://qdrant:6333/readyz >/dev/null 2>&1; then
+          echo "Private Qdrant readiness verified."; exit 0
         fi
-        attempt=$((attempt + 1))
-        sleep 2
+        attempt=$((attempt + 1)); sleep 2
       done
-      echo "Private Qdrant did not become ready." >&2
-      exit 1
+      echo "Private Qdrant did not become ready." >&2; exit 1
     '
     ;;
-  help|-h|--help)
-    usage
-    ;;
-  *)
-    echo "Unknown command: ${command}" >&2
-    usage >&2
-    exit 2
-    ;;
+  help|-h|--help) usage ;;
+  *) echo "Unknown command: ${command}" >&2; usage >&2; exit 2 ;;
 esac

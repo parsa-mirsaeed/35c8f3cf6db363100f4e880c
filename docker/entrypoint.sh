@@ -31,6 +31,11 @@ case "${1:-server}" in
     configure-database-role)
         configure_database_role
         ;;
+    ai-gateway)
+        : "${AI_GATEWAY_INTERNAL_TOKEN:?AI_GATEWAY_INTERNAL_TOKEN must be set}"
+        cd /opt/edutalent
+        exec ./ai_gateway
+        ;;
     server)
         : "${DATABASE_URL:?DATABASE_URL must be set}"
         if [[ "${RUN_MIGRATIONS:-true}" == "true" ]]; then

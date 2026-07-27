@@ -1,0 +1,290 @@
+name: Apply final controlled AI review fixes
+
+on:
+  push:
+    branches:
+      - feature/controlled-external-ai
+    paths:
+      - .github/workflows/apply-final-review-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: [self-hosted, Linux, X64, edutalent-ci]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/controlled-external-ai
+          fetch-depth: 0
+
+      - name: Apply compatibility, startup, and streaming fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              source = file.read_text(encoding="utf-8")
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one match in {path}, found {count}: {old[:80]!r}")
+              file.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+          old_collection = "edutalent_local_bge_v1"
+          legacy_collection = "edutalent_materials_local_v1"
+          matches = subprocess.check_output(
+              ["git", "grep", "-l", old_collection], text=True
+          ).splitlines()
+          if not matches:
+              raise SystemExit("expected local collection references")
+          for path in matches:
+              file = Path(path)
+              source = file.read_text(encoding="utf-8")
+              file.write_text(
+                  source.replace(old_collection, legacy_collection),
+                  encoding="utf-8",
+              )
+
+          replace_once(
+              "packages/api/src/services/knowledge_vector_store_service.rs",
+              '''        let filter = Filter::must(vec![
+                      Condition::matches("knowledge_asset_id", asset_id.to_string()),
+                      Condition::matches("embedding_profile", self.profile.id.to_string()),
+                  ]);''',
+              '''        let filter = Filter::must(vec![Condition::matches(
+                      "knowledge_asset_id",
+                      asset_id.to_string(),
+                  )]);''',
+          )
+          replace_once(
+              "packages/api/src/services/knowledge_vector_store_service.rs",
+              '''            must: vec![
+                          Condition::matches("school_id", school_id.to_string()),
+                          Condition::matches("published", true),
+                          Condition::matches("embedding_profile", self.profile.id.to_string()),
+                      ],''',
+              '''            must: vec![
+                          Condition::matches("school_id", school_id.to_string()),
+                          Condition::matches("published", true),
+                      ],''',
+          )
+          replace_once(
+              "packages/api/src/services/knowledge_vector_store_service.rs",
+              '''                    .points(Filter::must(vec![
+                                  Condition::matches("knowledge_asset_id", asset_id.to_string()),
+                                  Condition::matches("embedding_profile", self.profile.id.to_string()),
+                              ])),''',
+              '''                    .points(Filter::must(vec![Condition::matches(
+                                  "knowledge_asset_id",
+                                  asset_id.to_string(),
+                              )])),''',
+          )
+          replace_once(
+              "packages/api/src/services/vector_store_service.rs",
+              '''        let mut required = vec![Condition::matches(
+                      "embedding_profile",
+                      self.profile.id.to_string(),
+                  )];''',
+              '''        // Collection and dimension are the immutable profile boundary. Do not
+                  // require the new payload field here: points written before the gateway
+                  // migration remain valid because this local model and collection are unchanged.
+                  let mut required = Vec::new();''',
+          )
+
+          replace_once(
+              "packages/api/src/services/embedding_profile.rs",
+              '''    #[test]
+                  fn matching_overrides_are_accepted() {''',
+              '''    #[test]
+                  fn local_profile_preserves_the_existing_production_collection() {
+                      assert_eq!(LOCAL_BGE_V1.collection, "edutalent_materials_local_v1");
+                      assert_ne!(LOCAL_BGE_V1.collection, OPENAI_V1.collection);
+                  }
+
+                  #[test]
+                  fn matching_overrides_are_accepted() {''',
+          )
+
+          replace_once(
+              "README.md",
+              '''Changing profiles requires a distinct collection and complete re-index; automatic fallback between vector spaces is forbidden.''',
+              '''The unchanged local BGE profile deliberately retains the existing production collection name `edutalent_materials_local_v1`, so upgrades keep previously indexed local vectors available. The OpenAI profile uses its own collection. Changing either model or dimensions still requires a distinct collection and complete re-index; automatic fallback between vector spaces is forbidden.''',
+          )
+          replace_once(
+              "docs/adr/0002-controlled-external-ai.md",
+              '''A profile change requires a distinct collection and complete re-index. Automatic fallback between profiles is forbidden because it would mix vector spaces. Qdrant writes and searches validate the active collection and dimensions, and governed knowledge queries retain PostgreSQL authorization before exact Qdrant asset filtering.''',
+              '''The unchanged local BGE profile retains the existing production collection name `edutalent_materials_local_v1` so an upgrade does not hide previously indexed vectors. Its collection and 384-dimensional contract remain the profile boundary even for legacy points that predate the `embedding_profile` payload field. A model or dimension change requires a distinct collection and complete re-index. Automatic fallback between profiles is forbidden, and governed knowledge queries retain PostgreSQL authorization before exact Qdrant asset filtering.''',
+          )
+
+          replace_once(
+              "edutalent",
+              '''        exec docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" --profile dev up --build dev''',
+              '''        exec docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" --profile dev up --build ai-gateway dev''',
+          )
+          file = Path("edutalent")
+          source = file.read_text(encoding="utf-8")
+          old = '''        compose_dev --profile app up --build --detach app'''
+          if source.count(old) != 2:
+              raise SystemExit(f"expected two app startup commands, found {source.count(old)}")
+          source = source.replace(
+              old,
+              '''        compose_dev --profile app up --build --detach ai-gateway app''',
+          )
+          file.write_text(source, encoding="utf-8")
+          replace_once(
+              "edutalent",
+              '''        grep -Fq 'production-ai-check' edutalent''',
+              '''        grep -Fq 'production-ai-check' edutalent
+                  grep -Fq -- '--profile dev up --build ai-gateway dev' edutalent
+                  grep -Fq -- '--profile app up --build --detach ai-gateway app' edutalent''',
+          )
+
+          replace_once(
+              "packages/api/src/ai_gateway_runtime.rs",
+              '''async fn bounded_body(
+                  response: reqwest::Response,
+                  maximum: usize,
+              ) -> Result<Vec<u8>, ProviderFailure> {
+                  if response
+                      .content_length()
+                      .is_some_and(|length| length > maximum as u64)
+                  {
+                      return Err(ProviderFailure::ResponseTooLarge);
+                  }
+                  let body = response
+                      .bytes()
+                      .await
+                      .map_err(|_| ProviderFailure::InvalidResponse)?;
+                  if body.len() > maximum {
+                      return Err(ProviderFailure::ResponseTooLarge);
+                  }
+                  Ok(body.to_vec())
+              }''',
+              '''async fn bounded_body(
+                  mut response: reqwest::Response,
+                  maximum: usize,
+              ) -> Result<Vec<u8>, ProviderFailure> {
+                  if response
+                      .content_length()
+                      .is_some_and(|length| length > maximum as u64)
+                  {
+                      return Err(ProviderFailure::ResponseTooLarge);
+                  }
+
+                  let initial_capacity = response
+                      .content_length()
+                      .and_then(|length| usize::try_from(length).ok())
+                      .unwrap_or_default()
+                      .min(maximum);
+                  let mut body = Vec::with_capacity(initial_capacity);
+                  while let Some(chunk) = response
+                      .chunk()
+                      .await
+                      .map_err(|_| ProviderFailure::InvalidResponse)?
+                  {
+                      let next_length = body
+                          .len()
+                          .checked_add(chunk.len())
+                          .ok_or(ProviderFailure::ResponseTooLarge)?;
+                      if next_length > maximum {
+                          return Err(ProviderFailure::ResponseTooLarge);
+                      }
+                      body.extend_from_slice(&chunk);
+                  }
+                  Ok(body)
+              }''',
+          )
+          replace_once(
+              "packages/api/src/ai_gateway_runtime.rs",
+              '''    use std::sync::atomic::{AtomicUsize, Ordering};''',
+              '''    use std::sync::atomic::{AtomicUsize, Ordering};
+                  use tokio::io::{AsyncReadExt, AsyncWriteExt};''',
+          )
+          replace_once(
+              "packages/api/src/ai_gateway_runtime.rs",
+              '''    async fn spawn_embedding_mock(''',
+              '''    async fn spawn_chunked_response(chunks: Vec<&'static [u8]>) -> Url {
+                      let listener = TcpListener::bind("127.0.0.1:0")
+                          .await
+                          .expect("bind chunked response");
+                      let address = listener.local_addr().expect("chunked response address");
+                      tokio::spawn(async move {
+                          let (mut socket, _) = listener.accept().await.expect("accept request");
+                          let mut request = [0_u8; 1_024];
+                          let _ = socket.read(&mut request).await;
+                          socket
+                              .write_all(
+                                  b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                              )
+                              .await
+                              .expect("write response headers");
+                          for chunk in chunks {
+                              socket
+                                  .write_all(format!("{:X}\r\n", chunk.len()).as_bytes())
+                                  .await
+                                  .expect("write chunk size");
+                              socket.write_all(chunk).await.expect("write chunk");
+                              socket.write_all(b"\r\n").await.expect("finish chunk");
+                          }
+                          socket
+                              .write_all(b"0\r\n\r\n")
+                              .await
+                              .expect("finish response");
+                      });
+                      Url::parse(&format!("http://{address}/")).expect("chunked response URL")
+                  }
+
+                  #[tokio::test]
+                  async fn chunked_provider_body_stops_at_the_configured_limit() {
+                      let response = reqwest::get(
+                          spawn_chunked_response(vec![b"abcd".as_slice(), b"efgh".as_slice()]).await,
+                      )
+                      .await
+                      .expect("chunked response");
+                      assert!(matches!(
+                          bounded_body(response, 7).await,
+                          Err(ProviderFailure::ResponseTooLarge)
+                      ));
+                  }
+
+                  async fn spawn_embedding_mock(''',
+          )
+          PY
+
+          cargo fmt --all
+          bash -n edutalent
+          python3 -m py_compile deploy/production/validate-rendered-compose.py
+          git diff --check
+          ! git grep -n 'edutalent_local_bge_v1'
+          grep -Fq 'edutalent_materials_local_v1' packages/api/src/services/embedding_profile.rs
+          grep -Fq 'response.chunk()' packages/api/src/ai_gateway_runtime.rs
+
+      - name: Commit final review fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            .env.example \
+            README.md \
+            compose.release.yaml \
+            compose.yaml \
+            deploy/production/.env.edutalent.example \
+            deploy/production/compose.production.yaml \
+            deploy/production/preflight.sh \
+            deploy/production/validate-rendered-compose.py \
+            docs/adr/0002-controlled-external-ai.md \
+            edutalent \
+            packages/api/src/ai_gateway_runtime.rs \
+            packages/api/src/services/embedding_profile.rs \
+            packages/api/src/services/knowledge_vector_store_service.rs \
+            packages/api/src/services/vector_store_service.rs
+          git commit -m "fix(ai): close final review gaps"
+          git push origin HEAD:feature/controlled-external-ai

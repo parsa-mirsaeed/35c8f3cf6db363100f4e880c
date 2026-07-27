@@ -109,33 +109,35 @@ startup_diagnostics() {
     -e 's#[[:alnum:]_~-]{32,}#[REDACTED]#g' >&2 || true
 }
 
-verify_public_signup_denial() {
+verify_public_auth_denials() {
   local supabase_domain publishable_key probe_email probe_password payload
-  local response_file status
+  local temp_dir signup_response signup_status admin_response admin_status
 
   supabase_domain="$(read_env "${APP_ENV}" SUPABASE_DOMAIN)"
   publishable_key="$(read_env "${SUPABASE_ENV}" SUPABASE_PUBLISHABLE_KEY)"
 
   [[ -n "${supabase_domain}" && -n "${publishable_key}" ]] || {
-    echo "Public-signup verification requires the Supabase domain and publishable key." >&2
+    echo "Public Auth verification requires the Supabase domain and publishable key." >&2
     return 1
   }
   command -v curl >/dev/null 2>&1 || {
-    echo "curl is required for public-signup verification." >&2
+    echo "curl is required for public Auth verification." >&2
     return 1
   }
   command -v python3 >/dev/null 2>&1 || {
-    echo "python3 is required for public-signup verification." >&2
+    echo "python3 is required for public Auth verification." >&2
     return 1
   }
 
-  response_file="$(mktemp)"
-  probe_email="public-signup-probe@${supabase_domain}"
-  probe_password='Ci-PublicSignupDenied-Aa1!'
+  temp_dir="$(mktemp -d)"
+  signup_response="${temp_dir}/signup.json"
+  admin_response="${temp_dir}/admin.json"
+  probe_email="public-auth-probe@${supabase_domain}"
+  probe_password='Ci-PublicAuthDenied-Aa1!'
   payload="$(printf '{\"email\":\"%s\",\"password\":\"%s\"}' "${probe_email}" "${probe_password}")"
 
-  status="$(curl --silent --show-error --insecure \
-    --output "${response_file}" --write-out '%{http_code}' \
+  signup_status="$(curl --silent --show-error --insecure \
+    --output "${signup_response}" --write-out '%{http_code}' \
     --noproxy '*' \
     --resolve "${supabase_domain}:443:127.0.0.1" \
     -H "apikey: ${publishable_key}" \
@@ -143,12 +145,12 @@ verify_public_signup_denial() {
     --data "${payload}" \
     "https://${supabase_domain}/auth/v1/signup")"
 
-  if [[ "${status}" != "422" ]]; then
-    rm -f "${response_file}"
-    echo "Public signup returned ${status}, expected 422 signup_disabled." >&2
+  if [[ "${signup_status}" != "422" ]]; then
+    rm -rf "${temp_dir}"
+    echo "Public signup returned ${signup_status}, expected 422 signup_disabled." >&2
     return 1
   fi
-  if ! python3 - "${response_file}" <<'PYCHECK'
+  if ! python3 - "${signup_response}" <<'PYCHECK'
 import json
 import sys
 
@@ -158,12 +160,40 @@ assert "access_token" not in body, body
 assert "user" not in body, body
 PYCHECK
   then
-    rm -f "${response_file}"
+    rm -rf "${temp_dir}"
+    return 1
+  fi
+  echo "Public email signup denial verified."
+
+  admin_status="$(curl --silent --show-error --insecure \
+    --output "${admin_response}" --write-out '%{http_code}' \
+    --noproxy '*' \
+    --resolve "${supabase_domain}:443:127.0.0.1" \
+    -H "apikey: ${publishable_key}" \
+    "https://${supabase_domain}/auth/v1/admin/users?per_page=1")"
+
+  if [[ "${admin_status}" != "403" ]]; then
+    rm -rf "${temp_dir}"
+    echo "Publishable-key administrator request returned ${admin_status}, expected 403 not_admin." >&2
+    return 1
+  fi
+  if ! python3 - "${admin_response}" <<'PYCHECK'
+import json
+import sys
+
+body = json.load(open(sys.argv[1], encoding="utf-8"))
+assert body.get("error_code") == "not_admin", body
+assert "users" not in body, body
+assert "access_token" not in body, body
+assert "user" not in body, body
+PYCHECK
+  then
+    rm -rf "${temp_dir}"
     return 1
   fi
 
-  rm -f "${response_file}"
-  echo "Public email signup denial verified."
+  rm -rf "${temp_dir}"
+  echo "Publishable credential administrative denial verified."
 }
 
 command="${1:-help}"
@@ -286,7 +316,7 @@ case "${command}" in
       [ "${cap_eff}" = "0000000000000000" ]
       echo "Non-root capability-free gateway TLS and persistent state verified."
 SH
-    verify_public_signup_denial
+    verify_public_auth_denials
     echo "Gateway host bindings 80/443 verified."
     ;;
   qdrant-check)

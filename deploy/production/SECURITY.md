@@ -12,7 +12,8 @@ Before exposing a deployment:
   ownership and permissions;
 - disable password login for SSH where operationally possible;
 - run `production-gateway-check` after startup to prove host bindings, non-root
-  capability-free gateway state, and live rejection of public email signup;
+  capability-free gateway state, public signup rejection, and denial of
+  publishable-key administrator access;
 - monitor certificate expiry, disk capacity, database health, queue depth, and
   authentication anomalies;
 - establish encrypted off-host backups and prove restoration before launch;

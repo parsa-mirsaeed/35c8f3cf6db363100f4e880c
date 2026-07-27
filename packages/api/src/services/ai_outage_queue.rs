@@ -24,35 +24,32 @@ pub async fn requeue_provider_outage(
         .execute(&mut *tx)
         .await?;
 
-    let active = sqlx::query_scalar::<_, bool>(
+    let active = sqlx::query_scalar::<_, i32>(
         r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM ingestion_jobs job
-            JOIN knowledge_assets asset ON asset.id = job.asset_id
-            WHERE job.id = $1
-              AND job.asset_id = $2
-              AND job.status = 'running'
-              AND asset.status = 'embedding_pending'
-            FOR UPDATE OF job, asset
-        )
+        SELECT 1
+        FROM ingestion_jobs job
+        JOIN knowledge_assets asset ON asset.id = job.asset_id
+        WHERE job.id = $1
+          AND job.asset_id = $2
+          AND job.status = 'running'
+          AND asset.status = 'embedding_pending'
+        FOR UPDATE OF job, asset
         "#,
     )
     .bind(job.id)
     .bind(job.asset_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    .fetch_optional(&mut *tx)
+    .await?
+    .is_some();
 
     if !active {
         tx.commit().await?;
         return Ok(EmbeddingFailureDisposition::IgnoredInactive);
     }
 
-    let backoff_seconds = provider_backoff_seconds(
-        job.attempts,
-        requested_retry_after_seconds,
-    );
-    sqlx::query(
+    let backoff_seconds =
+        provider_backoff_seconds(job.attempts, requested_retry_after_seconds);
+    let updated = sqlx::query(
         r#"
         UPDATE ingestion_jobs
         SET status = 'queued',
@@ -69,6 +66,11 @@ pub async fn requeue_provider_outage(
     .bind(sanitized_outage_code(error_code))
     .execute(&mut *tx)
     .await?;
+
+    if updated.rows_affected() != 1 {
+        tx.rollback().await?;
+        return Ok(EmbeddingFailureDisposition::IgnoredInactive);
+    }
 
     tx.commit().await?;
     Ok(EmbeddingFailureDisposition::Requeued)
@@ -104,7 +106,13 @@ mod tests {
 
     #[test]
     fn outage_errors_are_reduced_to_non_sensitive_codes() {
-        assert_eq!(sanitized_outage_code("provider_rate_limited"), "provider_rate_limited");
-        assert_eq!(sanitized_outage_code("secret provider body"), "provider_temporarily_unavailable");
+        assert_eq!(
+            sanitized_outage_code("provider_rate_limited"),
+            "provider_rate_limited"
+        );
+        assert_eq!(
+            sanitized_outage_code("secret provider body"),
+            "provider_temporarily_unavailable"
+        );
     }
 }

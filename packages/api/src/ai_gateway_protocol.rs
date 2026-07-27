@@ -64,6 +64,7 @@ pub struct GatewayResponseFormat {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GatewayChatResponse {
+    pub model: String,
     pub choices: Vec<GatewayChatChoice>,
     #[serde(default)]
     pub usage: Option<GatewayUsage>,

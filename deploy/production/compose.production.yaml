@@ -218,6 +218,12 @@ services:
       AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-4096}
     command: ["ai-gateway"]
     expose: ["8090"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8090/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 6
     networks: [ai_internal, ai_egress]
     cap_drop: [ALL]
     read_only: true

@@ -21,7 +21,10 @@ pub async fn create(data: serde_json::Value) -> Result<serde_json::Value, Server
 }
 
 #[server(endpoint = "class_sections/update")]
-pub async fn update(id: String, data: serde_json::Value) -> Result<serde_json::Value, ServerFnError> {
+pub async fn update(
+    id: String,
+    data: serde_json::Value,
+) -> Result<serde_json::Value, ServerFnError> {
     // TODO: Implement update logic
     Ok(serde_json::json!({"status": "updated"}))
 }

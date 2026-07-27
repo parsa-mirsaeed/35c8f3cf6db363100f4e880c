@@ -437,7 +437,7 @@ def main() -> None:
             "offline",
             "BAAI/bge-small-en-v1.5",
             "384",
-            "edutalent_local_bge_v1",
+            "edutalent_materials_local_v1",
         ),
         "openai-v1": (
             "connected",

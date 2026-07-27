@@ -1,9 +1,4 @@
-use axum::{
-    extract::Request,
-    http::StatusCode,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
 use std::time::Instant;
 use tracing::{error, info, warn};
 
@@ -19,7 +14,9 @@ pub async fn request_logging_middleware(request: Request, next: Next) -> Respons
         .unwrap_or("unknown");
 
     // Get user info if available
-    let user_info = request.extensions().get::<crate::handlers::auth::AuthenticatedUser>()
+    let user_info = request
+        .extensions()
+        .get::<crate::handlers::auth::AuthenticatedUser>()
         .map(|u| format!("{} ({})", u.name, u.email))
         .unwrap_or_else(|| "anonymous".to_string());
 
@@ -68,12 +65,12 @@ pub async fn request_logging_middleware(request: Request, next: Next) -> Respons
 }
 
 /// Audit logging middleware
-pub async fn audit_logging_middleware(
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn audit_logging_middleware(request: Request, next: Next) -> Response {
     // Get user info if available
-    let user = request.extensions().get::<crate::handlers::auth::AuthenticatedUser>().cloned();
+    let user = request
+        .extensions()
+        .get::<crate::handlers::auth::AuthenticatedUser>()
+        .cloned();
     let method = request.method().clone();
     let uri = request.uri().clone();
     let ip = extract_client_ip(&request);
@@ -83,7 +80,8 @@ pub async fn audit_logging_middleware(
         .headers()
         .get("user-agent")
         .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown").to_string();
+        .unwrap_or("unknown")
+        .to_string();
 
     let response = next.run(request).await;
     let status = response.status();
@@ -126,7 +124,12 @@ fn extract_client_ip(request: &Request) -> String {
     if let Some(xff) = headers.get("x-forwarded-for") {
         if let Ok(xff_str) = xff.to_str() {
             // X-Forwarded-For can contain multiple IPs, take the first one
-            return xff_str.split(',').next().unwrap_or("unknown").trim().to_string();
+            return xff_str
+                .split(',')
+                .next()
+                .unwrap_or("unknown")
+                .trim()
+                .to_string();
         }
     }
 
@@ -146,7 +149,11 @@ fn extract_client_ip(request: &Request) -> String {
 }
 
 /// Check if operation should be audited
-fn is_sensitive_operation(method: &axum::http::Method, uri: &axum::http::Uri, status: StatusCode) -> bool {
+fn is_sensitive_operation(
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    status: StatusCode,
+) -> bool {
     // Audit all write operations (POST, PUT, DELETE, PATCH)
     if method == axum::http::Method::POST
         || method == axum::http::Method::PUT

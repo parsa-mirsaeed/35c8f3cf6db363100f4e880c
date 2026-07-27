@@ -14,7 +14,7 @@ def save(path: str, text: str) -> None:
     Path(path).write_text(text, encoding="utf-8")
 
 
-OLD_COLLECTION = "edutalent_local_bge_v1"
+OLD_COLLECTION = "edutalent_materials_local_v1"
 LEGACY_COLLECTION = "edutalent_materials_local_v1"
 collection_paths = subprocess.check_output(
     ["git", "grep", "-l", OLD_COLLECTION, "--", ":(exclude).github/workflows"],

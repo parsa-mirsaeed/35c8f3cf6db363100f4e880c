@@ -9,10 +9,9 @@ use crate::services::embedding_profile::{
     OPENAI_V1,
 };
 use qdrant_client::qdrant::{
-    vectors_config::Config, Condition, CreateCollectionBuilder,
-    CreateFieldIndexCollectionBuilder, Distance, FieldType, Filter, PointStruct,
-    SearchPointsBuilder, UpsertPointsBuilder, Value as QdrantValue, VectorParamsBuilder,
-    VectorsConfig,
+    vectors_config::Config, Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder,
+    Distance, FieldType, Filter, PointStruct, SearchPointsBuilder, UpsertPointsBuilder,
+    Value as QdrantValue, VectorParamsBuilder, VectorsConfig,
 };
 use qdrant_client::Qdrant;
 use serde::{Deserialize, Serialize};
@@ -148,11 +147,8 @@ impl QdrantService {
                     CreateCollectionBuilder::new(&self.config.collection_name).vectors_config(
                         VectorsConfig {
                             config: Some(Config::Params(
-                                VectorParamsBuilder::new(
-                                    self.config.vector_size,
-                                    Distance::Cosine,
-                                )
-                                .build(),
+                                VectorParamsBuilder::new(self.config.vector_size, Distance::Cosine)
+                                    .build(),
                             )),
                         },
                     ),
@@ -277,10 +273,9 @@ impl QdrantService {
                 self.profile.id
             )));
         }
-        let mut required = vec![Condition::matches(
-            "embedding_profile",
-            self.profile.id.to_string(),
-        )];
+        // Collection and dimensions are the immutable profile boundary. Legacy
+        // points in the unchanged local collection predate this payload field.
+        let mut required = Vec::new();
         if let Some(class_section_id) = filters.class_section_id.as_ref() {
             required.push(Condition::matches(
                 "class_section_id",
@@ -341,23 +336,18 @@ impl QdrantService {
     pub async fn delete_material(&self, material_id: &str) -> Result<(), VectorStoreError> {
         self.client
             .delete_points(
-                qdrant_client::qdrant::DeletePointsBuilder::new(
-                    &self.config.collection_name,
-                )
-                .points(Filter::must(vec![Condition::matches(
-                    "material_id",
-                    material_id.to_string(),
-                )])),
+                qdrant_client::qdrant::DeletePointsBuilder::new(&self.config.collection_name)
+                    .points(Filter::must(vec![Condition::matches(
+                        "material_id",
+                        material_id.to_string(),
+                    )])),
             )
             .await
             .map_err(|error| VectorStoreError::ClientError(error.to_string()))?;
         Ok(())
     }
 
-    pub async fn delete_by_material_id(
-        &self,
-        material_id: &str,
-    ) -> Result<(), VectorStoreError> {
+    pub async fn delete_by_material_id(&self, material_id: &str) -> Result<(), VectorStoreError> {
         self.delete_material(material_id).await
     }
 
@@ -380,9 +370,7 @@ fn profile_for_contract(
 ) -> Result<EmbeddingProfile, VectorStoreError> {
     [OPENAI_V1, LOCAL_BGE_V1]
         .into_iter()
-        .find(|profile| {
-            profile.collection == collection_name && profile.vector_size == vector_size
-        })
+        .find(|profile| profile.collection == collection_name && profile.vector_size == vector_size)
         .ok_or_else(|| {
             VectorStoreError::ProfileMismatch(format!(
                 "collection {collection_name} with dimension {vector_size} is not registered"
@@ -414,9 +402,7 @@ trait QdrantValueExt {
 impl QdrantValueExt for QdrantValue {
     fn as_str(&self) -> Option<&str> {
         match &self.kind {
-            Some(qdrant_client::qdrant::value::Kind::StringValue(value)) => {
-                Some(value.as_str())
-            }
+            Some(qdrant_client::qdrant::value::Kind::StringValue(value)) => Some(value.as_str()),
             _ => None,
         }
     }

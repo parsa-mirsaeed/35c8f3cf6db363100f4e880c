@@ -1,6 +1,6 @@
-use dioxus::prelude::*;
-use crate::views::role_based::components::DashboardSection;
 use crate::i18n::use_locale;
+use crate::views::role_based::components::DashboardSection;
+use dioxus::prelude::*;
 
 /// Communication section for Parent
 #[component]
@@ -195,9 +195,17 @@ pub fn MessageItem(
     unread: bool,
     child: String,
 ) -> Element {
-    let unread_class = if unread { "border-l-4 border-blue-500 bg-blue-50/50 dark:bg-blue-900/10" } else { "border-l-4 border-transparent hover:bg-gray-50 dark:hover:bg-gray-800/50" };
+    let unread_class = if unread {
+        "border-l-4 border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
+    } else {
+        "border-l-4 border-transparent hover:bg-gray-50 dark:hover:bg-gray-800/50"
+    };
     let font_weight = if unread { "font-bold" } else { "font-semibold" };
-    let text_color = if unread { "text-gray-900 dark:text-white" } else { "text-gray-700 dark:text-gray-300" };
+    let text_color = if unread {
+        "text-gray-900 dark:text-white"
+    } else {
+        "text-gray-700 dark:text-gray-300"
+    };
     let locale = use_locale();
 
     rsx! {

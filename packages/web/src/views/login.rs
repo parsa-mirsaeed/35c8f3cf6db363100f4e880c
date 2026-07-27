@@ -1,10 +1,10 @@
+use crate::application::AppAuthService;
+use crate::application::AuthHooks;
+use crate::domain::AuthCredentials;
+use crate::i18n::{use_locale, LanguageSwitcher};
+use crate::Route;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
-use crate::Route;
-use crate::application::AppAuthService;
-use crate::domain::AuthCredentials;
-use crate::application::AuthHooks;
-use crate::i18n::{use_locale, LanguageSwitcher};
 
 #[component]
 pub fn LoginPage() -> Element {
@@ -27,7 +27,7 @@ pub fn LoginPage() -> Element {
 
     // Get locale context for translations
     let locale_ctx = use_locale();
-    
+
     // Pre-compute translations to avoid nested quotes in RSX
     let t_welcome_back = locale_ctx.t("auth.welcome_back");
     let t_login_subtitle = locale_ctx.t("auth.login_subtitle");
@@ -50,7 +50,7 @@ pub fn LoginPage() -> Element {
     rsx! {
         div {
             class: "min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-800 p-3 sm:p-4 relative overflow-hidden",
-            
+
             // Background decorative blobs - hidden on mobile for performance
             IridescenceBackground {}
             // Decorative blobs - hidden on small mobile for performance
@@ -67,15 +67,15 @@ pub fn LoginPage() -> Element {
             // Main Card
             div {
                 class: "relative w-full max-w-md",
-                
+
                 // Glass effect card - responsive padding
                 div {
                     class: "bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl shadow-xl border border-white/20 dark:border-gray-700 p-5 sm:p-8 transform transition-all hover:scale-[1.01] duration-300",
-                    
+
                     // Logo & Header
                     div {
                         class: "text-center mb-8",
-                        
+
                         // Language Switcher in top-right corner
                         div {
                             class: "absolute top-4 right-4",
@@ -83,7 +83,7 @@ pub fn LoginPage() -> Element {
                                 class: "text-gray-600 dark:text-gray-300".to_string(),
                             }
                         }
-                        
+
                         div {
                             class: "w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 bg-gradient-to-br from-primary to-purple-600 rounded-2xl shadow-lg shadow-primary/30 flex items-center justify-center transform rotate-3 hover:rotate-6 transition-all duration-300",
                             span {
@@ -110,7 +110,7 @@ pub fn LoginPage() -> Element {
                         onsubmit: move |evt| {
                             // Prevent native form submission when Dioxus is ready
                             evt.prevent_default();
-                            
+
                             let mut login_result = login_result;
                             let mut is_loading = is_loading;
 
@@ -178,7 +178,7 @@ pub fn LoginPage() -> Element {
                                 }
                             });
                         },
-                        
+
                         // Email Field
                         div {
                             class: "space-y-2",
@@ -292,8 +292,6 @@ pub fn LoginPage() -> Element {
     }
 }
 
-
-
 /// Iridescence Background Component
 #[component]
 fn IridescenceBackground() -> Element {
@@ -306,10 +304,10 @@ fn IridescenceBackground() -> Element {
       amplitude={0.1}
       speed={1.0}
     */
-    
+
     // Using a unique ID for the container to easily select it from JS
     // In Dioxus we can use `use_eval` to run JS
-    
+
     use_effect(move || {
         let script = r#"
             // Inline Iridescence Logic to avoid asset loading issues
@@ -468,7 +466,7 @@ fn IridescenceBackground() -> Element {
                 }
             })();
         "#;
-        
+
         // Use document::eval to run the script
         // We spawn it because it might be async or we just want to fire and forget in a clean context
         // document::eval returns a value that we can ignore or use to communicate
@@ -480,8 +478,8 @@ fn IridescenceBackground() -> Element {
     rsx! {
         div {
             id: "iridescence-container",
-            class: "absolute inset-0 z-0 pointer-events-none", // Ensure it doesn't block clicks from form, but mousemove might need pointer-events-auto on parent if not careful? 
-                                                               // Actually, canvas needs to receive events? 
+            class: "absolute inset-0 z-0 pointer-events-none", // Ensure it doesn't block clicks from form, but mousemove might need pointer-events-auto on parent if not careful?
+                                                               // Actually, canvas needs to receive events?
                                                                // The JS listener is on 'window' for mousemove in my implementation, so pointer-events-none is fine for the container.
             style: "width: 100%; height: 100%;",
         }
@@ -493,18 +491,18 @@ fn IridescenceBackground() -> Element {
 fn ForgotPasswordModal(on_close: EventHandler) -> Element {
     let mut reset_email = use_signal(|| String::new());
     let mut submit_status = use_signal(|| None::<String>);
-    
+
     rsx! {
         // Modal backdrop
         div {
             class: "fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in",
             onclick: move |_| on_close.call(()),
-            
+
             // Modal content
             div {
                 class: "bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-md mx-4 p-6 animate-scale-in",
                 onclick: move |e| e.stop_propagation(),
-                
+
                 // Header
                 div {
                     class: "flex items-center justify-between mb-6",
@@ -515,16 +513,16 @@ fn ForgotPasswordModal(on_close: EventHandler) -> Element {
                         span { class: "material-icons-outlined", "close" }
                     }
                 }
-                
+
                 // Content
                 div {
                     class: "space-y-6",
-                    
-                    p { 
+
+                    p {
                         class: "text-gray-600 dark:text-gray-400 text-sm",
                         "Enter your email address and we'll send you instructions to reset your password."
                     }
-                    
+
                     // Email input
                     div {
                         class: "space-y-2",
@@ -547,7 +545,7 @@ fn ForgotPasswordModal(on_close: EventHandler) -> Element {
                             }
                         }
                     }
-                    
+
                     // Status message
                     if let Some(status) = submit_status() {
                         div {
@@ -555,19 +553,19 @@ fn ForgotPasswordModal(on_close: EventHandler) -> Element {
                             "{status}"
                         }
                     }
-                    
+
                     // Coming soon notice
                     div {
                         class: "p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800/50",
                         div {
                             class: "flex items-start gap-2",
                             span { class: "material-icons-outlined text-blue-600 dark:text-blue-400 text-base", "info" }
-                            p { class: "text-sm text-blue-700 dark:text-blue-300", 
-                                "Password reset via email coming soon. Please contact your administrator for assistance." 
+                            p { class: "text-sm text-blue-700 dark:text-blue-300",
+                                "Password reset via email coming soon. Please contact your administrator for assistance."
                             }
                         }
                     }
-                    
+
                     // Actions
                     div {
                         class: "flex gap-3",

@@ -1,4 +1,4 @@
-use validator::{ValidationError, Validate};
+use validator::{Validate, ValidationError};
 
 /// Validate email format
 pub fn validate_email(email: &str) -> Result<(), ValidationError> {
@@ -56,7 +56,9 @@ pub fn validate_role_id(role_id: &crate::domain::RoleId) -> Result<(), Validatio
 }
 
 /// Validate optional RoleId (wrapper around uuid)
-pub fn validate_optional_role_id(role_id: &Option<crate::domain::RoleId>) -> Result<(), ValidationError> {
+pub fn validate_optional_role_id(
+    role_id: &Option<crate::domain::RoleId>,
+) -> Result<(), ValidationError> {
     if let Some(ref id) = role_id {
         validate_uuid(&id.to_string())
     } else {
@@ -75,7 +77,9 @@ pub fn validate_school_id(school_id: &crate::domain::SchoolId) -> Result<(), Val
 }
 
 /// Validate ClassSectionId (wrapper around uuid)
-pub fn validate_class_section_id(class_section_id: &crate::domain::ClassSectionId) -> Result<(), ValidationError> {
+pub fn validate_class_section_id(
+    class_section_id: &crate::domain::ClassSectionId,
+) -> Result<(), ValidationError> {
     validate_uuid(&class_section_id.to_string())
 }
 
@@ -102,19 +106,22 @@ pub fn validate_boolean(value: &bool) -> Result<(), ValidationError> {
 
 /// Validate request payload using validator
 pub fn validate_request<T: Validate>(payload: &T) -> Result<(), String> {
-    payload.validate()
-        .map_err(|errors| {
-            errors
-                .field_errors()
-                .iter()
-                .flat_map(|(field, errors)| {
-                    errors.iter().map(move |error| {
-                        format!("{}: {}", field, error.message.as_ref().unwrap_or(&"Invalid value".into()))
-                    })
+    payload.validate().map_err(|errors| {
+        errors
+            .field_errors()
+            .iter()
+            .flat_map(|(field, errors)| {
+                errors.iter().map(move |error| {
+                    format!(
+                        "{}: {}",
+                        field,
+                        error.message.as_ref().unwrap_or(&"Invalid value".into())
+                    )
                 })
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
 }
 
 // ===== Additional Validators for Database Schema =====
@@ -130,20 +137,25 @@ pub fn validate_teacher_id(teacher_id: &crate::domain::TeacherId) -> Result<(), 
 }
 
 /// Validate AssignmentId (wrapper around uuid)
-pub fn validate_assignment_id(assignment_id: &crate::domain::AssignmentId) -> Result<(), ValidationError> {
+pub fn validate_assignment_id(
+    assignment_id: &crate::domain::AssignmentId,
+) -> Result<(), ValidationError> {
     validate_uuid(&assignment_id.to_string())
 }
 
 /// Validate SubmissionId (wrapper around uuid)
-pub fn validate_submission_id(submission_id: &crate::domain::SubmissionId) -> Result<(), ValidationError> {
+pub fn validate_submission_id(
+    submission_id: &crate::domain::SubmissionId,
+) -> Result<(), ValidationError> {
     validate_uuid(&submission_id.to_string())
 }
 
 /// Validate EnrollmentId (wrapper around uuid)
-pub fn validate_enrollment_id(enrollment_id: &crate::domain::EnrollmentId) -> Result<(), ValidationError> {
+pub fn validate_enrollment_id(
+    enrollment_id: &crate::domain::EnrollmentId,
+) -> Result<(), ValidationError> {
     validate_uuid(&enrollment_id.to_string())
 }
-
 
 /// Validate ReportId (wrapper around uuid)
 pub fn validate_report_id(report_id: &crate::domain::ReportId) -> Result<(), ValidationError> {
@@ -156,22 +168,30 @@ pub fn validate_profile_id(profile_id: &crate::domain::ProfileId) -> Result<(), 
 }
 
 /// Validate ProfileChangeRequestId (wrapper around uuid)
-pub fn validate_profile_change_request_id(profile_change_request_id: &crate::domain::ProfileChangeRequestId) -> Result<(), ValidationError> {
+pub fn validate_profile_change_request_id(
+    profile_change_request_id: &crate::domain::ProfileChangeRequestId,
+) -> Result<(), ValidationError> {
     validate_uuid(&profile_change_request_id.to_string())
 }
 
 /// Validate AuditLogId (wrapper around uuid)
-pub fn validate_audit_log_id(audit_log_id: &crate::domain::AuditLogId) -> Result<(), ValidationError> {
+pub fn validate_audit_log_id(
+    audit_log_id: &crate::domain::AuditLogId,
+) -> Result<(), ValidationError> {
     validate_uuid(&audit_log_id.to_string())
 }
 
 /// Validate TeachingAssignmentId (wrapper around uuid)
-pub fn validate_teaching_assignment_id(teaching_assignment_id: &crate::domain::TeachingAssignmentId) -> Result<(), ValidationError> {
+pub fn validate_teaching_assignment_id(
+    teaching_assignment_id: &crate::domain::TeachingAssignmentId,
+) -> Result<(), ValidationError> {
     validate_uuid(&teaching_assignment_id.to_string())
 }
 
 /// Validate CustomAssignmentId (wrapper around uuid)
-pub fn validate_custom_assignment_id(custom_assignment_id: &crate::domain::CustomAssignmentId) -> Result<(), ValidationError> {
+pub fn validate_custom_assignment_id(
+    custom_assignment_id: &crate::domain::CustomAssignmentId,
+) -> Result<(), ValidationError> {
     validate_uuid(&custom_assignment_id.to_string())
 }
 
@@ -197,7 +217,9 @@ pub fn validate_jsonb_structure(json: &serde_json::Value) -> Result<(), Validati
 }
 
 /// Validate timestamp (datetime with timezone)
-pub fn validate_timestamp(timestamp: &chrono::DateTime<chrono::Utc>) -> Result<(), ValidationError> {
+pub fn validate_timestamp(
+    timestamp: &chrono::DateTime<chrono::Utc>,
+) -> Result<(), ValidationError> {
     // Ensure timestamp is not in the distant future or past
     let now = chrono::Utc::now();
     let one_year_future = now + chrono::Duration::days(365);
@@ -359,7 +381,9 @@ pub fn validate_parent_id(parent_id: &crate::domain::UserId) -> Result<(), Valid
 }
 
 /// Validate optional ParentId
-pub fn validate_optional_parent_id(parent_id: &&Option<crate::domain::UserId>) -> Result<(), ValidationError> {
+pub fn validate_optional_parent_id(
+    parent_id: &&Option<crate::domain::UserId>,
+) -> Result<(), ValidationError> {
     if let Some(ref id) = parent_id {
         validate_uuid(&id.to_string())
     } else {

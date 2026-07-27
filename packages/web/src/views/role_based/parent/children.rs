@@ -1,13 +1,12 @@
-use dioxus::prelude::*;
+use crate::components::skeleton::SkeletonCard;
 use crate::i18n::use_locale;
 use crate::views::role_based::components::DashboardSection;
 use crate::views::role_based::shared::common::Modal;
-use crate::components::skeleton::SkeletonCard;
 use api::server_functions::dashboard_functions::{
-    get_parent_children, ChildInfo,
-    get_child_grades_for_parent, get_child_assignments_for_parent, get_child_attendance_for_parent,
-    ChildGradeInfo, ChildAssignmentInfo, ChildAttendanceInfo,
+    get_child_assignments_for_parent, get_child_attendance_for_parent, get_child_grades_for_parent,
+    get_parent_children, ChildAssignmentInfo, ChildAttendanceInfo, ChildGradeInfo, ChildInfo,
 };
+use dioxus::prelude::*;
 
 /// Modal type for child actions
 #[derive(Clone, PartialEq)]
@@ -38,15 +37,13 @@ pub fn ChildrenSection() -> Element {
 pub fn ChildrenDetail() -> Element {
     let locale = use_locale();
     let mut active_modal = use_signal(|| ChildModal::None);
-    
-    let children_resource = use_resource(move || async move {
-        get_parent_children().await
-    });
+
+    let children_resource = use_resource(move || async move { get_parent_children().await });
 
     rsx! {
         div {
             class: "flex flex-col gap-4 md:gap-8 animate-fade-in",
-            
+
             match &*children_resource.read() {
                 None => rsx! {
                     div {
@@ -86,7 +83,7 @@ pub fn ChildrenDetail() -> Element {
                             }
                         }
                     }
-                    
+
                     // Modals
                     match active_modal() {
                         ChildModal::Grades(child) => rsx! {
@@ -127,15 +124,16 @@ pub fn ChildDetailedCard(
     let child_for_grades = child.clone();
     let child_for_attendance = child.clone();
     let child_for_assignments = child.clone();
-    
+
     // Get initials for avatar
-    let initials: String = child.name
+    let initials: String = child
+        .name
         .split_whitespace()
         .filter_map(|word| word.chars().next())
         .take(2)
         .collect::<String>()
         .to_uppercase();
-    
+
     // GPA color coding
     let gpa_color = if child.gpa >= 3.5 {
         "text-green-600 dark:text-green-400"
@@ -146,7 +144,7 @@ pub fn ChildDetailedCard(
     } else {
         "text-red-600 dark:text-red-400"
     };
-    
+
     // Status badge color
     let status_color = if child.status.contains("Excellent") {
         "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300"
@@ -165,7 +163,7 @@ pub fn ChildDetailedCard(
             // Header
             div {
                 class: "p-4 md:p-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white relative overflow-hidden",
-                
+
                 // Decorative background
                 div { class: "absolute right-0 top-0 w-24 md:w-32 h-24 md:h-32 bg-white/10 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2" }
 
@@ -275,12 +273,12 @@ pub fn ChildDetailedCard(
 fn ChildGradesModal(child: ChildInfo, on_close: EventHandler) -> Element {
     let locale = use_locale();
     let child_id = child.id.clone();
-    
+
     let grades_resource = use_resource(move || {
         let id = child_id.clone();
         async move { get_child_grades_for_parent(id).await }
     });
-    
+
     rsx! {
         Modal {
             title: format!("{} - {}", child.name, locale.t("parent.children.actions.view_grades")),
@@ -289,7 +287,7 @@ fn ChildGradesModal(child: ChildInfo, on_close: EventHandler) -> Element {
             children: rsx! {
                 div {
                     class: "space-y-4 max-h-96 overflow-y-auto",
-                    
+
                     // GPA Summary
                     div {
                         class: "p-4 bg-gradient-to-r from-primary/10 to-purple-500/10 rounded-xl mb-4",
@@ -299,7 +297,7 @@ fn ChildGradesModal(child: ChildInfo, on_close: EventHandler) -> Element {
                             span { class: "text-2xl font-bold text-primary", "{child.gpa:.2}" }
                         }
                     }
-                    
+
                     match &*grades_resource.read() {
                         None => rsx! {
                             div { class: "text-center py-8 text-gray-500", "{locale.t(\"parent.children.grades.loading\")}" }
@@ -338,12 +336,12 @@ fn ChildGradesModal(child: ChildInfo, on_close: EventHandler) -> Element {
 fn ChildAttendanceModal(child: ChildInfo, on_close: EventHandler) -> Element {
     let locale = use_locale();
     let child_id = child.id.clone();
-    
+
     let attendance_resource = use_resource(move || {
         let id = child_id.clone();
         async move { get_child_attendance_for_parent(id).await }
     });
-    
+
     rsx! {
         Modal {
             title: format!("{} - {}", child.name, locale.t("parent.children.actions.attendance")),
@@ -352,7 +350,7 @@ fn ChildAttendanceModal(child: ChildInfo, on_close: EventHandler) -> Element {
             children: rsx! {
                 div {
                     class: "space-y-4",
-                    
+
                     match &*attendance_resource.read() {
                         None => rsx! {
                             div { class: "text-center py-8 text-gray-500", "{locale.t(\"parent.children.attendance.loading\")}" }
@@ -364,26 +362,26 @@ fn ChildAttendanceModal(child: ChildInfo, on_close: EventHandler) -> Element {
                             // Stats grid
                             div {
                                 class: "grid grid-cols-3 gap-4 mb-6",
-                                
+
                                 div {
                                     class: "p-4 bg-green-50 dark:bg-green-900/20 rounded-xl text-center",
                                     p { class: "text-2xl font-bold text-green-600 dark:text-green-400", "{attendance.present_days}" }
                                     p { class: "text-xs text-green-600 dark:text-green-400 font-medium", "{locale.t(\"parent.children.attendance.present\")}" }
                                 }
-                                
+
                                 div {
                                     class: "p-4 bg-red-50 dark:bg-red-900/20 rounded-xl text-center",
                                     p { class: "text-2xl font-bold text-red-600 dark:text-red-400", "{attendance.absent_days}" }
                                     p { class: "text-xs text-red-600 dark:text-red-400 font-medium", "{locale.t(\"parent.children.attendance.absent\")}" }
                                 }
-                                
+
                                 div {
                                     class: "p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl text-center",
                                     p { class: "text-2xl font-bold text-blue-600 dark:text-blue-400", "{attendance.attendance_rate:.1}%" }
                                     p { class: "text-xs text-blue-600 dark:text-blue-400 font-medium", "{locale.t(\"parent.children.attendance.rate\")}" }
                                 }
                             }
-                            
+
                             // Recent absences
                             if !attendance.recent_absences.is_empty() {
                                 div {
@@ -414,12 +412,12 @@ fn ChildAttendanceModal(child: ChildInfo, on_close: EventHandler) -> Element {
 fn ChildAssignmentsModal(child: ChildInfo, on_close: EventHandler) -> Element {
     let locale = use_locale();
     let child_id = child.id.clone();
-    
+
     let assignments_resource = use_resource(move || {
         let id = child_id.clone();
         async move { get_child_assignments_for_parent(id).await }
     });
-    
+
     rsx! {
         Modal {
             title: format!("{} - {}", child.name, locale.t("parent.children.actions.assignments")),
@@ -428,7 +426,7 @@ fn ChildAssignmentsModal(child: ChildInfo, on_close: EventHandler) -> Element {
             children: rsx! {
                 div {
                     class: "space-y-4 max-h-96 overflow-y-auto",
-                    
+
                     match &*assignments_resource.read() {
                         None => rsx! {
                             div { class: "text-center py-8 text-gray-500", "{locale.t(\"parent.children.assignments.loading\")}" }
@@ -448,7 +446,7 @@ fn ChildAssignmentsModal(child: ChildInfo, on_close: EventHandler) -> Element {
                                         "assigned" | "inprogress" => "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
                                         _ => "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
                                     };
-                                    
+
                                     rsx! {
                                         div {
                                             class: "p-4 border border-gray-200 dark:border-gray-700 rounded-lg",

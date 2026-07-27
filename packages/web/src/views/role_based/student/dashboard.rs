@@ -1,18 +1,18 @@
-use dioxus::prelude::*;
-use crate::domain::User;
 use crate::application::AuthHooks;
-use crate::views::role_based::components::ResponsiveDashboardLayout;
+use crate::domain::User;
 use crate::i18n::use_locale;
+use crate::views::role_based::components::ResponsiveDashboardLayout;
 use api::server_functions::dashboard_functions::{
-    get_student_dashboard_stats, get_student_classes, get_student_assignments,
+    get_student_assignments, get_student_classes, get_student_dashboard_stats,
 };
+use dioxus::prelude::*;
 
 /// Main Student dashboard component - follows school manager template
 #[component]
 pub fn StudentDashboard() -> Element {
     let current_user = AuthHooks::use_current_user().ok().flatten();
     let mut active_section = use_signal(|| "overview".to_string());
-    
+
     // Get locale context for translations
     let locale_ctx = use_locale();
     let t_loading = locale_ctx.t("common.loading");
@@ -30,7 +30,7 @@ pub fn StudentDashboard() -> Element {
             "assignments" => rsx! { super::assignments::AssignmentsSection {} },
             "grades" => rsx! { super::grades::GradesSection {} },
             "schedule" => rsx! { super::schedule::ScheduleSection {} },
-            _ => rsx! { StudentOverviewSection {} }
+            _ => rsx! { StudentOverviewSection {} },
         };
 
         rsx! {
@@ -65,32 +65,28 @@ pub fn StudentOverviewSection() -> Element {
     let t_my_courses = locale_ctx.t("dashboard.my_courses");
     let t_no_classes = locale_ctx.t("classes.no_classes");
 
-    let stats_resource = use_resource(move || async move {
-        get_student_dashboard_stats().await.ok()
-    });
+    let stats_resource =
+        use_resource(move || async move { get_student_dashboard_stats().await.ok() });
 
-    let classes_resource = use_resource(move || async move {
-        get_student_classes().await.ok()
-    });
+    let classes_resource = use_resource(move || async move { get_student_classes().await.ok() });
 
-    let assignments_resource = use_resource(move || async move {
-        get_student_assignments().await.ok()
-    });
+    let assignments_resource =
+        use_resource(move || async move { get_student_assignments().await.ok() });
 
     rsx! {
         div {
             class: "grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-8",
-            
+
             // Main Column (2/3 width)
             div {
                 class: "lg:col-span-2 space-y-8",
-                
+
                 // Stats Cards Section
                 section {
                     h3 { class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-4 md:mb-6", "{t_my_progress}" }
                     div {
                         class: "grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-6",
-                        
+
                         match stats_resource.read().as_ref() {
                             Some(Some(stats)) => rsx! {
                                 StatCard {
@@ -137,7 +133,7 @@ pub fn StudentOverviewSection() -> Element {
                     h3 { class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-4 md:mb-6", "{t_upcoming_assignments}" }
                     div {
                         class: "glass-card p-4 md:p-6",
-                        
+
                         match assignments_resource.read().as_ref() {
                             Some(Some(assignments)) if !assignments.is_empty() => rsx! {
                                 div {
@@ -224,7 +220,13 @@ fn get_status_color(status: &str) -> String {
 }
 
 #[component]
-fn StatCard(title: String, value: String, icon: String, color: String, text_color: String) -> Element {
+fn StatCard(
+    title: String,
+    value: String,
+    icon: String,
+    color: String,
+    text_color: String,
+) -> Element {
     rsx! {
         div {
             class: "glass-card p-3 md:p-5 border-l-4 {color} flex flex-col justify-center h-24 md:h-28 hover:-translate-y-1 hover:shadow-lg transition-all duration-300",
@@ -251,7 +253,14 @@ fn StatCardSkeleton() -> Element {
 }
 
 #[component]
-fn AssignmentItem(icon: String, title: String, class_name: String, due_date: String, status: String, color: String) -> Element {
+fn AssignmentItem(
+    icon: String,
+    title: String,
+    class_name: String,
+    due_date: String,
+    status: String,
+    color: String,
+) -> Element {
     let status_color = match status.as_str() {
         "overdue" => "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-800",
         "graded" => "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 border-green-100 dark:border-green-800",
@@ -322,7 +331,14 @@ fn AssignmentItemSkeleton() -> Element {
 }
 
 #[component]
-fn ClassCard(name: String, subject: String, teacher: String, grade: String, icon_bg: &'static str, icon_color: String) -> Element {
+fn ClassCard(
+    name: String,
+    subject: String,
+    teacher: String,
+    grade: String,
+    icon_bg: &'static str,
+    icon_color: String,
+) -> Element {
     let grade_bg = if grade.starts_with('A') {
         "text-green-600 bg-green-50 dark:bg-green-900/20 border-green-100 dark:border-green-800"
     } else if grade.starts_with('B') {
@@ -351,7 +367,7 @@ fn ClassCard(name: String, subject: String, teacher: String, grade: String, icon
                         }
                     }
                     p { class: "text-xs font-medium text-gray-500 dark:text-gray-400 truncate mb-2", "{subject}" }
-                    
+
                     div {
                         class: "flex items-center gap-1.5 pt-2 border-t border-gray-50 dark:border-gray-800",
                         span { class: "material-icons-outlined text-[14px] text-gray-400", "person" }

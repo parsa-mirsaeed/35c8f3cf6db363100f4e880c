@@ -173,12 +173,7 @@ impl KnowledgeAssetService {
                 token_count: estimate_token_count(&chunk.text) as i32,
                 vector_id: format!("knowledge:{}:{}", asset_id, chunk.chunk_index),
                 text: chunk.text,
-                embedding_provider: self
-                    .embedding_config
-                    .profile
-                    .provider
-                    .as_str()
-                    .to_string(),
+                embedding_provider: self.embedding_config.profile.provider.as_str().to_string(),
                 embedding_model: self.embedding_config.model.clone(),
                 metadata: metadata_base.clone(),
             })

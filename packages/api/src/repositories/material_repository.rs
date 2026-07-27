@@ -115,7 +115,7 @@ impl MaterialRepository {
     /// Create a new material
     pub async fn create(&self, request: CreateMaterialRequest) -> RepositoryResult<Material> {
         let display_order = request.display_order.unwrap_or(0);
-        
+
         let row = sqlx::query(
             r#"
             INSERT INTO class_materials (
@@ -127,7 +127,7 @@ impl MaterialRepository {
             RETURNING id, class_section_id, title, description, material_type,
                       file_url, file_size_bytes, mime_type, external_link, 
                       is_required, display_order, created_by, created_at, updated_at, extracted_text
-            "#
+            "#,
         )
         .bind(request.class_section_id)
         .bind(&request.title)
@@ -156,7 +156,7 @@ impl MaterialRepository {
                    is_required, display_order, created_by, created_at, updated_at
             FROM class_materials
             WHERE id = $1
-            "#
+            "#,
         )
         .bind(material_id)
         .fetch_optional(&*self.base.pool())
@@ -170,7 +170,10 @@ impl MaterialRepository {
     }
 
     /// List materials by class section
-    pub async fn find_by_class_section(&self, class_section_id: Uuid) -> RepositoryResult<Vec<Material>> {
+    pub async fn find_by_class_section(
+        &self,
+        class_section_id: Uuid,
+    ) -> RepositoryResult<Vec<Material>> {
         let rows = sqlx::query(
             r#"
             SELECT id, class_section_id, title, description, material_type,
@@ -179,7 +182,7 @@ impl MaterialRepository {
             FROM class_materials
             WHERE class_section_id = $1
             ORDER BY display_order, created_at DESC
-            "#
+            "#,
         )
         .bind(class_section_id)
         .fetch_all(&*self.base.pool())
@@ -189,10 +192,14 @@ impl MaterialRepository {
     }
 
     /// Update a material
-    pub async fn update(&self, material_id: Uuid, request: UpdateMaterialRequest) -> RepositoryResult<Material> {
+    pub async fn update(
+        &self,
+        material_id: Uuid,
+        request: UpdateMaterialRequest,
+    ) -> RepositoryResult<Material> {
         // First get the current material
         let current = self.find_by_id(material_id).await?;
-        
+
         let title = request.title.unwrap_or(current.title);
         let description = request.description.or(current.description);
         let material_type = request.material_type.unwrap_or(current.material_type);
@@ -213,7 +220,7 @@ impl MaterialRepository {
             RETURNING id, class_section_id, title, description, material_type,
                       file_url, file_size_bytes, mime_type, external_link, 
                       is_required, display_order, created_by, created_at, updated_at
-            "#
+            "#,
         )
         .bind(material_id)
         .bind(&title)
@@ -241,7 +248,7 @@ impl MaterialRepository {
             r#"
             DELETE FROM class_materials
             WHERE id = $1
-            "#
+            "#,
         )
         .bind(material_id)
         .execute(&*self.base.pool())
@@ -258,7 +265,11 @@ impl MaterialRepository {
     }
 
     /// Check if user has access to this material (via class section)
-    pub async fn check_teacher_access(&self, material_id: Uuid, teacher_user_id: Uuid) -> RepositoryResult<bool> {
+    pub async fn check_teacher_access(
+        &self,
+        material_id: Uuid,
+        teacher_user_id: Uuid,
+    ) -> RepositoryResult<bool> {
         let row = sqlx::query(
             r#"
             SELECT EXISTS(
@@ -268,7 +279,7 @@ impl MaterialRepository {
                 JOIN teachers t ON ta.teacher_id = t.id
                 WHERE cm.id = $1 AND t.user_id = $2
             ) as has_access
-            "#
+            "#,
         )
         .bind(material_id)
         .bind(teacher_user_id)

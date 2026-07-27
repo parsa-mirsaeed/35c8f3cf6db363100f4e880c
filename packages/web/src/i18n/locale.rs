@@ -1,5 +1,5 @@
 //! Locale definitions for EduTalent
-//! 
+//!
 //! Supports English and Farsi with Farsi as the default language.
 
 use serde::{Deserialize, Serialize};

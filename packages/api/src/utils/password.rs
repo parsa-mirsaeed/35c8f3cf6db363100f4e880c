@@ -1,5 +1,5 @@
-use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 
 /// Generate a secure random password that meets Supabase requirements
 ///
@@ -21,7 +21,10 @@ pub fn generate_secure_password() -> String {
     // Generate 12-character password
     let password: String = (0..12)
         .map(|_| {
-            all_chars.chars().nth(rng.gen_range(0..all_chars.len())).unwrap()
+            all_chars
+                .chars()
+                .nth(rng.gen_range(0..all_chars.len()))
+                .unwrap()
         })
         .collect();
 
@@ -29,16 +32,28 @@ pub fn generate_secure_password() -> String {
     let mut password_bytes = password.into_bytes();
 
     // Add at least one character from each set if missing
-    if !password_bytes.iter().any(|&c| lowercase.as_bytes().contains(&c)) {
+    if !password_bytes
+        .iter()
+        .any(|&c| lowercase.as_bytes().contains(&c))
+    {
         password_bytes[0] = lowercase.as_bytes()[rng.gen_range(0..lowercase.len())];
     }
-    if !password_bytes.iter().any(|&c| uppercase.as_bytes().contains(&c)) {
+    if !password_bytes
+        .iter()
+        .any(|&c| uppercase.as_bytes().contains(&c))
+    {
         password_bytes[1] = uppercase.as_bytes()[rng.gen_range(0..uppercase.len())];
     }
-    if !password_bytes.iter().any(|&c| numbers.as_bytes().contains(&c)) {
+    if !password_bytes
+        .iter()
+        .any(|&c| numbers.as_bytes().contains(&c))
+    {
         password_bytes[2] = numbers.as_bytes()[rng.gen_range(0..numbers.len())];
     }
-    if !password_bytes.iter().any(|&c| symbols.as_bytes().contains(&c)) {
+    if !password_bytes
+        .iter()
+        .any(|&c| symbols.as_bytes().contains(&c))
+    {
         password_bytes[3] = symbols.as_bytes()[rng.gen_range(0..symbols.len())];
     }
 
@@ -65,7 +80,9 @@ pub fn validate_password_strength(password: &str) -> Result<(), String> {
     let has_lowercase = password.chars().any(|c| c.is_ascii_lowercase());
     let has_uppercase = password.chars().any(|c| c.is_ascii_uppercase());
     let has_numbers = password.chars().any(|c| c.is_ascii_digit());
-    let has_symbols = password.chars().any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c));
+    let has_symbols = password
+        .chars()
+        .any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c));
 
     let score = [has_lowercase, has_uppercase, has_numbers, has_symbols]
         .iter()

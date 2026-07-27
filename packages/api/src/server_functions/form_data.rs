@@ -1,10 +1,10 @@
 //! Server functions for fetching form dropdown data
 
-use dioxus::prelude::*;
-use serde::{Deserialize, Serialize};
-use crate::domain::{SchoolId, RoleId, UserId, School};
 #[cfg(feature = "server")]
 use crate::app_state::extract_server_state;
+use crate::domain::{RoleId, School, SchoolId, UserId};
+use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use uuid::Uuid;
 
@@ -86,7 +86,8 @@ pub async fn get_all_roles() -> Result<Vec<RoleOption>, ServerFnError> {
 pub async fn get_parents_by_school(school_id: String) -> Result<Vec<ParentOption>, ServerFnError> {
     let state = extract_server_state()?;
     let pool = &state.services.pool;
-    let school_uuid = Uuid::parse_str(&school_id).map_err(|_| ServerFnError::new("Invalid school ID"))?;
+    let school_uuid =
+        Uuid::parse_str(&school_id).map_err(|_| ServerFnError::new("Invalid school ID"))?;
 
     let parents = sqlx::query_as!(
         ParentOption,
@@ -108,7 +109,10 @@ pub async fn get_parents_by_school(school_id: String) -> Result<Vec<ParentOption
 
 /// Validate email uniqueness
 #[server(endpoint = "form_data/validate_email")]
-pub async fn validate_email_uniqueness(email: String, exclude_user_id: Option<String>) -> Result<bool, ServerFnError> {
+pub async fn validate_email_uniqueness(
+    email: String,
+    exclude_user_id: Option<String>,
+) -> Result<bool, ServerFnError> {
     let state = extract_server_state()?;
     let pool = &state.services.pool;
 
@@ -139,34 +143,31 @@ pub async fn validate_email_uniqueness(email: String, exclude_user_id: Option<St
 
 /// Validate UUID existence (for foreign keys)
 #[server(endpoint = "form_data/validate_uuid")]
-pub async fn validate_uuid_exists(uuid: String, entity_type: String) -> Result<bool, ServerFnError> {
+pub async fn validate_uuid_exists(
+    uuid: String,
+    entity_type: String,
+) -> Result<bool, ServerFnError> {
     let state = extract_server_state()?;
     let pool = &state.services.pool;
-    
+
     let uuid_val = match Uuid::parse_str(&uuid) {
         Ok(u) => u,
         Err(_) => return Ok(false),
     };
 
     let exists_result = match entity_type.as_str() {
-        "school" => {
-            sqlx::query!("SELECT 1 as exists FROM schools WHERE id = $1", uuid_val)
-                .fetch_optional(&**pool)
-                .await
-                .map(|r| r.is_some())
-        },
-        "role" => {
-            sqlx::query!("SELECT 1 as exists FROM roles WHERE id = $1", uuid_val)
-                .fetch_optional(&**pool)
-                .await
-                .map(|r| r.is_some())
-        },
-        "user" => {
-            sqlx::query!("SELECT 1 as exists FROM users WHERE id = $1", uuid_val)
-                .fetch_optional(&**pool)
-                .await
-                .map(|r| r.is_some())
-        },
+        "school" => sqlx::query!("SELECT 1 as exists FROM schools WHERE id = $1", uuid_val)
+            .fetch_optional(&**pool)
+            .await
+            .map(|r| r.is_some()),
+        "role" => sqlx::query!("SELECT 1 as exists FROM roles WHERE id = $1", uuid_val)
+            .fetch_optional(&**pool)
+            .await
+            .map(|r| r.is_some()),
+        "user" => sqlx::query!("SELECT 1 as exists FROM users WHERE id = $1", uuid_val)
+            .fetch_optional(&**pool)
+            .await
+            .map(|r| r.is_some()),
         _ => return Ok(false), // Unknown entity type
     };
 

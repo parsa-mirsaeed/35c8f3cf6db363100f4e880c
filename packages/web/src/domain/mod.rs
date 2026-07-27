@@ -1,9 +1,9 @@
 // Domain layer - Core business logic and entities
 
+pub mod auth;
 pub mod roles;
 pub mod user;
-pub mod auth;
 
+pub use auth::*;
 pub use roles::*;
 pub use user::*;
-pub use auth::*;

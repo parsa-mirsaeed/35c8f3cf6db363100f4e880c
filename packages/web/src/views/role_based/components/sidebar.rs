@@ -1,7 +1,7 @@
-use dioxus::prelude::*;
-use crate::domain::User;
 use crate::application::routing_service::NavigationItem;
+use crate::domain::User;
 use crate::i18n::{use_locale, LanguageSwitcher};
+use dioxus::prelude::*;
 
 /// Sidebar navigation component for dashboard
 #[component]
@@ -15,7 +15,7 @@ pub fn Sidebar(
     let user_initials = user.initials();
     let user_display_name = user.display_name();
     let user_role_display = user.role.display_name();
-    
+
     // Get locale context for translations
     let locale_ctx = use_locale();
     let t_sign_out = locale_ctx.t("auth.sign_out");
@@ -27,7 +27,7 @@ pub fn Sidebar(
     rsx! {
         aside {
             class: "flex-shrink-0 flex flex-col justify-between glass-sidebar transition-all duration-300 z-20 {width_class}",
-            
+
             // Logo/Brand
             div {
                 class: "p-6 flex items-center justify-center border-b border-white/10",
@@ -60,12 +60,12 @@ pub fn Sidebar(
                     {
                         let is_active = item.id == active_section;
                         // Modern active state with gradient border or background
-                        let active_class = if is_active { 
-                            "bg-primary/10 text-primary dark:text-primary-light border-r-4 border-primary" 
-                        } else { 
-                            "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50 hover:text-gray-900 dark:hover:text-gray-200 border-transparent" 
+                        let active_class = if is_active {
+                            "bg-primary/10 text-primary dark:text-primary-light border-r-4 border-primary"
+                        } else {
+                            "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50 hover:text-gray-900 dark:hover:text-gray-200 border-transparent"
                         };
-                        
+
                         let item_id = item.id.clone();
 
                         rsx! {
@@ -73,16 +73,16 @@ pub fn Sidebar(
                                 class: "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group relative {active_class}",
                                 onclick: move |_| on_navigate.call(item_id.clone()),
                                 title: if is_collapsed { item.label.as_str() } else { "" },
-                                
-                                span { 
-                                    class: "material-icons-outlined transition-colors duration-200 group-hover:scale-110", 
-                                    "{item.icon}" 
+
+                                span {
+                                    class: "material-icons-outlined transition-colors duration-200 group-hover:scale-110",
+                                    "{item.icon}"
                                 }
-                                
+
                                 if !is_collapsed {
-                                    span { 
-                                        class: "font-medium text-sm", 
-                                        "{item.label}" 
+                                    span {
+                                        class: "font-medium text-sm",
+                                        "{item.label}"
                                     }
                                 }
                             }
@@ -115,7 +115,7 @@ pub fn Sidebar(
                                 p { class: "text-xs text-gray-500 dark:text-gray-400 truncate", "{user_role_display}" }
                             }
                         }
-                        
+
                         // Language Switcher
                         div {
                             class: "mb-3 flex justify-center",
@@ -123,7 +123,7 @@ pub fn Sidebar(
                                 class: "text-xs".to_string()
                             }
                         }
-                        
+
                         button {
                             class: "w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors duration-200 text-xs font-medium",
                             onclick: move |_| {

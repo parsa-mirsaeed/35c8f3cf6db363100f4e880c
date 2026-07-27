@@ -1,12 +1,12 @@
-use crate::domain::{UserId, TeacherId, SchoolId};
-use crate::models::{Teacher, TeacherWithUser, CreateTeacherRequest};
+use crate::domain::{SchoolId, TeacherId, UserId};
+use crate::models::{CreateTeacherRequest, Teacher, TeacherWithUser};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// Teacher repository for handling teacher-related database operations
 #[derive(Clone)]
@@ -23,7 +23,10 @@ impl TeacherRepository {
     }
 
     /// Create a new teacher
-    pub async fn create_internal(&self, request: CreateTeacherRequest) -> RepositoryResult<Teacher> {
+    pub async fn create_internal(
+        &self,
+        request: CreateTeacherRequest,
+    ) -> RepositoryResult<Teacher> {
         let row = sqlx::query!(
             r#"
             INSERT INTO teachers (user_id, school_id, subject, created_at)
@@ -104,7 +107,11 @@ impl TeacherRepository {
     }
 
     /// Update a teacher's information
-    pub async fn update(&self, teacher_id: TeacherId, subject: Option<String>) -> RepositoryResult<Teacher> {
+    pub async fn update(
+        &self,
+        teacher_id: TeacherId,
+        subject: Option<String>,
+    ) -> RepositoryResult<Teacher> {
         let uuid = Uuid::from(teacher_id);
         let row = sqlx::query!(
             r#"
@@ -189,11 +196,9 @@ impl TeacherRepository {
 
     /// Count total teachers
     pub async fn count(&self) -> RepositoryResult<i64> {
-        let row: sqlx::postgres::PgRow = sqlx::query(
-            "SELECT COUNT(*) as count FROM teachers"
-        )
-        .fetch_one(&*self.base.pool())
-        .await?;
+        let row: sqlx::postgres::PgRow = sqlx::query("SELECT COUNT(*) as count FROM teachers")
+            .fetch_one(&*self.base.pool())
+            .await?;
 
         Ok(row.get("count"))
     }
@@ -229,7 +234,12 @@ impl TeacherRepository {
     }
 
     /// List teachers by school with user information (with pagination)
-    pub async fn list_by_school(&self, school_id: Uuid, limit: i64, offset: i64) -> RepositoryResult<Vec<TeacherWithUser>> {
+    pub async fn list_by_school(
+        &self,
+        school_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> RepositoryResult<Vec<TeacherWithUser>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -242,7 +252,7 @@ impl TeacherRepository {
             WHERE t.school_id = $1
             ORDER BY u.name
             LIMIT $2 OFFSET $3
-            "#
+            "#,
         )
         .bind(school_id)
         .bind(limit)
@@ -275,11 +285,17 @@ impl crate::repositories::traits::TeacherRepository for TeacherRepository {
     }
 
     async fn find_by_id(&self, id: TeacherId) -> Result<Option<Teacher>, AppError> {
-        self.find_by_id_internal(id).await.map(Some).map_err(AppError::from)
+        self.find_by_id_internal(id)
+            .await
+            .map(Some)
+            .map_err(AppError::from)
     }
 
     async fn find_by_user_id(&self, user_id: UserId) -> Result<Option<Teacher>, AppError> {
-        self.find_by_user_id_internal(user_id).await.map(Some).map_err(AppError::from)
+        self.find_by_user_id_internal(user_id)
+            .await
+            .map(Some)
+            .map_err(AppError::from)
     }
 
     async fn find_all(&self) -> Result<Vec<Teacher>, AppError> {

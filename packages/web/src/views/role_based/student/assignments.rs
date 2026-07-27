@@ -1,13 +1,15 @@
 //! Student Assignments View
-//! 
+//!
 //! This module provides the assignments view UI for students,
 //! including listing assignments and viewing personalized content.
 
-use dioxus::prelude::*;
+use crate::i18n::use_locale;
 use crate::views::role_based::components::DashboardSection;
 use api::server_functions::dashboard_functions::{get_student_assignments, StudentAssignmentInfo};
-use api::server_functions::submission_functions::{submit_student_assignment, get_submission_for_assignment, StudentSubmission};
-use crate::i18n::use_locale;
+use api::server_functions::submission_functions::{
+    get_submission_for_assignment, submit_student_assignment, StudentSubmission,
+};
+use dioxus::prelude::*;
 
 /// Assignments section for Student
 #[component]
@@ -41,19 +43,31 @@ pub fn StudentAssignments() -> Element {
     let locale = use_locale();
 
     // Fetch real assignments from backend
-    let mut assignments_resource = use_resource(move || async move {
-        get_student_assignments().await
-    });
+    let mut assignments_resource =
+        use_resource(move || async move { get_student_assignments().await });
 
     // Filter function
-    let filter_assignments = |assignments: &[StudentAssignmentInfo], filter: &str| -> Vec<StudentAssignmentInfo> {
-        match filter {
-            "pending" => assignments.iter().filter(|a| a.status == "pending").cloned().collect(),
-            "submitted" => assignments.iter().filter(|a| a.status == "submitted").cloned().collect(),
-            "graded" => assignments.iter().filter(|a| a.status == "graded").cloned().collect(),
-            _ => assignments.to_vec(), // "all"
-        }
-    };
+    let filter_assignments =
+        |assignments: &[StudentAssignmentInfo], filter: &str| -> Vec<StudentAssignmentInfo> {
+            match filter {
+                "pending" => assignments
+                    .iter()
+                    .filter(|a| a.status == "pending")
+                    .cloned()
+                    .collect(),
+                "submitted" => assignments
+                    .iter()
+                    .filter(|a| a.status == "submitted")
+                    .cloned()
+                    .collect(),
+                "graded" => assignments
+                    .iter()
+                    .filter(|a| a.status == "graded")
+                    .cloned()
+                    .collect(),
+                _ => assignments.to_vec(), // "all"
+            }
+        };
 
     rsx! {
         div {
@@ -112,11 +126,11 @@ pub fn StudentAssignments() -> Element {
                         rsx! {
                             div {
                                 class: "text-center py-16",
-                                div { 
+                                div {
                                     class: "w-24 h-24 mx-auto mb-6 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center",
                                     span { class: "material-icons-outlined text-5xl text-gray-400", "assignment_turned_in" }
                                 }
-                                h3 { 
+                                h3 {
                                     class: "text-xl font-bold text-gray-900 dark:text-white mb-2",
                                     if active_filter() == "all" {
                                         "{locale.t(\"assignments.empty.all\")}"
@@ -124,7 +138,7 @@ pub fn StudentAssignments() -> Element {
                                         {format!("{}", locale.t("assignments.empty.filtered").replace("{0}", &active_filter()))}
                                     }
                                 }
-                                p { 
+                                p {
                                     class: "text-gray-500 dark:text-gray-400",
                                     "{locale.t(\"assignments.empty.check_back\")}"
                                 }
@@ -181,11 +195,7 @@ pub fn StudentAssignments() -> Element {
 
 /// Filter button component
 #[component]
-fn FilterButton(
-    label: String,
-    active: bool,
-    onclick: EventHandler,
-) -> Element {
+fn FilterButton(label: String, active: bool, onclick: EventHandler) -> Element {
     let class = if active {
         "px-3 py-2 md:px-4 md:py-2 bg-primary text-white rounded-lg text-xs md:text-sm font-medium shadow-sm shadow-blue-500/20 whitespace-nowrap"
     } else {
@@ -285,7 +295,7 @@ pub fn AssignmentItem(
 
             div {
                 class: "p-4 md:p-6 flex-1 flex flex-col gap-2",
-                
+
                 div {
                     class: "flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 sm:gap-4",
                     div {
@@ -319,7 +329,7 @@ pub fn AssignmentItem(
                         }
                     }
                 }
-                
+
                 div {
                      class: "flex flex-wrap gap-3 md:gap-4 mt-2 ml-0 sm:ml-13 md:ml-16 text-[10px] md:text-xs text-gray-500 dark:text-gray-400 font-medium",
                      div {
@@ -461,16 +471,16 @@ fn AssignmentDetailModal(
                                             // AI is still personalizing - show beautiful loading animation
                                             div {
                                                 class: "mx-6 mt-4 bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 dark:from-indigo-900/30 dark:via-purple-900/30 dark:to-pink-900/30 border border-indigo-200 dark:border-indigo-700 rounded-xl p-6 overflow-hidden relative",
-                                                
+
                                                 // Animated gradient overlay
                                                 div {
                                                     class: "absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent",
                                                     style: "animation: shimmer 2s infinite linear; background-size: 200% 100%;",
                                                 }
-                                                
+
                                                 div {
                                                     class: "relative flex items-center gap-4",
-                                                    
+
                                                     // Animated AI icon with pulse
                                                     div {
                                                         class: "relative",
@@ -487,7 +497,7 @@ fn AssignmentDetailModal(
                                                             }
                                                         }
                                                     }
-                                                    
+
                                                     div {
                                                         class: "flex-1",
                                                         h4 {
@@ -498,7 +508,7 @@ fn AssignmentDetailModal(
                                                             class: "text-sm text-gray-600 dark:text-gray-400 mt-1",
                                                             "{locale.t(\"assignments.ai_personalizing.description\")}"
                                                         }
-                                                        
+
                                                         // Animated progress dots
                                                         div {
                                                             class: "flex gap-1 mt-3",
@@ -597,47 +607,43 @@ fn AssignmentWorkModal(
     let mut is_submitting = use_signal(|| false);
     let mut submit_result = use_signal(|| None::<Result<String, String>>);
     let locale = use_locale();
-    
+
     let assignment_id_for_fetch = assignment_id.clone();
     let assignment_id_for_submit = assignment_id.clone();
-    
+
     // Fetch assignment details
     let details_resource = use_resource(move || {
         let id = assignment_id_for_fetch.clone();
-        async move {
-            api::server_functions::assignment_functions::get_personalized_assignment(id).await
-        }
+        async move { api::server_functions::assignment_functions::get_personalized_assignment(id).await }
     });
-    
+
     // Fetch existing submission if any
     let assignment_id_for_sub = assignment_id.clone();
     let submission_resource = use_resource(move || {
         let id = assignment_id_for_sub.clone();
-        async move {
-            get_submission_for_assignment(id).await
-        }
+        async move { get_submission_for_assignment(id).await }
     });
-    
+
     // Pre-fill content from existing submission
     use_effect(move || {
         if let Some(Ok(Some(sub))) = submission_resource.read().as_ref() {
             content.set(sub.content.clone());
         }
     });
-    
+
     let handle_submit = move |_| {
         let id = assignment_id_for_submit.clone();
         let work_content = content();
         let on_submitted = on_submitted.clone();
-        
+
         if work_content.trim().is_empty() {
             submit_result.set(Some(Err(locale.t("assignments.work.empty_error"))));
             return;
         }
-        
+
         spawn(async move {
             is_submitting.set(true);
-            
+
             match submit_student_assignment(id, work_content).await {
                 Ok(response) => {
                     submit_result.set(Some(Ok(response.message)));
@@ -646,22 +652,26 @@ fn AssignmentWorkModal(
                     on_submitted.call(());
                 }
                 Err(e) => {
-                    submit_result.set(Some(Err(format!("{}: {}", locale.t("assignments.work.submit_error"), e))));
+                    submit_result.set(Some(Err(format!(
+                        "{}: {}",
+                        locale.t("assignments.work.submit_error"),
+                        e
+                    ))));
                     is_submitting.set(false);
                 }
             }
         });
     };
-    
+
     rsx! {
         div {
             class: "fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4",
             onclick: move |_| if !is_submitting() { on_close.call(()) },
-            
+
             div {
                 class: "bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col",
                 onclick: move |e| e.stop_propagation(),
-                
+
                 // Header
                 div {
                     class: "flex justify-between items-center p-6 border-b border-gray-100 dark:border-gray-800",
@@ -677,11 +687,11 @@ fn AssignmentWorkModal(
                         span { class: "material-icons-outlined", "close" }
                     }
                 }
-                
+
                 // Content area with assignment info and text editor
                 div {
                     class: "flex-1 overflow-y-auto p-6 space-y-6",
-                    
+
                     // Assignment summary
                     match &*details_resource.read() {
                         Some(Ok(Some(assignment))) => rsx! {
@@ -719,7 +729,7 @@ fn AssignmentWorkModal(
                             }
                         }
                     }
-                    
+
                     // Text editor
                     div {
                         class: "space-y-2",
@@ -739,7 +749,7 @@ fn AssignmentWorkModal(
                             "{content().len()}{locale.t(\"assignments.work.characters\")}"
                         }
                     }
-                    
+
                     // Status messages
                     if let Some(result) = submit_result() {
                         match result {
@@ -760,7 +770,7 @@ fn AssignmentWorkModal(
                         }
                     }
                 }
-                
+
                 // Footer
                 div {
                     class: "flex justify-between items-center p-6 border-t border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/50",

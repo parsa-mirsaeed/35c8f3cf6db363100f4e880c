@@ -264,13 +264,11 @@ impl MaterialVectorizationService {
                 .embed_batch_for_school(material.school_id, batch.to_vec())
                 .await?;
             embeddings.extend(batch_embeddings);
-            sqlx::query(
-                "UPDATE material_embeddings SET current_batch = $1 WHERE material_id = $2",
-            )
-            .bind((batch_index + 1) as i32)
-            .bind(material.id)
-            .execute(self.pool.as_ref())
-            .await?;
+            sqlx::query("UPDATE material_embeddings SET current_batch = $1 WHERE material_id = $2")
+                .bind((batch_index + 1) as i32)
+                .bind(material.id)
+                .execute(self.pool.as_ref())
+                .await?;
             tracing::info!(
                 completed_batch = batch_index + 1,
                 total_batches,
@@ -358,7 +356,10 @@ impl MaterialVectorizationService {
         if let Some(extracted) = material.extracted_text.as_ref() {
             content.push_str("\n## Document Content\n\n");
             content.push_str(extracted);
-            tracing::info!(character_count = extracted.len(), "Using approved local extracted text");
+            tracing::info!(
+                character_count = extracted.len(),
+                "Using approved local extracted text"
+            );
             return Ok(content);
         }
         if let Some(file_url) = material.file_url.as_ref() {
@@ -390,7 +391,10 @@ impl MaterialVectorizationService {
         chunks_count: usize,
         error: Option<String>,
     ) -> Result<(), VectorizationError> {
-        let is_final = matches!(status, VectorizationStatus::Completed | VectorizationStatus::Failed);
+        let is_final = matches!(
+            status,
+            VectorizationStatus::Completed | VectorizationStatus::Failed
+        );
         sqlx::query(
             r#"
             INSERT INTO material_embeddings
@@ -443,9 +447,8 @@ impl MaterialVectorizationService {
         let filters = SearchFilters {
             class_section_id: class_section_id.map(|id| id.to_string()),
             material_id: None,
-            material_ids: material_ids.map(|ids| {
-                ids.into_iter().map(|id| id.to_string()).collect()
-            }),
+            material_ids: material_ids
+                .map(|ids| ids.into_iter().map(|id| id.to_string()).collect()),
         };
         Ok(self
             .qdrant_service
@@ -461,12 +464,12 @@ impl MaterialVectorizationService {
         material_ids: Option<&[Uuid]>,
     ) -> Result<Uuid, VectorizationError> {
         let class_school = match class_section_id {
-            Some(class_section_id) => sqlx::query_scalar::<_, Uuid>(
-                "SELECT school_id FROM class_sections WHERE id = $1",
-            )
-            .bind(class_section_id)
-            .fetch_optional(self.pool.as_ref())
-            .await?,
+            Some(class_section_id) => {
+                sqlx::query_scalar::<_, Uuid>("SELECT school_id FROM class_sections WHERE id = $1")
+                    .bind(class_section_id)
+                    .fetch_optional(self.pool.as_ref())
+                    .await?
+            }
             None => None,
         };
         let material_schools = match material_ids {

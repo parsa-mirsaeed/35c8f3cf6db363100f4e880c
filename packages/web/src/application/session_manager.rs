@@ -1,6 +1,6 @@
-use dioxus::prelude::*;
-use crate::domain::{User, UserSession, AuthError};
+use crate::domain::{AuthError, User, UserSession};
 use crate::infrastructure::{AuthProvider, AuthState};
+use dioxus::prelude::*;
 
 /// Session management service
 /// Relies on server-side HttpOnly cookies for authentication

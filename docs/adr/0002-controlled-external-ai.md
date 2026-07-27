@@ -35,9 +35,9 @@ Embedding model, version, dimensions, provider protocol, and Qdrant collection f
 | Profile | Provider | Model | Dimensions | Collection |
 | --- | --- | --- | ---: | --- |
 | `openai-v1` | OpenAI | `text-embedding-3-small` | 1536 | `edutalent_openai_v1` |
-| `local-bge-v1` | local TEI | `BAAI/bge-small-en-v1.5` | 384 | `edutalent_local_bge_v1` |
+| `local-bge-v1` | local TEI | `BAAI/bge-small-en-v1.5` | 384 | `edutalent_materials_local_v1` |
 
-A profile change requires a distinct collection and complete re-index. Automatic fallback between profiles is forbidden because it would mix vector spaces. Qdrant writes and searches validate the active collection and dimensions, and governed knowledge queries retain PostgreSQL authorization before exact Qdrant asset filtering.
+The unchanged local BGE profile retains the existing production collection name `edutalent_materials_local_v1` so an upgrade does not hide previously indexed vectors. Its collection and 384-dimensional contract remain the profile boundary even for legacy points that predate the `embedding_profile` payload field. A model or dimension change requires a distinct collection and complete re-index. Automatic fallback between profiles is forbidden, and governed knowledge queries retain PostgreSQL authorization before exact Qdrant asset filtering.
 
 ## Operating modes
 

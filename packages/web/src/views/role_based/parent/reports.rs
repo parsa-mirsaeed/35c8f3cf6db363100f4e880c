@@ -1,6 +1,6 @@
-use dioxus::prelude::*;
-use crate::views::role_based::components::DashboardSection;
 use crate::i18n::use_locale;
+use crate::views::role_based::components::DashboardSection;
+use dioxus::prelude::*;
 
 /// Reports section for Parent
 #[component]
@@ -30,7 +30,7 @@ pub fn ParentReports() -> Element {
             // Reports Grid
             div {
                 class: "grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-8",
-                
+
                 // Available reports
                 div {
                     class: "lg:col-span-2",

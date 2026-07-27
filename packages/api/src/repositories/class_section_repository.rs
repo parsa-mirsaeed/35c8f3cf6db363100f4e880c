@@ -21,13 +21,16 @@ impl ClassSectionRepository {
     }
 
     /// Create a new class section
-    pub async fn create(&self, request: CreateClassSectionRequest) -> RepositoryResult<ClassSection> {
+    pub async fn create(
+        &self,
+        request: CreateClassSectionRequest,
+    ) -> RepositoryResult<ClassSection> {
         let row = sqlx::query(
             r#"
             INSERT INTO class_sections (school_id, subject_id, name, term)
             VALUES ($1, $2, $3, $4)
             RETURNING id, school_id, subject_id, name, term
-            "#
+            "#,
         )
         .bind(Uuid::from(request.school_id))
         .bind(Uuid::from(request.subject_id))
@@ -52,7 +55,7 @@ impl ClassSectionRepository {
             SELECT id, school_id, subject_id, name, term
             FROM class_sections
             WHERE id = $1
-            "#
+            "#,
         )
         .bind(Uuid::from(id))
         .fetch_one(&*self.base.pool())
@@ -68,7 +71,11 @@ impl ClassSectionRepository {
     }
 
     /// Update class section
-    pub async fn update(&self, id: ClassSectionId, request: UpdateClassSectionRequest) -> RepositoryResult<ClassSection> {
+    pub async fn update(
+        &self,
+        id: ClassSectionId,
+        request: UpdateClassSectionRequest,
+    ) -> RepositoryResult<ClassSection> {
         let row = sqlx::query(
             r#"
             UPDATE class_sections
@@ -76,7 +83,7 @@ impl ClassSectionRepository {
                 term = COALESCE($2, term)
             WHERE id = $3
             RETURNING id, school_id, subject_id, name, term
-            "#
+            "#,
         )
         .bind(request.name)
         .bind(request.term)
@@ -95,17 +102,15 @@ impl ClassSectionRepository {
 
     /// Delete class section
     pub async fn delete(&self, id: ClassSectionId) -> RepositoryResult<()> {
-        let result = sqlx::query(
-            "DELETE FROM class_sections WHERE id = $1"
-        )
-        .bind(Uuid::from(id))
-        .execute(&*self.base.pool())
-        .await?;
+        let result = sqlx::query("DELETE FROM class_sections WHERE id = $1")
+            .bind(Uuid::from(id))
+            .execute(&*self.base.pool())
+            .await?;
 
         if result.rows_affected() == 0 {
             return Err(RepositoryError::NotFound {
                 entity: "ClassSection".to_string(),
-                id: format!("{}", id)
+                id: format!("{}", id),
             });
         }
 
@@ -120,24 +125,32 @@ impl ClassSectionRepository {
             FROM class_sections
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
-            "#
+            "#,
         )
         .bind(limit)
         .bind(offset)
         .fetch_all(&*self.base.pool())
         .await?;
 
-        Ok(rows.into_iter().map(|row| ClassSection {
-            id: ClassSectionId::from(row.get::<uuid::Uuid, _>("id")),
-            school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
-            subject_id: SubjectId::from(row.get::<uuid::Uuid, _>("subject_id")),
-            name: row.get("name"),
-            term: row.get("term"),
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| ClassSection {
+                id: ClassSectionId::from(row.get::<uuid::Uuid, _>("id")),
+                school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
+                subject_id: SubjectId::from(row.get::<uuid::Uuid, _>("subject_id")),
+                name: row.get("name"),
+                term: row.get("term"),
+            })
+            .collect())
     }
 
     /// List class sections by school with pagination
-    pub async fn list_by_school(&self, school_id: SchoolId, limit: i64, offset: i64) -> RepositoryResult<Vec<ClassSection>> {
+    pub async fn list_by_school(
+        &self,
+        school_id: SchoolId,
+        limit: i64,
+        offset: i64,
+    ) -> RepositoryResult<Vec<ClassSection>> {
         let rows = sqlx::query(
             r#"
             SELECT id, school_id, subject_id, name, term
@@ -145,7 +158,7 @@ impl ClassSectionRepository {
             WHERE school_id = $1
             ORDER BY name, term
             LIMIT $2 OFFSET $3
-            "#
+            "#,
         )
         .bind(Uuid::from(school_id))
         .bind(limit)
@@ -153,23 +166,31 @@ impl ClassSectionRepository {
         .fetch_all(&*self.base.pool())
         .await?;
 
-        Ok(rows.into_iter().map(|row| ClassSection {
-            id: ClassSectionId::from(row.get::<uuid::Uuid, _>("id")),
-            school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
-            subject_id: SubjectId::from(row.get::<uuid::Uuid, _>("subject_id")),
-            name: row.get("name"),
-            term: row.get("term"),
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| ClassSection {
+                id: ClassSectionId::from(row.get::<uuid::Uuid, _>("id")),
+                school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
+                subject_id: SubjectId::from(row.get::<uuid::Uuid, _>("subject_id")),
+                name: row.get("name"),
+                term: row.get("term"),
+            })
+            .collect())
     }
 
     /// Find class section by name, term, and school (for duplicate checking)
-    pub async fn find_by_name_term_school(&self, name: &str, term: &str, school_id: SchoolId) -> RepositoryResult<ClassSection> {
+    pub async fn find_by_name_term_school(
+        &self,
+        name: &str,
+        term: &str,
+        school_id: SchoolId,
+    ) -> RepositoryResult<ClassSection> {
         let row = sqlx::query(
             r#"
             SELECT id, school_id, subject_id, name, term
             FROM class_sections
             WHERE name = $1 AND term = $2 AND school_id = $3
-            "#
+            "#,
         )
         .bind(name)
         .bind(term)
@@ -191,7 +212,10 @@ impl ClassSectionRepository {
     }
 
     /// Find class sections by school with subject information
-    pub async fn find_by_school_with_subject(&self, school_id: SchoolId) -> RepositoryResult<Vec<crate::models::ClassSectionWithSubject>> {
+    pub async fn find_by_school_with_subject(
+        &self,
+        school_id: SchoolId,
+    ) -> RepositoryResult<Vec<crate::models::ClassSectionWithSubject>> {
         let rows = sqlx::query(
             r#"
             SELECT 
@@ -202,25 +226,31 @@ impl ClassSectionRepository {
             LEFT JOIN subjects s ON cs.subject_id = s.id
             WHERE cs.school_id = $1
             ORDER BY cs.term DESC, cs.name
-            "#
+            "#,
         )
         .bind(Uuid::from(school_id))
         .fetch_all(&*self.base.pool())
         .await?;
 
-        Ok(rows.into_iter().map(|row| crate::models::ClassSectionWithSubject {
-            id: ClassSectionId::from(row.get::<uuid::Uuid, _>("id")),
-            school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
-            subject_id: SubjectId::from(row.get::<uuid::Uuid, _>("subject_id")),
-            name: row.get("name"),
-            term: row.get("term"),
-            subject_code: row.get("subject_code"),
-            subject_name: row.get("subject_name"),
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| crate::models::ClassSectionWithSubject {
+                id: ClassSectionId::from(row.get::<uuid::Uuid, _>("id")),
+                school_id: SchoolId::from(row.get::<uuid::Uuid, _>("school_id")),
+                subject_id: SubjectId::from(row.get::<uuid::Uuid, _>("subject_id")),
+                name: row.get("name"),
+                term: row.get("term"),
+                subject_code: row.get("subject_code"),
+                subject_name: row.get("subject_name"),
+            })
+            .collect())
     }
 
     /// Alias for create to match server function naming
-    pub async fn create_internal(&self, request: CreateClassSectionRequest) -> RepositoryResult<ClassSection> {
+    pub async fn create_internal(
+        &self,
+        request: CreateClassSectionRequest,
+    ) -> RepositoryResult<ClassSection> {
         self.create(request).await
     }
 }
@@ -229,7 +259,11 @@ impl ClassSectionRepository {
 pub trait ClassSectionRepositoryTrait: Send + Sync {
     async fn create(&self, request: CreateClassSectionRequest) -> RepositoryResult<ClassSection>;
     async fn find_by_id(&self, id: ClassSectionId) -> RepositoryResult<ClassSection>;
-    async fn update(&self, id: ClassSectionId, request: UpdateClassSectionRequest) -> RepositoryResult<ClassSection>;
+    async fn update(
+        &self,
+        id: ClassSectionId,
+        request: UpdateClassSectionRequest,
+    ) -> RepositoryResult<ClassSection>;
     async fn delete(&self, id: ClassSectionId) -> RepositoryResult<()>;
     async fn list(&self, limit: i64, offset: i64) -> RepositoryResult<Vec<ClassSection>>;
 }
@@ -244,7 +278,11 @@ impl ClassSectionRepositoryTrait for ClassSectionRepository {
         self.find_by_id(id).await
     }
 
-    async fn update(&self, id: ClassSectionId, request: UpdateClassSectionRequest) -> RepositoryResult<ClassSection> {
+    async fn update(
+        &self,
+        id: ClassSectionId,
+        request: UpdateClassSectionRequest,
+    ) -> RepositoryResult<ClassSection> {
         self.update(id, request).await
     }
 

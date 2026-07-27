@@ -1,6 +1,8 @@
 use crate::domain::UserId;
 use crate::error::{AppError, AppResult};
-use crate::models::user_preferences::{UserPreferences, UpdateGeneralSettingsRequest, UpdateNotificationPreferencesRequest};
+use crate::models::user_preferences::{
+    UpdateGeneralSettingsRequest, UpdateNotificationPreferencesRequest, UserPreferences,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -17,10 +19,10 @@ impl UserPreferencesRepository {
     /// Get or create user preferences
     pub async fn get_or_create(&self, user_id: UserId) -> AppResult<UserPreferences> {
         let user_uuid: Uuid = user_id.into();
-        
+
         // Try to get existing preferences
         let existing = sqlx::query_as::<_, UserPreferences>(
-            "SELECT * FROM user_preferences WHERE user_id = $1"
+            "SELECT * FROM user_preferences WHERE user_id = $1",
         )
         .bind(user_uuid)
         .fetch_optional(&self.pool)
@@ -37,7 +39,7 @@ impl UserPreferencesRepository {
             INSERT INTO user_preferences (user_id)
             VALUES ($1)
             RETURNING *
-            "#
+            "#,
         )
         .bind(user_uuid)
         .fetch_one(&self.pool)
@@ -54,12 +56,12 @@ impl UserPreferencesRepository {
         request: UpdateGeneralSettingsRequest,
     ) -> AppResult<UserPreferences> {
         let user_uuid: Uuid = user_id.into();
-        
+
         // Build dynamic update query
         let mut query = String::from("UPDATE user_preferences SET ");
         let mut updates = Vec::new();
         let mut param_count = 1;
-        
+
         if request.timezone.is_some() {
             updates.push(format!("timezone = ${}", param_count));
             param_count += 1;
@@ -76,16 +78,16 @@ impl UserPreferencesRepository {
             updates.push(format!("time_format = ${}", param_count));
             param_count += 1;
         }
-        
+
         if updates.is_empty() {
             return self.get_or_create(user_id).await;
         }
-        
+
         query.push_str(&updates.join(", "));
         query.push_str(&format!(" WHERE user_id = ${} RETURNING *", param_count));
-        
+
         let mut query_builder = sqlx::query_as::<_, UserPreferences>(&query);
-        
+
         if let Some(tz) = request.timezone {
             query_builder = query_builder.bind(tz);
         }
@@ -98,9 +100,9 @@ impl UserPreferencesRepository {
         if let Some(tf) = request.time_format {
             query_builder = query_builder.bind(tf);
         }
-        
+
         query_builder = query_builder.bind(user_uuid);
-        
+
         let prefs = query_builder
             .fetch_one(&self.pool)
             .await
@@ -116,12 +118,12 @@ impl UserPreferencesRepository {
         request: UpdateNotificationPreferencesRequest,
     ) -> AppResult<UserPreferences> {
         let user_uuid: Uuid = user_id.into();
-        
+
         // Build dynamic update query
         let mut query = String::from("UPDATE user_preferences SET ");
         let mut updates = Vec::new();
         let mut param_count = 1;
-        
+
         if request.email_notifications.is_some() {
             updates.push(format!("email_notifications = ${}", param_count));
             param_count += 1;
@@ -162,16 +164,16 @@ impl UserPreferencesRepository {
             updates.push(format!("email_digest_frequency = ${}", param_count));
             param_count += 1;
         }
-        
+
         if updates.is_empty() {
             return self.get_or_create(user_id).await;
         }
-        
+
         query.push_str(&updates.join(", "));
         query.push_str(&format!(" WHERE user_id = ${} RETURNING *", param_count));
-        
+
         let mut query_builder = sqlx::query_as::<_, UserPreferences>(&query);
-        
+
         if let Some(val) = request.email_notifications {
             query_builder = query_builder.bind(val);
         }
@@ -202,13 +204,12 @@ impl UserPreferencesRepository {
         if let Some(val) = request.email_digest_frequency {
             query_builder = query_builder.bind(val);
         }
-        
+
         query_builder = query_builder.bind(user_uuid);
-        
-        let prefs = query_builder
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to update notification preferences: {}", e)))?;
+
+        let prefs = query_builder.fetch_one(&self.pool).await.map_err(|e| {
+            AppError::Internal(format!("Failed to update notification preferences: {}", e))
+        })?;
 
         Ok(prefs)
     }

@@ -34,9 +34,7 @@ pub fn LoadingSpinner(
 
 /// Small inline loading spinner for buttons and forms
 #[component]
-pub fn InlineLoadingSpinner(
-    size: Option<String>,
-) -> Element {
+pub fn InlineLoadingSpinner(size: Option<String>) -> Element {
     let spinner_size = size.unwrap_or_else(|| "16px".to_string());
 
     rsx! {
@@ -49,9 +47,7 @@ pub fn InlineLoadingSpinner(
 
 /// Full screen loading overlay
 #[component]
-pub fn FullScreenLoading(
-    message: Option<String>,
-) -> Element {
+pub fn FullScreenLoading(message: Option<String>) -> Element {
     rsx! {
         div {
             class: "fullscreen-loading-overlay",
@@ -59,7 +55,7 @@ pub fn FullScreenLoading(
 
             div {
                 style: "display: flex; flex-direction: column; align-items: center;",
-                
+
                 LoadingSpinner {
                     size: Some("60px".to_string()),
                     color: Some("#69EACB".to_string()),
@@ -106,12 +102,12 @@ pub fn CardSkeleton() -> Element {
             // Header skeleton
             div {
                 style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;",
-                
+
                 SkeletonLoader {
                     width: Some("120px".to_string()),
                     height: Some("16px".to_string()),
                 }
-                
+
                 SkeletonLoader {
                     width: Some("24px".to_string()),
                     height: Some("24px".to_string()),
@@ -136,10 +132,7 @@ pub fn CardSkeleton() -> Element {
 
 /// Table skeleton for data tables
 #[component]
-pub fn TableSkeleton(
-    rows: Option<i32>,
-    columns: Option<i32>,
-) -> Element {
+pub fn TableSkeleton(rows: Option<i32>, columns: Option<i32>) -> Element {
     let row_count = rows.unwrap_or(5);
     let column_count = columns.unwrap_or(4);
 

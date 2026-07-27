@@ -143,9 +143,9 @@ Embedding profiles are immutable contracts:
 | Profile | Model | Dimensions | Qdrant collection |
 | --- | --- | ---: | --- |
 | `openai-v1` | `text-embedding-3-small` | 1536 | `edutalent_openai_v1` |
-| `local-bge-v1` | `BAAI/bge-small-en-v1.5` | 384 | `edutalent_local_bge_v1` |
+| `local-bge-v1` | `BAAI/bge-small-en-v1.5` | 384 | `edutalent_materials_local_v1` |
 
-Changing profiles requires a distinct collection and complete re-index; automatic fallback between vector spaces is forbidden.
+The unchanged local BGE profile deliberately retains the existing production collection name `edutalent_materials_local_v1`, so upgrades keep previously indexed local vectors available. The OpenAI profile uses its own collection. Changing either model or dimensions still requires a distinct collection and complete re-index; automatic fallback between vector spaces is forbidden.
 
 See [`deploy/production/README.md`](deploy/production/README.md), the [production architecture decision](docs/adr/0001-offline-first-production-architecture.md), the [controlled AI decision](docs/adr/0002-controlled-external-ai.md), the [production threat model](docs/security/production-threat-model.md), and the [controlled AI threat model](docs/security/controlled-external-ai-threat-model.md).
 

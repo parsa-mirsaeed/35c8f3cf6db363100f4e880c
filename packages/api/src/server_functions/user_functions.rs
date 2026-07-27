@@ -1,10 +1,10 @@
 //! User server functions.
 
-use dioxus::prelude::*;
-use crate::domain::{UserId, RoleId, SchoolId};
-use crate::models::{User, CreateUserRequest, UpdateUserRequest};
 #[cfg(feature = "server")]
 use crate::app_state::extract_server_state;
+use crate::domain::{RoleId, SchoolId, UserId};
+use crate::models::{CreateUserRequest, UpdateUserRequest, User};
+use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use uuid::Uuid;
 
@@ -31,11 +31,14 @@ pub async fn get_all(token: String) -> Result<Vec<User>, ServerFnError> {
         if user.role != "admin" {
             return Err(ServerFnError::new("Forbidden: admin role required"));
         }
-        
+
         let state = extract_server_state()?;
         let repo = &state.services.user;
-        
-        let users = repo.list(1000, 0).await.map_err(|e| ServerFnError::new(e.to_string()))?;
+
+        let users = repo
+            .list(1000, 0)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
         Ok(users)
     }
     #[cfg(not(feature = "server"))]
@@ -50,11 +53,13 @@ pub async fn get_by_id(token: String, id: String) -> Result<Option<User>, Server
         if user.role != "admin" && user.id != id {
             return Err(ServerFnError::new("Forbidden: insufficient privileges"));
         }
-        
+
         let state = extract_server_state()?;
         let repo = &state.services.user;
-        let user_id = Uuid::parse_str(&id).map_err(|_| ServerFnError::new("Invalid ID"))?.into();
-        
+        let user_id = Uuid::parse_str(&id)
+            .map_err(|_| ServerFnError::new("Invalid ID"))?
+            .into();
+
         match repo.find_by_id_internal(user_id).await {
             Ok(user) => Ok(Some(user)),
             Err(crate::repositories::RepositoryError::NotFound { .. }) => Ok(None),
@@ -73,11 +78,14 @@ pub async fn create(token: String, data: CreateUserRequest) -> Result<User, Serv
         if user.role != "admin" {
             return Err(ServerFnError::new("Forbidden: admin role required"));
         }
-        
+
         let state = extract_server_state()?;
         let repo = &state.services.user;
-        
-        let user = repo.create_internal(data).await.map_err(|e| ServerFnError::new(e.to_string()))?;
+
+        let user = repo
+            .create_internal(data)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
         Ok(user)
     }
     #[cfg(not(feature = "server"))]
@@ -85,19 +93,28 @@ pub async fn create(token: String, data: CreateUserRequest) -> Result<User, Serv
 }
 
 #[server(UpdateUser, endpoint = "users/update")]
-pub async fn update(token: String, id: String, data: UpdateUserRequest) -> Result<User, ServerFnError> {
+pub async fn update(
+    token: String,
+    id: String,
+    data: UpdateUserRequest,
+) -> Result<User, ServerFnError> {
     #[cfg(feature = "server")]
     {
         let user = require_auth(&token).await?;
         if user.role != "admin" && user.id != id {
             return Err(ServerFnError::new("Forbidden: insufficient privileges"));
         }
-        
+
         let state = extract_server_state()?;
         let repo = &state.services.user;
-        let user_id = Uuid::parse_str(&id).map_err(|_| ServerFnError::new("Invalid ID"))?.into();
-        
-        let user = repo.update_internal(user_id, data).await.map_err(|e| ServerFnError::new(e.to_string()))?;
+        let user_id = Uuid::parse_str(&id)
+            .map_err(|_| ServerFnError::new("Invalid ID"))?
+            .into();
+
+        let user = repo
+            .update_internal(user_id, data)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
         Ok(user)
     }
     #[cfg(not(feature = "server"))]
@@ -112,12 +129,16 @@ pub async fn delete(token: String, id: String) -> Result<(), ServerFnError> {
         if user.role != "admin" {
             return Err(ServerFnError::new("Forbidden: admin role required"));
         }
-        
+
         let state = extract_server_state()?;
         let repo = &state.services.user;
-        let user_id = Uuid::parse_str(&id).map_err(|_| ServerFnError::new("Invalid ID"))?.into();
-        
-        repo.delete_internal(user_id).await.map_err(|e| ServerFnError::new(e.to_string()))?;
+        let user_id = Uuid::parse_str(&id)
+            .map_err(|_| ServerFnError::new("Invalid ID"))?
+            .into();
+
+        repo.delete_internal(user_id)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
         Ok(())
     }
     #[cfg(not(feature = "server"))]

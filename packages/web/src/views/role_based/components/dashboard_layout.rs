@@ -1,9 +1,8 @@
-use dioxus::prelude::*;
+use super::{Header, Sidebar};
+use crate::application::routing_service::{NavigationItem, RoutingService};
 use crate::domain::User;
-use crate::application::routing_service::{RoutingService, NavigationItem};
 use crate::i18n::use_locale;
-use super::{Sidebar, Header};
-
+use dioxus::prelude::*;
 
 /// Main dashboard layout component that wraps all role-based dashboards
 #[component]
@@ -20,7 +19,7 @@ pub fn DashboardLayout(
     rsx! {
         div {
             class: "relative min-h-screen w-full overflow-hidden bg-background-light dark:bg-background-dark text-gray-900 dark:text-white transition-colors duration-300",
-            
+
             // Animated Background Blobs
             div {
                 class: "absolute top-0 left-0 w-full h-full z-0 pointer-events-none overflow-hidden",
@@ -32,7 +31,7 @@ pub fn DashboardLayout(
             // Main Content Container
             div {
                 class: "relative z-10 flex h-screen",
-                
+
                 // Sidebar Navigation
                 Sidebar {
                     user: user.clone(),
@@ -45,7 +44,7 @@ pub fn DashboardLayout(
                 // Main Area (Header + Content)
                 div {
                     class: "flex-1 flex flex-col min-w-0 transition-all duration-300",
-                    
+
                     // Header
                     Header {
                         user: user.clone(),
@@ -77,14 +76,10 @@ pub fn MobileDashboardLayout(
     let locale = use_locale();
     let mut is_profile_menu_open = use_signal(|| false);
     let navigation_items = use_signal(|| RoutingService::get_navigation_items(&user, &locale));
-    
+
     // Get first 4 items for bottom nav (or fewer if not available)
-    let bottom_nav_items: Vec<NavigationItem> = navigation_items
-        .read()
-        .iter()
-        .take(4)
-        .cloned()
-        .collect();
+    let bottom_nav_items: Vec<NavigationItem> =
+        navigation_items.read().iter().take(4).cloned().collect();
 
     rsx! {
         div {
@@ -108,7 +103,7 @@ pub fn MobileDashboardLayout(
                         onclick: move |_| is_profile_menu_open.set(!is_profile_menu_open()),
                         "{user.initials()}"
                     }
-                    
+
                     if is_profile_menu_open() {
                         div {
                             class: format!("absolute top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 py-2 animate-fade-in z-50 {}", if locale.is_rtl() { "left-0" } else { "right-0" }),
@@ -159,12 +154,12 @@ pub fn MobileDashboardLayout(
                             {
                                 let item_id = item.id.clone();
                                 let is_active = item.id == active_section;
-                                
+
                                 rsx! {
                                     button {
                                         class: "flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition-all duration-200 min-w-0 flex-1",
                                         onclick: move |_| on_navigate.call(item_id.clone()),
-                                        
+
                                         div {
                                             class: if is_active {
                                                 "w-10 h-10 flex items-center justify-center rounded-xl bg-primary text-white shadow-md shadow-primary/30 transition-all duration-200"
@@ -173,7 +168,7 @@ pub fn MobileDashboardLayout(
                                             },
                                             span { class: "material-icons-outlined text-xl", "{item.icon}" }
                                         }
-                                        
+
                                         span {
                                             class: if is_active {
                                                 "text-[10px] font-semibold text-primary dark:text-primary-light truncate max-w-full"
@@ -192,7 +187,6 @@ pub fn MobileDashboardLayout(
         }
     }
 }
-
 
 /// Dashboard layout that adapts to screen size
 #[component]
@@ -236,11 +230,7 @@ pub fn ResponsiveDashboardLayout(
 
 /// Dashboard section wrapper with common styling
 #[component]
-pub fn DashboardSection(
-    title: String,
-    description: Option<String>,
-    children: Element,
-) -> Element {
+pub fn DashboardSection(title: String, description: Option<String>, children: Element) -> Element {
     rsx! {
         section {
             class: "mb-4 md:mb-8 animate-fade-in",
@@ -280,20 +270,24 @@ pub fn DashboardCard(
     value: String,
     change: Option<String>,
     icon: Option<String>,
-    color: Option<String>, 
+    color: Option<String>,
 ) -> Element {
     let locale = use_locale();
     let accent_color = color.unwrap_or_else(|| "bg-primary".to_string());
-    
+
     // Check if accent_color is a hex code or a tailwind class
     let is_hex = accent_color.starts_with('#');
-    let icon_bg_style = if is_hex { format!("background-color: {}", accent_color) } else { String::new() };
+    let icon_bg_style = if is_hex {
+        format!("background-color: {}", accent_color)
+    } else {
+        String::new()
+    };
     let icon_bg_class = if !is_hex { accent_color } else { String::new() };
 
     rsx! {
         div {
             class: "glass-card p-3 md:p-5 relative overflow-hidden group hover:-translate-y-1 transition-all duration-300",
-            
+
             div {
                 class: "flex justify-between items-start gap-2 mb-2 md:mb-4",
 

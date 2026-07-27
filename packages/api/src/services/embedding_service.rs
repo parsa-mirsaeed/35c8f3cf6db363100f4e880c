@@ -9,8 +9,7 @@ use crate::ai_gateway_protocol::{
     GatewayEmbeddingRequest, GatewayEmbeddingResponse, GatewayErrorEnvelope,
 };
 use crate::services::embedding_profile::{
-    resolve_embedding_profile, validate_profile_overrides, EmbeddingProfile,
-    EmbeddingProfileError,
+    resolve_embedding_profile, validate_profile_overrides, EmbeddingProfile, EmbeddingProfileError,
 };
 use reqwest::redirect::Policy as RedirectPolicy;
 use serde::{Deserialize, Serialize};
@@ -187,10 +186,7 @@ impl EmbeddingClient {
 
     /// Compatibility entry point retained only to fail closed. Callers must use
     /// `embed_batch_for_school` with an authoritative school ID.
-    pub async fn embed_batch(
-        &self,
-        _texts: Vec<String>,
-    ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+    pub async fn embed_batch(&self, _texts: Vec<String>) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         Err(EmbeddingError::MissingSchoolId)
     }
 
@@ -264,11 +260,9 @@ impl EmbeddingClient {
                 .as_ref()
                 .and_then(|body| body.error.retry_after_seconds);
             return match code {
-                "provider_rate_limited" | "quota_exceeded" => {
-                    Err(EmbeddingError::RateLimited {
-                        retry_after_seconds: retry_after.unwrap_or(60),
-                    })
-                }
+                "provider_rate_limited" | "quota_exceeded" => Err(EmbeddingError::RateLimited {
+                    retry_after_seconds: retry_after.unwrap_or(60),
+                }),
                 "ai_temporarily_unavailable"
                 | "circuit_open"
                 | "provider_unconfigured"
@@ -295,11 +289,7 @@ impl EmbeddingClient {
         }) {
             return Err(EmbeddingError::InvalidResponse);
         }
-        Ok(body
-            .data
-            .into_iter()
-            .map(|item| item.embedding)
-            .collect())
+        Ok(body.data.into_iter().map(|item| item.embedding).collect())
     }
 
     pub fn is_configured(&self) -> bool {

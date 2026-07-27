@@ -158,12 +158,12 @@ case "${command}" in
     dev)
         ensure_docker
         ensure_env
-        exec docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" --profile dev up --build dev
+        exec docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" --profile dev up --build ai-gateway dev
         ;;
     up)
         ensure_docker
         ensure_env
-        compose_dev --profile app up --build --detach app
+        compose_dev --profile app up --build --detach ai-gateway app
         require_command curl
         wait_for_health
         ;;
@@ -239,7 +239,7 @@ case "${command}" in
     smoke)
         ensure_docker
         ensure_env
-        compose_dev --profile app up --build --detach app
+        compose_dev --profile app up --build --detach ai-gateway app
         require_command curl
         wait_for_health
         ;;
@@ -265,6 +265,8 @@ case "${command}" in
         grep -Fq 'target/dx/web/release/web' Dockerfile
         grep -Fq 'bash edutalent package' .github/workflows/package.yml
         grep -Fq 'production-ai-check' edutalent
+        grep -Fq -- '--profile dev up --build ai-gateway dev' edutalent
+        grep -Fq -- '--profile app up --build --detach ai-gateway app' edutalent
         grep -Eq '^[0-9a-f]{40}$' deploy/production/SUPABASE_UPSTREAM
         echo "Packaging and production command definitions are valid."
         ;;

@@ -1,17 +1,13 @@
-use dioxus::prelude::*;
 use crate::domain::User;
-use gloo_storage::Storage;
 use crate::i18n::use_locale;
+use dioxus::prelude::*;
+use gloo_storage::Storage;
 
 /// Header component for dashboard layout
 #[component]
-pub fn Header(
-    user: User,
-    is_sidebar_collapsed: bool,
-    on_toggle_sidebar: EventHandler,
-) -> Element {
+pub fn Header(user: User, is_sidebar_collapsed: bool, on_toggle_sidebar: EventHandler) -> Element {
     let mut current_time = use_signal(|| chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string());
-    
+
     // Get locale context for translations
     let locale_ctx = use_locale();
     let t_dashboard = locale_ctx.t("nav.dashboard");
@@ -33,18 +29,18 @@ pub fn Header(
     rsx! {
         header {
             class: "flex justify-between items-center mb-4 md:mb-8 bg-white/5 dark:bg-gray-900/50 backdrop-blur-md rounded-xl md:rounded-2xl p-3 md:p-4 border border-white/10 shadow-sm",
-            
+
             // Left section - Title and Welcome
             div {
                 class: "flex items-center gap-2 md:gap-4 min-w-0",
-                
+
                 // Collapse/Expand button (hidden on mobile - uses MobileDashboardLayout)
                 button {
                     class: "hidden md:flex p-2 rounded-lg hover:bg-white/10 dark:hover:bg-white/5 transition-colors text-gray-600 dark:text-gray-300",
                     onclick: move |_| on_toggle_sidebar.call(()),
                     span { class: "material-icons-outlined", "menu" }
                 }
-                
+
                 div {
                     class: "min-w-0",
                     h2 { class: "text-lg md:text-2xl font-bold text-gray-900 dark:text-white leading-tight truncate", "{t_dashboard}" }
@@ -56,7 +52,7 @@ pub fn Header(
             // Right section - Search, Notifications, Time
             div {
                 class: "flex items-center gap-1 sm:gap-2 md:gap-4",
-                
+
                 // Search - Hidden on mobile, visible on md+
                 div {
                     class: "hidden md:flex relative group",
@@ -93,12 +89,11 @@ pub fn Header(
     }
 }
 
-
 /// Notification dropdown component
 #[component]
 pub fn NotificationDropdown(user: User) -> Element {
     let mut is_open = use_signal(|| false);
-    
+
     // Get locale context for translations
     let locale_ctx = use_locale();
     let t_notifications = locale_ctx.t("nav.notifications");
@@ -106,16 +101,15 @@ pub fn NotificationDropdown(user: User) -> Element {
     let t_no_notifications = locale_ctx.t("notifications.no_new");
     let t_failed_load = locale_ctx.t("grades.failed_load");
     let t_view_all = locale_ctx.t("notifications.view_history");
-    
+
     // Fetch real notifications from backend (uses cookies automatically)
-    let mut notification_resource = use_resource(move || {
-        async move {
-            api::server_functions::notification_functions::get_unread_notifications(Some(10)).await
-        }
+    let mut notification_resource = use_resource(move || async move {
+        api::server_functions::notification_functions::get_unread_notifications(Some(10)).await
     });
 
     // Get notification count from resource
-    let notification_count = notification_resource.read()
+    let notification_count = notification_resource
+        .read()
         .as_ref()
         .and_then(|r| r.as_ref().ok())
         .map(|resp| resp.unread_count)
@@ -130,7 +124,7 @@ pub fn NotificationDropdown(user: User) -> Element {
                 class: "relative p-2.5 rounded-xl hover:bg-white/50 dark:hover:bg-gray-800/50 transition-all duration-200 group active:scale-95",
                 onclick: move |_| is_open.set(!is_open()),
                 title: "{t_notifications}",
-                
+
                 span {
                     class: "material-icons-outlined text-gray-600 dark:text-gray-300 group-hover:text-primary transition-colors",
                     "notifications"
@@ -151,11 +145,11 @@ pub fn NotificationDropdown(user: User) -> Element {
                     class: "md:hidden fixed inset-0 bg-black/30 z-40",
                     onclick: move |_| is_open.set(false),
                 }
-                
+
                 div {
                     // Mobile: Fixed bottom sheet, Desktop: Positioned dropdown
                     class: "fixed md:absolute inset-x-2 bottom-2 md:inset-auto md:top-full md:right-0 md:mt-2 md:w-80 glass-card z-50 animate-fade-in p-0 overflow-hidden ring-1 ring-black/5 max-h-[80vh] md:max-h-none rounded-2xl md:rounded-2xl",
-                    
+
                     // Header
                     div {
                         class: "p-4 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center bg-gray-50/50 dark:bg-gray-800/50",
@@ -194,7 +188,7 @@ pub fn NotificationDropdown(user: User) -> Element {
                                                     notification_resource.restart();
                                                 });
                                             };
-                                            
+
                                             rsx! {
                                                 NotificationItem {
                                                     key: "{notification.id}",
@@ -219,7 +213,7 @@ pub fn NotificationDropdown(user: User) -> Element {
                             }
                         }
                     }
-                    
+
                     // Footer
                     button {
                         class: "w-full p-3 text-center text-xs font-medium text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-t border-gray-100 dark:border-gray-800",
@@ -232,16 +226,25 @@ pub fn NotificationDropdown(user: User) -> Element {
 }
 
 // Helper function to format time ago with locale support
-fn format_time_ago(time: chrono::DateTime<chrono::Utc>, locale: &crate::i18n::LocaleContext) -> String {
+fn format_time_ago(
+    time: chrono::DateTime<chrono::Utc>,
+    locale: &crate::i18n::LocaleContext,
+) -> String {
     let now = chrono::Utc::now();
     let duration = now.signed_duration_since(time);
-    
+
     if duration.num_days() > 0 {
-        locale.t("time.days_ago").replace("{0}", &duration.num_days().to_string())
+        locale
+            .t("time.days_ago")
+            .replace("{0}", &duration.num_days().to_string())
     } else if duration.num_hours() > 0 {
-        locale.t("time.hours_ago").replace("{0}", &duration.num_hours().to_string())
+        locale
+            .t("time.hours_ago")
+            .replace("{0}", &duration.num_hours().to_string())
     } else if duration.num_minutes() > 0 {
-        locale.t("time.minutes_ago").replace("{0}", &duration.num_minutes().to_string())
+        locale
+            .t("time.minutes_ago")
+            .replace("{0}", &duration.num_minutes().to_string())
     } else {
         locale.t("time.just_now")
     }
@@ -258,8 +261,12 @@ pub fn NotificationItem(
     #[props(default = String::new())] notification_id: String,
     #[props(default)] on_click: Option<EventHandler>,
 ) -> Element {
-    let active_class = if is_read { "opacity-70" } else { "bg-primary/5 dark:bg-primary/10" };
-    
+    let active_class = if is_read {
+        "opacity-70"
+    } else {
+        "bg-primary/5 dark:bg-primary/10"
+    };
+
     rsx! {
         div {
             class: "flex gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors cursor-pointer border-b border-gray-100 dark:border-gray-800 last:border-0 {active_class}",
@@ -268,13 +275,13 @@ pub fn NotificationItem(
                     handler.call(());
                 }
             },
-            
+
             // Icon
             div {
                 class: "flex-shrink-0 w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400",
                 span { class: "material-icons-outlined text-sm", "{icon}" }
             }
-            
+
             // Content
             div {
                 class: "flex-1 min-w-0",
@@ -285,7 +292,7 @@ pub fn NotificationItem(
                 }
                 p { class: "text-xs text-gray-600 dark:text-gray-300 mt-0.5 line-clamp-2", "{message}" }
             }
-            
+
             // Unread dot
             if !is_read {
                 div { class: "flex-shrink-0 w-2 h-2 rounded-full bg-primary mt-1.5" }

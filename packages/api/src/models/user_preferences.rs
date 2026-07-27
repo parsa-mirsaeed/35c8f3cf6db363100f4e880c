@@ -10,18 +10,18 @@ use sqlx::FromRow;
 pub struct UserPreferences {
     pub id: Uuid,
     pub user_id: Uuid,
-    
+
     // General Settings
     pub timezone: String,
     pub language: String,
     pub date_format: String,
     pub time_format: String,
-    
+
     // Notification Preferences
     pub email_notifications: bool,
     pub push_notifications: bool,
     pub in_app_notifications: bool,
-    
+
     // Notification Types
     pub notify_user_registered: bool,
     pub notify_class_created: bool,
@@ -29,10 +29,10 @@ pub struct UserPreferences {
     pub notify_report_generated: bool,
     pub notify_profile_change: bool,
     pub notify_system_announcements: bool,
-    
+
     // Email Digest
     pub email_digest_frequency: String,
-    
+
     // Timestamps
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

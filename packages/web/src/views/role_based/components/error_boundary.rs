@@ -3,10 +3,7 @@ use serde_json::Value;
 
 /// Error boundary component for catching and displaying errors
 #[component]
-pub fn ErrorBoundary(
-    children: Element,
-    fallback: Option<Element>,
-) -> Element {
+pub fn ErrorBoundary(children: Element, fallback: Option<Element>) -> Element {
     let mut error_state = use_signal(|| Option::<String>::None);
     let mut error_info = use_signal(|| Option::<Value>::None);
 
@@ -40,11 +37,7 @@ pub fn ErrorBoundary(
 
 /// Default error UI component
 #[component]
-pub fn DefaultErrorUI(
-    error: String,
-    error_info: Option<Value>,
-    on_retry: EventHandler,
-) -> Element {
+pub fn DefaultErrorUI(error: String, error_info: Option<Value>, on_retry: EventHandler) -> Element {
     rsx! {
         div {
             class: "error-boundary-error",
@@ -122,10 +115,7 @@ pub fn DefaultErrorUI(
 
 /// Network error component
 #[component]
-pub fn NetworkError(
-    message: Option<String>,
-    on_retry: EventHandler,
-) -> Element {
+pub fn NetworkError(message: Option<String>, on_retry: EventHandler) -> Element {
     rsx! {
         div {
             class: "network-error",
@@ -164,11 +154,9 @@ pub fn NetworkError(
 
 /// Not found error component
 #[component]
-pub fn NotFoundError(
-    resource: Option<String>,
-    on_go_home: EventHandler,
-) -> Element {
-    let error_message = resource.as_ref()
+pub fn NotFoundError(resource: Option<String>, on_go_home: EventHandler) -> Element {
+    let error_message = resource
+        .as_ref()
         .map(|r| format!("{} not found", r))
         .unwrap_or_else(|| "Page not found".to_string());
 
@@ -216,10 +204,10 @@ pub fn PermissionDeniedError(
         div {
             class: "permission-denied-error",
             style: "display: flex; justify-content: center; align-items: center; min-height: 60vh; padding: 2rem;",
-            
+
             div {
                 style: "max-width: 500px; background: white; padding: 3rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center;",
-                
+
                 div {
                     style: "width: 80px; height: 80px; background: #fef3c7; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 2rem auto;",
                     span {
@@ -227,31 +215,31 @@ pub fn PermissionDeniedError(
                         "🔒"
                     }
                 }
-                
+
                 h1 {
                     style: "color: #d97706; margin-bottom: 1rem; font-size: 1.5rem;",
                     "Access Denied"
                 }
-                
+
                 p {
                     style: "color: #6b7280; margin-bottom: 1rem;",
                     "You don't have permission to access this resource."
                 }
-                
+
                 if let Some(perm) = required_permission {
                     p {
                         style: "color: #92400e; background: #fef3c7; padding: 0.75rem; border-radius: 6px; margin-bottom: 2rem; font-size: 0.875rem;",
                         "Required permission: {perm}"
                     }
                 }
-                
+
                 if let Some(res) = resource {
                     p {
                         style: "color: #6b7280; font-style: italic; margin-bottom: 2rem;",
                         "Resource: {res}"
                     }
                 }
-                
+
                 button {
                     style: "background: #d97706; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: 500;",
                     onclick: move |_| on_go_back.call(()),

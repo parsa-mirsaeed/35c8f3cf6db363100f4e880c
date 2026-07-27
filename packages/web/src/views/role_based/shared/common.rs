@@ -1,5 +1,5 @@
-use dioxus::prelude::*;
 use crate::i18n::use_locale;
+use dioxus::prelude::*;
 
 /// Loading spinner component
 #[component]
@@ -16,10 +16,7 @@ pub fn LoadingSpinner() -> Element {
 
 /// Error message component
 #[component]
-pub fn ErrorMessage(
-    message: String,
-    on_retry: Option<Callback<()>>,
-) -> Element {
+pub fn ErrorMessage(message: String, on_retry: Option<Callback<()>>) -> Element {
     let locale = use_locale();
     rsx! {
         div {
@@ -99,10 +96,7 @@ pub fn EmptyState(
 
 /// Badge component
 #[component]
-pub fn Badge(
-    text: String,
-    variant: BadgeVariant,
-) -> Element {
+pub fn Badge(text: String, variant: BadgeVariant) -> Element {
     let classes = match variant {
         BadgeVariant::Success => "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 ring-1 ring-green-600/20",
         BadgeVariant::Warning => "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 ring-1 ring-yellow-600/20",
@@ -242,17 +236,12 @@ pub enum ButtonSize {
 
 /// Modal component
 #[component]
-pub fn Modal(
-    title: String,
-    open: bool,
-    on_close: Callback<()>,
-    children: Element,
-) -> Element {
+pub fn Modal(title: String, open: bool, on_close: Callback<()>, children: Element) -> Element {
     rsx! {
         if open {
             div {
                 class: "fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6",
-                
+
                 // Backdrop
                 div {
                     class: "absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity",

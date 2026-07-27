@@ -116,7 +116,7 @@ qdrant_collection="$(read_env "${APP_ENV}" QDRANT_COLLECTION)"
 qdrant_size="$(read_env "${APP_ENV}" QDRANT_VECTOR_SIZE)"
 case "${embedding_profile}" in
   local-bge-v1)
-    [[ "${ai_mode}|${embedding_model}|${embedding_size}|${qdrant_collection}|${qdrant_size}" == "offline|BAAI/bge-small-en-v1.5|384|edutalent_local_bge_v1|384" ]] || {
+    [[ "${ai_mode}|${embedding_model}|${embedding_size}|${qdrant_collection}|${qdrant_size}" == "offline|BAAI/bge-small-en-v1.5|384|edutalent_materials_local_v1|384" ]] || {
       echo "local-bge-v1 profile values do not match the registry." >&2
       exit 1
     }

@@ -1,4 +1,4 @@
-use crate::domain::{UserId, AuditLogId};
+use crate::domain::{AuditLogId, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

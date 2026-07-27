@@ -1015,7 +1015,7 @@ async fn forward_chat(
 }
 
 async fn bounded_body(
-    response: reqwest::Response,
+    mut response: reqwest::Response,
     maximum: usize,
 ) -> Result<Vec<u8>, ProviderFailure> {
     if response
@@ -1024,14 +1024,28 @@ async fn bounded_body(
     {
         return Err(ProviderFailure::ResponseTooLarge);
     }
-    let body = response
-        .bytes()
+
+    let initial_capacity = response
+        .content_length()
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or_default()
+        .min(maximum);
+    let mut body = Vec::with_capacity(initial_capacity);
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|_| ProviderFailure::InvalidResponse)?;
-    if body.len() > maximum {
-        return Err(ProviderFailure::ResponseTooLarge);
+        .map_err(|_| ProviderFailure::InvalidResponse)?
+    {
+        let next_length = body
+            .len()
+            .checked_add(chunk.len())
+            .ok_or(ProviderFailure::ResponseTooLarge)?;
+        if next_length > maximum {
+            return Err(ProviderFailure::ResponseTooLarge);
+        }
+        body.extend_from_slice(&chunk);
     }
-    Ok(body.to_vec())
+    Ok(body)
 }
 
 fn validate_embedding_response(
@@ -1242,6 +1256,7 @@ mod tests {
     };
     use axum::routing::post;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn context() -> RequestContext {
         RequestContext {
@@ -1371,6 +1386,48 @@ mod tests {
             usage: None,
         };
         validate_chat_response(&provider, &chat).expect("valid chat response");
+    }
+
+    async fn spawn_chunked_response(chunks: Vec<&'static [u8]>) -> Url {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind chunked response");
+        let address = listener.local_addr().expect("chunked response address");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = [0_u8; 1_024];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .expect("write response headers");
+            for chunk in chunks {
+                socket
+                    .write_all(format!("{:X}\r\n", chunk.len()).as_bytes())
+                    .await
+                    .expect("write chunk size");
+                socket.write_all(chunk).await.expect("write chunk");
+                socket.write_all(b"\r\n").await.expect("finish chunk");
+            }
+            socket
+                .write_all(b"0\r\n\r\n")
+                .await
+                .expect("finish response");
+        });
+        Url::parse(&format!("http://{address}/")).expect("chunked response URL")
+    }
+
+    #[tokio::test]
+    async fn chunked_provider_body_stops_at_the_configured_limit() {
+        let response = reqwest::get(spawn_chunked_response(vec![&b"abcd"[..], &b"efgh"[..]]).await)
+            .await
+            .expect("chunked response");
+        assert!(matches!(
+            bounded_body(response, 7).await,
+            Err(ProviderFailure::ResponseTooLarge)
+        ));
     }
 
     async fn spawn_embedding_mock(

@@ -1,11 +1,9 @@
-use dioxus::prelude::*;
-use crate::domain::User;
 use crate::application::AuthHooks;
-use crate::views::role_based::components::ResponsiveDashboardLayout;
+use crate::domain::User;
 use crate::i18n::use_locale;
-use api::server_functions::dashboard_functions::{
-    get_parent_dashboard_stats, get_parent_children,
-};
+use crate::views::role_based::components::ResponsiveDashboardLayout;
+use api::server_functions::dashboard_functions::{get_parent_children, get_parent_dashboard_stats};
+use dioxus::prelude::*;
 
 /// Main Parent dashboard component - follows school manager template
 #[component]
@@ -25,7 +23,7 @@ pub fn ParentDashboard() -> Element {
             "children" => rsx! { super::children::ChildrenSection {} },
             "communication" => rsx! { super::communication::CommunicationSection {} },
             "reports" => rsx! { super::reports::ReportsSection {} },
-            _ => rsx! { ParentOverviewSection { on_navigate: on_navigate } }
+            _ => rsx! { ParentOverviewSection { on_navigate: on_navigate } },
         };
 
         rsx! {
@@ -49,28 +47,25 @@ pub fn ParentDashboard() -> Element {
 #[component]
 pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
-    let stats_resource = use_resource(move || async move {
-        get_parent_dashboard_stats().await.ok()
-    });
+    let stats_resource =
+        use_resource(move || async move { get_parent_dashboard_stats().await.ok() });
 
-    let children_resource = use_resource(move || async move {
-        get_parent_children().await.ok()
-    });
+    let children_resource = use_resource(move || async move { get_parent_children().await.ok() });
 
     rsx! {
         div {
             class: "grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-8",
-            
+
             // Main Column (2/3 width)
             div {
                 class: "lg:col-span-2 space-y-4 md:space-y-8",
-                
+
                 // Stats Cards Section
                 section {
                     h3 { class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-4 md:mb-6", "{locale.t(\"parent.dashboard.sections.overview\")}" }
                     div {
                         class: "grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-6",
-                        
+
                         match stats_resource.read().as_ref() {
                             Some(Some(stats)) => rsx! {
                                 StatCard {
@@ -127,7 +122,7 @@ pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                     h3 { class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-4 md:mb-6", "{locale.t(\"parent.dashboard.sections.children_progress\")}" }
                     div {
                         class: "space-y-4 md:space-y-6",
-                        
+
                         match children_resource.read().as_ref() {
                             Some(Some(children)) if !children.is_empty() => rsx! {
                                 for child in children.iter() {
@@ -161,7 +156,7 @@ pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
             // Right Column (1/3 width) - Quick Actions & Coming Soon
             div {
                 class: "lg:col-span-1 space-y-8",
-                
+
                 // Quick Actions
                 section {
                     h3 { class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-4 md:mb-6", "{locale.t(\"parent.dashboard.sections.quick_actions\")}" }
@@ -203,19 +198,19 @@ pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                     h3 { class: "text-base md:text-lg font-bold text-gray-900 dark:text-white mb-4 md:mb-6", "{locale.t(\"parent.dashboard.sections.coming_soon\")}" }
                     div {
                         class: "glass-card p-4 md:p-6",
-                        
+
                         ComingSoonItem {
                             icon: "forum".to_string(),
                             title: locale.t("parent.dashboard.coming_soon.chat"),
                             description: locale.t("parent.dashboard.coming_soon.chat_desc"),
                         }
-                        
+
                         ComingSoonItem {
                             icon: "calendar_month".to_string(),
                             title: locale.t("parent.dashboard.coming_soon.calendar"),
                             description: locale.t("parent.dashboard.coming_soon.calendar_desc"),
                         }
-                        
+
                         ComingSoonItem {
                             icon: "notifications_active".to_string(),
                             title: locale.t("parent.dashboard.coming_soon.notifications"),
@@ -229,18 +224,27 @@ pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
 }
 
 #[component]
-fn StatCard(title: String, value: String, icon: String, color: String, text_color: String, status: String, status_color: String, #[props(default)] badge: Option<String>) -> Element {
+fn StatCard(
+    title: String,
+    value: String,
+    icon: String,
+    color: String,
+    text_color: String,
+    status: String,
+    status_color: String,
+    #[props(default)] badge: Option<String>,
+) -> Element {
     rsx! {
         div {
             class: "glass-card p-3 md:p-5 border-l-4 {color} flex flex-col justify-between h-28 md:h-32 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 relative",
-            
+
             if let Some(badge_text) = badge {
                 span {
                     class: "absolute top-1 right-1 md:top-2 md:right-2 text-[8px] md:text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 px-1 py-0.5 rounded font-medium",
                     "{badge_text}"
                 }
             }
-            
+
             div {
                 class: "flex justify-between items-start",
                 div {
@@ -276,7 +280,14 @@ fn StatCardSkeleton() -> Element {
 }
 
 #[component]
-fn ChildProgressCard(name: String, grade_level: String, gpa: f64, status: String, enrolled_classes: i32, #[props(default)] on_view_profile: Option<EventHandler>) -> Element {
+fn ChildProgressCard(
+    name: String,
+    grade_level: String,
+    gpa: f64,
+    status: String,
+    enrolled_classes: i32,
+    #[props(default)] on_view_profile: Option<EventHandler>,
+) -> Element {
     let locale = use_locale();
     let gpa_color = if gpa >= 3.5 {
         "text-green-600 dark:text-green-400"
@@ -372,30 +383,34 @@ fn ChildProgressSkeleton() -> Element {
 
 #[component]
 fn QuickActionButton(
-    icon: String, 
-    label: String, 
-    description: String, 
-    icon_bg: &'static str, 
-    icon_color: String, 
+    icon: String,
+    label: String,
+    description: String,
+    icon_bg: &'static str,
+    icon_color: String,
     #[props(default)] badge: Option<String>,
     #[props(default)] on_click: Option<EventHandler>,
     #[props(default)] disabled: bool,
 ) -> Element {
-    let disabled_class = if disabled { "opacity-50 cursor-not-allowed" } else { "cursor-pointer" };
-    
+    let disabled_class = if disabled {
+        "opacity-50 cursor-not-allowed"
+    } else {
+        "cursor-pointer"
+    };
+
     rsx! {
         button {
             class: "w-full flex items-center gap-4 p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-white/5 transition-all duration-200 group text-left relative {disabled_class}",
             disabled: disabled,
             onclick: move |_| if !disabled { if let Some(handler) = on_click.as_ref() { handler.call(()) } },
-            
+
             if let Some(badge_text) = badge {
                 span {
                     class: "absolute top-2 right-2 text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded font-medium",
                     "{badge_text}"
                 }
             }
-            
+
             div {
                 class: "w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center {icon_bg} transition-transform group-hover:scale-110",
                 span { class: "material-icons-outlined {icon_color}", "{icon}" }
@@ -404,9 +419,9 @@ fn QuickActionButton(
                 h4 { class: "font-semibold text-gray-900 dark:text-white text-sm", "{label}" }
                 p { class: "text-xs text-gray-500 dark:text-gray-400", "{description}" }
             }
-            span { 
-                class: "material-icons-outlined text-gray-400 dark:text-gray-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity", 
-                "chevron_right" 
+            span {
+                class: "material-icons-outlined text-gray-400 dark:text-gray-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity",
+                "chevron_right"
             }
         }
     }

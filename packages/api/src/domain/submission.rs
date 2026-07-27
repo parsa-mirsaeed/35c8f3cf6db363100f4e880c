@@ -1,7 +1,7 @@
 //! Submission domain models.
 
+use crate::domain::{AssignmentId, StudentId, SubmissionId};
 use serde::{Deserialize, Serialize};
-use crate::domain::{SubmissionId, AssignmentId, StudentId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Submission {

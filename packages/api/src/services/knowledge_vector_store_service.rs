@@ -208,10 +208,10 @@ impl KnowledgeVectorStoreService {
         asset_id: &str,
         published: bool,
     ) -> Result<(), VectorStoreError> {
-        let filter = Filter::must(vec![
-            Condition::matches("knowledge_asset_id", asset_id.to_string()),
-            Condition::matches("embedding_profile", self.profile.id.to_string()),
-        ]);
+        let filter = Filter::must(vec![Condition::matches(
+            "knowledge_asset_id",
+            asset_id.to_string(),
+        )]);
         let mut payload = HashMap::new();
         payload.insert("published".to_string(), QdrantValue::from(published));
         self.client
@@ -254,7 +254,6 @@ impl KnowledgeVectorStoreService {
             must: vec![
                 Condition::matches("school_id", school_id.to_string()),
                 Condition::matches("published", true),
-                Condition::matches("embedding_profile", self.profile.id.to_string()),
             ],
             should: asset_conditions,
             must_not: Vec::new(),
@@ -291,10 +290,10 @@ impl KnowledgeVectorStoreService {
         self.client
             .delete_points(
                 qdrant_client::qdrant::DeletePointsBuilder::new(&self.config.collection_name)
-                    .points(Filter::must(vec![
-                        Condition::matches("knowledge_asset_id", asset_id.to_string()),
-                        Condition::matches("embedding_profile", self.profile.id.to_string()),
-                    ])),
+                    .points(Filter::must(vec![Condition::matches(
+                        "knowledge_asset_id",
+                        asset_id.to_string(),
+                    )])),
             )
             .await
             .map_err(|error| VectorStoreError::ClientError(error.to_string()))?;

@@ -112,11 +112,13 @@ pub fn start_knowledge_ingestion_worker(pool: Arc<PgPool>) -> tokio::task::JoinH
                                         outage_code,
                                         "Knowledge ingestion job remains queued during AI outage"
                                     ),
-                                    Ok(EmbeddingFailureDisposition::IgnoredInactive) => tracing::info!(
-                                        job_id = %job.id,
-                                        asset_id = %job.asset_id,
-                                        "Ignoring AI outage because the job is no longer active"
-                                    ),
+                                    Ok(EmbeddingFailureDisposition::IgnoredInactive) => {
+                                        tracing::info!(
+                                            job_id = %job.id,
+                                            asset_id = %job.asset_id,
+                                            "Ignoring AI outage because the job is no longer active"
+                                        )
+                                    }
                                     Ok(EmbeddingFailureDisposition::FailedPermanently) => {
                                         tracing::error!(
                                             job_id = %job.id,
@@ -239,7 +241,10 @@ mod tests {
     #[test]
     fn provider_failures_are_separate_from_content_failures() {
         let unavailable = KnowledgeAssetError::Embedding(EmbeddingError::TemporarilyUnavailable);
-        assert_eq!(provider_outage(&unavailable), Some(("provider_circuit_open", 30)));
+        assert_eq!(
+            provider_outage(&unavailable),
+            Some(("provider_circuit_open", 30))
+        );
 
         let rate_limited = KnowledgeAssetError::Embedding(EmbeddingError::RateLimited {
             retry_after_seconds: 17,

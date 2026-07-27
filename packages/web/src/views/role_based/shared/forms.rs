@@ -17,8 +17,16 @@ pub fn FormInput(
     let is_required = required.unwrap_or(false);
     let is_disabled = disabled.unwrap_or(false);
 
-    let border_class = if error.is_some() { "border-red-500 focus:ring-red-500" } else { "border-transparent focus:ring-primary" };
-    let bg_class = if is_disabled { "opacity-50 cursor-not-allowed" } else { "" };
+    let border_class = if error.is_some() {
+        "border-red-500 focus:ring-red-500"
+    } else {
+        "border-transparent focus:ring-primary"
+    };
+    let bg_class = if is_disabled {
+        "opacity-50 cursor-not-allowed"
+    } else {
+        ""
+    };
 
     rsx! {
         div {
@@ -75,8 +83,16 @@ pub fn FormSelect(
     let is_required = required.unwrap_or(false);
     let is_disabled = disabled.unwrap_or(false);
 
-    let border_class = if error.is_some() { "border-red-500 focus:ring-red-500" } else { "border-transparent focus:ring-primary" };
-    let bg_class = if is_disabled { "opacity-50 cursor-not-allowed" } else { "" };
+    let border_class = if error.is_some() {
+        "border-red-500 focus:ring-red-500"
+    } else {
+        "border-transparent focus:ring-primary"
+    };
+    let bg_class = if is_disabled {
+        "opacity-50 cursor-not-allowed"
+    } else {
+        ""
+    };
 
     rsx! {
         div {
@@ -157,8 +173,16 @@ pub fn FormTextarea(
     let is_disabled = disabled.unwrap_or(false);
     let textarea_rows = rows.unwrap_or(4);
 
-    let border_class = if error.is_some() { "border-red-500 focus:ring-red-500" } else { "border-transparent focus:ring-primary" };
-    let bg_class = if is_disabled { "opacity-50 cursor-not-allowed" } else { "" };
+    let border_class = if error.is_some() {
+        "border-red-500 focus:ring-red-500"
+    } else {
+        "border-transparent focus:ring-primary"
+    };
+    let bg_class = if is_disabled {
+        "opacity-50 cursor-not-allowed"
+    } else {
+        ""
+    };
 
     rsx! {
         div {
@@ -213,7 +237,11 @@ pub fn FormCheckbox(
 ) -> Element {
     let is_required = required.unwrap_or(false);
     let is_disabled = disabled.unwrap_or(false);
-    let cursor_class = if is_disabled { "cursor-not-allowed opacity-50" } else { "cursor-pointer" };
+    let cursor_class = if is_disabled {
+        "cursor-not-allowed opacity-50"
+    } else {
+        "cursor-pointer"
+    };
 
     rsx! {
         div {

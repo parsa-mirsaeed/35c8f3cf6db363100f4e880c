@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::roles::SystemRole;
+use serde::{Deserialize, Serialize};
 
 /// User domain model with all necessary user information
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -16,12 +16,7 @@ pub struct User {
 
 impl User {
     /// Create a new user instance
-    pub fn new(
-        id: String,
-        email: String,
-        role: SystemRole,
-        school_id: Option<String>,
-    ) -> Self {
+    pub fn new(id: String, email: String, role: SystemRole, school_id: Option<String>) -> Self {
         Self {
             id,
             email,
@@ -47,7 +42,12 @@ impl User {
         let parts: Vec<&str> = name.split_whitespace().collect();
         match parts.len() {
             0 => "U".to_string(),
-            1 => parts[0].chars().next().unwrap_or('U').to_uppercase().to_string(),
+            1 => parts[0]
+                .chars()
+                .next()
+                .unwrap_or('U')
+                .to_uppercase()
+                .to_string(),
             _ => format!(
                 "{}{}",
                 parts[0].chars().next().unwrap_or('U').to_uppercase(),

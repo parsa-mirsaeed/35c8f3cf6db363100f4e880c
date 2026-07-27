@@ -1,7 +1,7 @@
 //! Invite domain models.
 
-use serde::{Deserialize, Serialize};
 use crate::domain::{RoleId, UserId};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Invite {

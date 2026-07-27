@@ -31,10 +31,10 @@ use uuid::Uuid;
 pub enum RlsContextError {
     #[error("Failed to set RLS context: {0}")]
     SetContextFailed(#[from] sqlx::Error),
-    
+
     #[error("Invalid user ID format: {0}")]
     InvalidUserId(String),
-    
+
     #[error("Invalid school ID format: {0}")]
     InvalidSchoolId(String),
 }
@@ -68,7 +68,7 @@ impl RlsContext {
         // Validate UUID format to prevent injection
         let user_uuid = Uuid::parse_str(user_id)
             .map_err(|_| RlsContextError::InvalidUserId(user_id.to_string()))?;
-        
+
         let school_uuid = match school_id {
             Some(id) => {
                 let uuid = Uuid::parse_str(id)
@@ -82,7 +82,11 @@ impl RlsContext {
         sqlx::query("SELECT set_app_context($1, $2, $3)")
             .bind(user_uuid)
             .bind(role)
-            .bind(if school_uuid.is_empty() { None } else { Some(Uuid::parse_str(&school_uuid).unwrap()) })
+            .bind(if school_uuid.is_empty() {
+                None
+            } else {
+                Some(Uuid::parse_str(&school_uuid).unwrap())
+            })
             .execute(pool)
             .await?;
 
@@ -103,14 +107,9 @@ impl RlsContext {
         pool: &PgPool,
         user: &crate::handlers::auth::AuthenticatedUser,
     ) -> Result<(), RlsContextError> {
-        Self::set(
-            pool,
-            &user.id,
-            &user.role,
-            user.school_id.as_deref(),
-        ).await
+        Self::set(pool, &user.id, &user.role, user.school_id.as_deref()).await
     }
-    
+
     /// Clear the RLS context (set all values to empty).
     ///
     /// This is automatically done when the connection returns to the pool,
@@ -119,7 +118,7 @@ impl RlsContext {
         sqlx::query("SELECT set_app_context(NULL, NULL, NULL)")
             .execute(pool)
             .await?;
-        
+
         tracing::trace!("RLS context cleared");
         Ok(())
     }
@@ -151,7 +150,7 @@ mod tests {
     fn test_uuid_validation() {
         // Valid UUID
         assert!(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").is_ok());
-        
+
         // Invalid UUID
         assert!(Uuid::parse_str("not-a-uuid").is_err());
         assert!(Uuid::parse_str("'; DROP TABLE users; --").is_err());

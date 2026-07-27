@@ -1,11 +1,11 @@
 use crate::domain::Role;
-use crate::models::{RoleModel, CreateRoleRequest};
+use crate::models::{CreateRoleRequest, RoleModel};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use async_trait::async_trait;
-use sqlx::{PgPool, Row, postgres::PgRow};
+use serde_json::Value;
+use sqlx::{postgres::PgRow, PgPool, Row};
 use std::sync::Arc;
 use uuid::Uuid;
-use serde_json::Value;
 
 /// Role repository for handling role-related database operations
 #[derive(Clone)]
@@ -29,15 +29,20 @@ impl RoleRepository {
             INSERT INTO roles (name, permissions)
             VALUES ($1, $2)
             RETURNING id, name, permissions
-            "#
+            "#,
         )
         .bind(&role_str)
         .bind(&request.permissions)
         .fetch_one(&*self.base.pool())
         .await?;
 
-        let role_name: Role = row.get::<String, _>("name").parse()
-            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse role '{}': {}", row.get::<String, _>("name"), e))))?;
+        let role_name: Role = row.get::<String, _>("name").parse().map_err(|e| {
+            RepositoryError::Database(sqlx::Error::Protocol(format!(
+                "Failed to parse role '{}': {}",
+                row.get::<String, _>("name"),
+                e
+            )))
+        })?;
 
         Ok(RoleModel {
             id: row.get("id"),
@@ -53,7 +58,7 @@ impl RoleRepository {
             SELECT id, name, permissions
             FROM roles
             WHERE id = $1
-            "#
+            "#,
         )
         .bind(&role_id)
         .fetch_optional(&*self.base.pool())
@@ -65,8 +70,12 @@ impl RoleRepository {
         })?;
 
         let role_name_str: String = row.get("name");
-        let role_name: Role = role_name_str.parse()
-            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse role '{}': {}", role_name_str, e))))?;
+        let role_name: Role = role_name_str.parse().map_err(|e| {
+            RepositoryError::Database(sqlx::Error::Protocol(format!(
+                "Failed to parse role '{}': {}",
+                role_name_str, e
+            )))
+        })?;
 
         Ok(RoleModel {
             id: row.get("id"),
@@ -83,7 +92,7 @@ impl RoleRepository {
             SELECT id, name, permissions
             FROM roles
             WHERE name = $1
-            "#
+            "#,
         )
         .bind(&role_str)
         .fetch_optional(&*self.base.pool())
@@ -95,8 +104,12 @@ impl RoleRepository {
         })?;
 
         let role_name_str: String = row.get("name");
-        let role_name: Role = role_name_str.parse()
-            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse role '{}': {}", role_name_str, e))))?;
+        let role_name: Role = role_name_str.parse().map_err(|e| {
+            RepositoryError::Database(sqlx::Error::Protocol(format!(
+                "Failed to parse role '{}': {}",
+                role_name_str, e
+            )))
+        })?;
 
         Ok(RoleModel {
             id: row.get("id"),
@@ -112,7 +125,7 @@ impl RoleRepository {
             SELECT id, name, permissions
             FROM roles
             ORDER BY name
-            "#
+            "#,
         )
         .fetch_all(&*self.base.pool())
         .await?;
@@ -120,8 +133,12 @@ impl RoleRepository {
         let mut roles = Vec::new();
         for row in rows {
             let role_name_str: String = row.get("name");
-            let role_name: Role = role_name_str.parse()
-                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse role '{}': {}", role_name_str, e))))?;
+            let role_name: Role = role_name_str.parse().map_err(|e| {
+                RepositoryError::Database(sqlx::Error::Protocol(format!(
+                    "Failed to parse role '{}': {}",
+                    role_name_str, e
+                )))
+            })?;
 
             roles.push(RoleModel {
                 id: row.get("id"),
@@ -134,7 +151,11 @@ impl RoleRepository {
     }
 
     /// Update a role
-    pub async fn update(&self, role_id: Uuid, request: CreateRoleRequest) -> RepositoryResult<RoleModel> {
+    pub async fn update(
+        &self,
+        role_id: Uuid,
+        request: CreateRoleRequest,
+    ) -> RepositoryResult<RoleModel> {
         let role_str = request.name.to_string();
         let row: Option<PgRow> = sqlx::query(
             r#"
@@ -142,7 +163,7 @@ impl RoleRepository {
             SET name = $1, permissions = $2
             WHERE id = $3
             RETURNING id, name, permissions
-            "#
+            "#,
         )
         .bind(&role_str)
         .bind(&request.permissions)
@@ -156,8 +177,12 @@ impl RoleRepository {
         })?;
 
         let role_name_str: String = row.get("name");
-        let role_name: Role = role_name_str.parse()
-            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse role '{}': {}", role_name_str, e))))?;
+        let role_name: Role = role_name_str.parse().map_err(|e| {
+            RepositoryError::Database(sqlx::Error::Protocol(format!(
+                "Failed to parse role '{}': {}",
+                role_name_str, e
+            )))
+        })?;
 
         Ok(RoleModel {
             id: row.get("id"),
@@ -172,7 +197,7 @@ impl RoleRepository {
             r#"
             DELETE FROM roles
             WHERE id = $1
-            "#
+            "#,
         )
         .bind(&role_id)
         .execute(&*self.base.pool())

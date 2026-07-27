@@ -2,13 +2,10 @@ use dioxus::prelude::*;
 
 /// Simple bar chart component
 #[component]
-pub fn BarChart(
-    data: Vec<ChartItem>,
-    title: String,
-    height: Option<String>,
-) -> Element {
+pub fn BarChart(data: Vec<ChartItem>, title: String, height: Option<String>) -> Element {
     let chart_height = height.unwrap_or("200px".to_string());
-    let max_value = data.iter()
+    let max_value = data
+        .iter()
         .map(|item| item.value)
         .fold(0.0, f32::max)
         .max(100.0);
@@ -58,11 +55,7 @@ pub fn BarChart(
 
 /// Simple line chart component
 #[component]
-pub fn LineChart(
-    data: Vec<ChartItem>,
-    title: String,
-    height: Option<String>,
-) -> Element {
+pub fn LineChart(data: Vec<ChartItem>, title: String, height: Option<String>) -> Element {
     let chart_height = height.unwrap_or("200px".to_string());
 
     rsx! {
@@ -97,10 +90,7 @@ pub fn LineChart(
 
 /// Simple pie chart component
 #[component]
-pub fn PieChart(
-    data: Vec<ChartItem>,
-    title: String,
-) -> Element {
+pub fn PieChart(data: Vec<ChartItem>, title: String) -> Element {
     rsx! {
         div {
             style: "background: white; border-radius: 12px; padding: 1.5rem;",

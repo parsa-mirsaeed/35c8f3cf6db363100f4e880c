@@ -1,8 +1,8 @@
-use dioxus::prelude::*;
-use api::server_functions::profile_change_requests::{get_pending_requests, decide_profile_change};
-use api::domain::PcrStatus;
-use gloo_storage::{LocalStorage, Storage};
 use crate::i18n::use_locale;
+use api::domain::PcrStatus;
+use api::server_functions::profile_change_requests::{decide_profile_change, get_pending_requests};
+use dioxus::prelude::*;
+use gloo_storage::{LocalStorage, Storage};
 
 #[component]
 pub fn PendingRequests() -> Element {
@@ -23,10 +23,18 @@ pub fn PendingRequests() -> Element {
         if let Some(auth_token) = token {
             match decide_profile_change(auth_token, request_id, status, None).await {
                 Ok(_) => {
-                    action_message.set(Some(locale_action.t("school_manager.requests.success").replace("{0}", &status.to_string())));
+                    action_message.set(Some(
+                        locale_action
+                            .t("school_manager.requests.success")
+                            .replace("{0}", &status.to_string()),
+                    ));
                     requests_resource.restart();
-                },
-                Err(e) => action_message.set(Some(locale_action.t("school_manager.requests.failure").replace("{0}", &e.to_string()))),
+                }
+                Err(e) => action_message.set(Some(
+                    locale_action
+                        .t("school_manager.requests.failure")
+                        .replace("{0}", &e.to_string()),
+                )),
             }
         }
     };

@@ -1,9 +1,9 @@
-use dioxus::prelude::*;
-use crate::domain::{User, SystemRole};
 use crate::application::{AuthHooks, RoutingService};
-use crate::infrastructure::auth_provider::IS_INITIALIZING;
 use crate::components::DashboardSkeleton;
+use crate::domain::{SystemRole, User};
+use crate::infrastructure::auth_provider::IS_INITIALIZING;
 use crate::Route;
+use dioxus::prelude::*;
 use web_sys::window;
 
 /// Role guard component that only renders children if user has required role
@@ -18,7 +18,7 @@ pub fn RoleGuard(
     if *is_initializing {
         return rsx! { DashboardSkeleton {} };
     }
-    
+
     // FIX: Call hook directly
     let current_user_val = AuthHooks::use_current_user().ok().flatten();
 
@@ -57,7 +57,7 @@ pub fn MultiRoleGuard(
     if *is_initializing {
         return rsx! { DashboardSkeleton {} };
     }
-    
+
     // FIX: Call hook directly
     let current_user_val = AuthHooks::use_current_user().ok().flatten();
 
@@ -96,7 +96,7 @@ pub fn PermissionGuard(
     if *is_initializing {
         return rsx! { LoadingSpinner {} };
     }
-    
+
     // FIX: Call hook directly
     let current_user_val = AuthHooks::use_current_user().ok().flatten();
 
@@ -125,16 +125,13 @@ pub fn PermissionGuard(
 
 /// Authentication guard that only renders children if user is authenticated
 #[component]
-pub fn AuthGuard(
-    fallback: Option<Element>,
-    children: Element,
-) -> Element {
+pub fn AuthGuard(fallback: Option<Element>, children: Element) -> Element {
     // Check if auth is still initializing - show skeleton while checking
     let is_initializing = IS_INITIALIZING.read();
     if *is_initializing {
         return rsx! { DashboardSkeleton {} };
     }
-    
+
     let is_authenticated = AuthHooks::use_is_authenticated();
 
     if is_authenticated {
@@ -153,17 +150,13 @@ pub fn AuthGuard(
 
 /// Route guard component for protecting routes
 #[component]
-pub fn RouteGuard(
-    route: String,
-    fallback: Option<Element>,
-    children: Element,
-) -> Element {
+pub fn RouteGuard(route: String, fallback: Option<Element>, children: Element) -> Element {
     // Check if auth is still initializing
     let is_initializing = IS_INITIALIZING.read();
     if *is_initializing {
         return rsx! { DashboardSkeleton {} };
     }
-    
+
     // FIX: Call hook directly
     let current_user_val = AuthHooks::use_current_user().ok().flatten();
 
@@ -192,10 +185,7 @@ pub fn RouteGuard(
 
 /// Access denied message component
 #[component]
-pub fn RoleAccessDeniedMessage(
-    user: User,
-    required_role: SystemRole,
-) -> Element {
+pub fn RoleAccessDeniedMessage(user: User, required_role: SystemRole) -> Element {
     rsx! {
         div {
             style: "display: flex; justify-content: center; align-items: center; min-height: 60vh; padding: 2rem;",
@@ -256,11 +246,9 @@ pub fn RoleAccessDeniedMessage(
 
 /// Access denied message for multiple roles
 #[component]
-pub fn MultiRoleAccessDeniedMessage(
-    user: User,
-    required_roles: Vec<SystemRole>,
-) -> Element {
-    let role_names = required_roles.iter()
+pub fn MultiRoleAccessDeniedMessage(user: User, required_roles: Vec<SystemRole>) -> Element {
+    let role_names = required_roles
+        .iter()
         .map(|role| role.display_name())
         .collect::<Vec<_>>()
         .join(" or ");
@@ -303,10 +291,7 @@ pub fn MultiRoleAccessDeniedMessage(
 
 /// Permission denied message component
 #[component]
-pub fn PermissionDeniedMessage(
-    user: User,
-    required_permission: String,
-) -> Element {
+pub fn PermissionDeniedMessage(user: User, required_permission: String) -> Element {
     rsx! {
         div {
             style: "display: flex; justify-content: center; align-items: center; min-height: 60vh; padding: 2rem;",
@@ -340,10 +325,7 @@ pub fn PermissionDeniedMessage(
 
 /// Route access denied message component
 #[component]
-pub fn RouteAccessDeniedMessage(
-    user: User,
-    route: String,
-) -> Element {
+pub fn RouteAccessDeniedMessage(user: User, route: String) -> Element {
     rsx! {
         div {
             style: "display: flex; justify-content: center; align-items: center; min-height: 60vh; padding: 2rem;",
@@ -381,20 +363,20 @@ pub fn NotAuthenticatedMessage() -> Element {
     rsx! {
         div {
             style: "display: flex; justify-content: center; align-items: center; min-height: 60vh; padding: 2rem;",
-            
+
             div {
                 style: "text-align: center; max-width: 400px; background: white; padding: 3rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);",
-                
+
                 h1 {
                     style: "color: #dc2626; margin-bottom: 1rem; font-size: 1.5rem;",
                     "Authentication Required"
                 }
-                
+
                 p {
                     style: "color: #6b7280; margin-bottom: 2rem;",
                     "Please log in to access this page."
                 }
-                
+
                 button {
                     style: "background: #3b82f6; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: 500;",
                     onclick: move |_| {
@@ -427,10 +409,7 @@ pub fn LoadingSpinner() -> Element {
 
 /// Admin-only guard component (for backward compatibility)
 #[component]
-pub fn AdminOnly(
-    fallback: Option<Element>,
-    children: Element,
-) -> Element {
+pub fn AdminOnly(fallback: Option<Element>, children: Element) -> Element {
     rsx! {
         RoleGuard {
             required_role: SystemRole::SchoolManager,

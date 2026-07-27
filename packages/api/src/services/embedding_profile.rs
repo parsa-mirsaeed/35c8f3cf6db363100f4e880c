@@ -45,7 +45,7 @@ pub const LOCAL_BGE_V1: EmbeddingProfile = EmbeddingProfile {
     provider: EmbeddingProviderKind::LocalTei,
     model: "BAAI/bge-small-en-v1.5",
     vector_size: 384,
-    collection: "edutalent_local_bge_v1",
+    collection: "edutalent_materials_local_v1",
     send_dimensions: false,
 };
 
@@ -144,6 +144,12 @@ mod tests {
             validate_profile_overrides(OPENAI_V1, None, None, Some(LOCAL_BGE_V1.collection)),
             Err(EmbeddingProfileError::CollectionMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn local_profile_preserves_the_existing_production_collection() {
+        assert_eq!(LOCAL_BGE_V1.collection, "edutalent_materials_local_v1");
+        assert_ne!(LOCAL_BGE_V1.collection, OPENAI_V1.collection);
     }
 
     #[test]

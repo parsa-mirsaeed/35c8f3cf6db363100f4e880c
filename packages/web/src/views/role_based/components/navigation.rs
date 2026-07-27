@@ -1,7 +1,7 @@
-use dioxus::prelude::*;
-use crate::domain::User;
 use crate::application::routing_service::NavigationItem;
+use crate::domain::User;
 use crate::i18n::use_locale;
+use dioxus::prelude::*;
 
 /// Navigation component for dashboard
 #[component]
@@ -34,7 +34,11 @@ pub fn NavigationItemComponent(
     is_active: bool,
     on_navigation: EventHandler<String>,
 ) -> Element {
-    let bg_color = if is_active { "rgba(59, 130, 246, 0.1)" } else { "none" };
+    let bg_color = if is_active {
+        "rgba(59, 130, 246, 0.1)"
+    } else {
+        "none"
+    };
     let text_color = if is_active { "#3b82f6" } else { "#6b7280" };
     let font_weight = if is_active { "500" } else { "400" };
     let style_str = format!("width: 100%; padding: 0.75rem 1rem; text-align: left; background: {}; border: none; color: {}; cursor: pointer; transition: all 0.2s; border-radius: 8px; display: flex; align-items: center; gap: 0.75rem; font-size: 0.9rem; font-weight: {};", bg_color, text_color, font_weight);
@@ -67,9 +71,7 @@ pub fn NavigationItemComponent(
 
 /// Breadcrumb navigation component
 #[component]
-pub fn BreadcrumbNavigation(
-    items: Vec<BreadcrumbItem>,
-) -> Element {
+pub fn BreadcrumbNavigation(items: Vec<BreadcrumbItem>) -> Element {
     rsx! {
         nav {
             class: "breadcrumb-navigation",
@@ -235,9 +237,7 @@ impl TabItem {
 
 /// Quick action navigation component
 #[component]
-pub fn QuickActionNavigation(
-    actions: Vec<QuickAction>,
-) -> Element {
+pub fn QuickActionNavigation(actions: Vec<QuickAction>) -> Element {
     rsx! {
         div {
             class: "quick-action-navigation",
@@ -446,7 +446,9 @@ impl NavigationUtils {
                         let mut chars = word.chars();
                         match chars.next() {
                             None => String::new(),
-                            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                            Some(first) => {
+                                first.to_uppercase().collect::<String>() + chars.as_str()
+                            }
                         }
                     })
                     .collect::<Vec<_>>()

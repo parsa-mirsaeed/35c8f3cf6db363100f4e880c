@@ -1,10 +1,10 @@
-use dioxus::prelude::*;
-use api::server_functions::user_management::{create_user, CreateUserPayload, get_school_users};
+use crate::i18n::use_locale;
 use api::server_functions::class_functions::get_school_classes;
+use api::server_functions::user_management::{create_user, get_school_users, CreateUserPayload};
+use dioxus::prelude::*;
 use gloo_storage::{LocalStorage, Storage};
 use serde_json::json;
 use uuid::Uuid;
-use crate::i18n::use_locale;
 
 #[component]
 pub fn UserCreationHub(on_cancel: EventHandler<()>) -> Element {
@@ -128,7 +128,7 @@ fn StudentCreationForm() -> Element {
     let mut enrollment_date = use_signal(|| String::new());
     let mut class_section = use_signal(|| String::new());
     let mut academic_year = use_signal(|| "2024".to_string());
-    
+
     let mut is_submitting = use_signal(|| false);
     let mut error_message = use_signal(|| None::<String>);
     let mut success_message = use_signal(|| None::<String>);
@@ -162,7 +162,11 @@ fn StudentCreationForm() -> Element {
 
             match create_user(payload).await {
                 Ok(_) => {
-                    success_message.set(Some(locale.t("school_manager.users.creation.success.student").replace("{0}", &password)));
+                    success_message.set(Some(
+                        locale
+                            .t("school_manager.users.creation.success.student")
+                            .replace("{0}", &password),
+                    ));
                     first_name.set(String::new());
                     last_name.set(String::new());
                     email.set(String::new());
@@ -172,7 +176,7 @@ fn StudentCreationForm() -> Element {
                     grade_level.set(String::new());
                     enrollment_date.set(String::new());
                     class_section.set(String::new());
-                },
+                }
                 Err(e) => {
                     error_message.set(Some(e.to_string()));
                 }
@@ -191,7 +195,7 @@ fn StudentCreationForm() -> Element {
                     "{msg}"
                 }
             }
-            
+
             if let Some(err) = error_message() {
                 div {
                     style: "padding: 1rem; background: #fee2e2; color: #991b1b; border-radius: 8px; margin-bottom: 1rem;",
@@ -395,11 +399,9 @@ fn TeacherCreationForm() -> Element {
     let mut hire_date = use_signal(|| String::new());
     let mut qualifications = use_signal(|| String::new());
     let mut assigned_classes = use_signal(|| Vec::<String>::new());
-    
-    let classes_resource = use_resource(move || async move {
-        get_school_classes().await
-    });
-    
+
+    let classes_resource = use_resource(move || async move { get_school_classes().await });
+
     let mut is_submitting = use_signal(|| false);
     let mut error_message = use_signal(|| None::<String>);
     let mut success_message = use_signal(|| None::<String>);
@@ -413,7 +415,7 @@ fn TeacherCreationForm() -> Element {
         spawn(async move {
             let subject_str = subjects().join(", ");
             let password = Uuid::new_v4().to_string()[..8].to_string();
-            
+
             let payload = CreateUserPayload {
                 name: format!("{} {}", first_name(), last_name()),
                 email: email(),
@@ -436,7 +438,11 @@ fn TeacherCreationForm() -> Element {
 
             match create_user(payload).await {
                 Ok(_) => {
-                    success_message.set(Some(locale.t("school_manager.users.creation.success.teacher").replace("{0}", &password)));
+                    success_message.set(Some(
+                        locale
+                            .t("school_manager.users.creation.success.teacher")
+                            .replace("{0}", &password),
+                    ));
                     first_name.set(String::new());
                     last_name.set(String::new());
                     email.set(String::new());
@@ -448,7 +454,7 @@ fn TeacherCreationForm() -> Element {
                     hire_date.set(String::new());
                     qualifications.set(String::new());
                     assigned_classes.set(Vec::new());
-                },
+                }
                 Err(e) => {
                     error_message.set(Some(e.to_string()));
                 }
@@ -467,7 +473,7 @@ fn TeacherCreationForm() -> Element {
                     "{msg}"
                 }
             }
-            
+
             if let Some(err) = error_message() {
                 div {
                     style: "padding: 1rem; background: #fee2e2; color: #991b1b; border-radius: 8px; margin-bottom: 1rem;",
@@ -656,9 +662,9 @@ fn TeacherCreationForm() -> Element {
                             },
                             if let Some(Ok(classes)) = classes_resource.read().as_ref() {
                                 for class in classes {
-                                    option { 
-                                        value: "{class.id}", 
-                                        "{class.name} ({class.term})" 
+                                    option {
+                                        value: "{class.id}",
+                                        "{class.name} ({class.term})"
                                     }
                                 }
                             } else {
@@ -699,14 +705,19 @@ fn ParentCreationForm() -> Element {
     let mut parent_id = use_signal(|| String::new());
     let mut relationship = use_signal(|| String::new());
     let mut associated_students = use_signal(|| Vec::<String>::new());
-    
+
     let mut is_submitting = use_signal(|| false);
     let mut error_message = use_signal(|| None::<String>);
     let mut success_message = use_signal(|| None::<String>);
 
     // Fetch students for association
     let students_resource = use_resource(move || async move {
-        get_school_users(Some("Student".to_string()), Some("active".to_string()), None).await
+        get_school_users(
+            Some("Student".to_string()),
+            Some("active".to_string()),
+            None,
+        )
+        .await
     });
 
     let handle_submit = move |e: Event<FormData>| {
@@ -734,12 +745,16 @@ fn ParentCreationForm() -> Element {
                 subject: None,
                 parent_id: None,
                 talent_profile_ref: None,
-                                metadata: Some(metadata),
+                metadata: Some(metadata),
             };
 
             match create_user(payload).await {
                 Ok(_) => {
-                    success_message.set(Some(locale.t("school_manager.users.creation.success.parent").replace("{0}", &password)));
+                    success_message.set(Some(
+                        locale
+                            .t("school_manager.users.creation.success.parent")
+                            .replace("{0}", &password),
+                    ));
                     // Reset form
                     full_name.set(String::new());
                     email.set(String::new());
@@ -749,7 +764,11 @@ fn ParentCreationForm() -> Element {
                     associated_students.set(Vec::new());
                 }
                 Err(e) => {
-                    error_message.set(Some(locale.t("school_manager.users.creation.error.parent").replace("{0}", &e.to_string())));
+                    error_message.set(Some(
+                        locale
+                            .t("school_manager.users.creation.error.parent")
+                            .replace("{0}", &e.to_string()),
+                    ));
                 }
             }
             is_submitting.set(false);
@@ -766,7 +785,7 @@ fn ParentCreationForm() -> Element {
                     "{msg}"
                 }
             }
-            
+
             if let Some(err) = error_message() {
                 div {
                     style: "padding: 1rem; background: #fee2e2; color: #991b1b; border-radius: 8px; margin-bottom: 1rem;",
@@ -867,9 +886,9 @@ fn ParentCreationForm() -> Element {
                             },
                             if let Some(Ok(students)) = students_resource.read().as_ref() {
                                 for student in students {
-                                    option { 
-                                        value: "{student.id}", 
-                                        "{student.name} ({student.email})" 
+                                    option {
+                                        value: "{student.id}",
+                                        "{student.name} ({student.email})"
                                     }
                                 }
                             } else {

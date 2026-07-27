@@ -1,7 +1,11 @@
-use crate::models::user::{AdminCreateStudentRequest, AdminCreateTeacherRequest, AdminCreateParentRequest, UserResponse};
-use crate::domain::{UserId, SchoolId, RoleId, StudentId, TeacherId};
-use crate::repositories::traits::{UserRepository, StudentRepository, TeacherRepository};
-use crate::server_functions::{ValidationResult, validate_user_creation, validate_teacher_creation, validate_parent_creation};
+use crate::domain::{RoleId, SchoolId, StudentId, TeacherId, UserId};
+use crate::models::user::{
+    AdminCreateParentRequest, AdminCreateStudentRequest, AdminCreateTeacherRequest, UserResponse,
+};
+use crate::repositories::traits::{StudentRepository, TeacherRepository, UserRepository};
+use crate::server_functions::{
+    validate_parent_creation, validate_teacher_creation, validate_user_creation, ValidationResult,
+};
 use crate::utils::errors::AppError;
 use crate::utils::validation;
 use async_trait::async_trait;
@@ -32,7 +36,10 @@ impl ValidationService {
     }
 
     /// Create a student with full validation pipeline
-    pub async fn create_student(&self, request: AdminCreateStudentRequest) -> Result<UserResponse, AppError> {
+    pub async fn create_student(
+        &self,
+        request: AdminCreateStudentRequest,
+    ) -> Result<UserResponse, AppError> {
         // Step 1: Validate basic request structure
         if let Err(validation_errors) = request.validate() {
             let error_message = format!("Validation failed: {:?}", validation_errors);
@@ -74,7 +81,10 @@ impl ValidationService {
     }
 
     /// Create a teacher with full validation pipeline
-    pub async fn create_teacher(&self, request: AdminCreateTeacherRequest) -> Result<UserResponse, AppError> {
+    pub async fn create_teacher(
+        &self,
+        request: AdminCreateTeacherRequest,
+    ) -> Result<UserResponse, AppError> {
         // Step 1: Validate basic request structure
         if let Err(validation_errors) = request.validate() {
             let error_message = format!("Validation failed: {:?}", validation_errors);
@@ -115,7 +125,10 @@ impl ValidationService {
     }
 
     /// Create a parent with full validation pipeline
-    pub async fn create_parent(&self, request: AdminCreateParentRequest) -> Result<UserResponse, AppError> {
+    pub async fn create_parent(
+        &self,
+        request: AdminCreateParentRequest,
+    ) -> Result<UserResponse, AppError> {
         // Step 1: Validate basic request structure
         if let Err(validation_errors) = request.validate() {
             let error_message = format!("Validation failed: {:?}", validation_errors);
@@ -147,14 +160,22 @@ impl ValidationService {
     }
 
     /// Validate student creation without creating the record
-    pub async fn validate_student_creation(&self, request: AdminCreateStudentRequest) -> Result<ValidationResult, AppError> {
+    pub async fn validate_student_creation(
+        &self,
+        request: AdminCreateStudentRequest,
+    ) -> Result<ValidationResult, AppError> {
         // Step 1: Validate basic request structure
         if let Err(validation_errors) = request.validate() {
             let mut errors = std::collections::HashMap::new();
             for (field, field_errors) in validation_errors.field_errors() {
                 let error_messages: Vec<String> = field_errors
                     .iter()
-                    .map(|e| e.message.as_ref().unwrap_or(&"Invalid value".into()).to_string())
+                    .map(|e| {
+                        e.message
+                            .as_ref()
+                            .unwrap_or(&"Invalid value".into())
+                            .to_string()
+                    })
                     .collect();
                 errors.insert(field.to_string(), error_messages.join(", "));
             }
@@ -171,14 +192,22 @@ impl ValidationService {
     }
 
     /// Validate teacher creation without creating the record
-    pub async fn validate_teacher_creation(&self, request: AdminCreateTeacherRequest) -> Result<ValidationResult, AppError> {
+    pub async fn validate_teacher_creation(
+        &self,
+        request: AdminCreateTeacherRequest,
+    ) -> Result<ValidationResult, AppError> {
         // Step 1: Validate basic request structure
         if let Err(validation_errors) = request.validate() {
             let mut errors = std::collections::HashMap::new();
             for (field, field_errors) in validation_errors.field_errors() {
                 let error_messages: Vec<String> = field_errors
                     .iter()
-                    .map(|e| e.message.as_ref().unwrap_or(&"Invalid value".into()).to_string())
+                    .map(|e| {
+                        e.message
+                            .as_ref()
+                            .unwrap_or(&"Invalid value".into())
+                            .to_string()
+                    })
                     .collect();
                 errors.insert(field.to_string(), error_messages.join(", "));
             }
@@ -195,14 +224,22 @@ impl ValidationService {
     }
 
     /// Validate parent creation without creating the record
-    pub async fn validate_parent_creation(&self, request: AdminCreateParentRequest) -> Result<ValidationResult, AppError> {
+    pub async fn validate_parent_creation(
+        &self,
+        request: AdminCreateParentRequest,
+    ) -> Result<ValidationResult, AppError> {
         // Step 1: Validate basic request structure
         if let Err(validation_errors) = request.validate() {
             let mut errors = std::collections::HashMap::new();
             for (field, field_errors) in validation_errors.field_errors() {
                 let error_messages: Vec<String> = field_errors
                     .iter()
-                    .map(|e| e.message.as_ref().unwrap_or(&"Invalid value".into()).to_string())
+                    .map(|e| {
+                        e.message
+                            .as_ref()
+                            .unwrap_or(&"Invalid value".into())
+                            .to_string()
+                    })
                     .collect();
                 errors.insert(field.to_string(), error_messages.join(", "));
             }
@@ -220,7 +257,10 @@ impl ValidationService {
 
     // Private helper methods
 
-    fn convert_student_to_user_request(&self, request: &AdminCreateStudentRequest) -> Result<crate::models::user::CreateUserRequest, AppError> {
+    fn convert_student_to_user_request(
+        &self,
+        request: &AdminCreateStudentRequest,
+    ) -> Result<crate::models::user::CreateUserRequest, AppError> {
         Ok(crate::models::user::CreateUserRequest {
             name: request.name.clone(),
             email: request.email.clone(),
@@ -234,7 +274,10 @@ impl ValidationService {
         })
     }
 
-    fn convert_teacher_to_user_request(&self, request: &AdminCreateTeacherRequest) -> Result<crate::models::user::CreateUserRequest, AppError> {
+    fn convert_teacher_to_user_request(
+        &self,
+        request: &AdminCreateTeacherRequest,
+    ) -> Result<crate::models::user::CreateUserRequest, AppError> {
         Ok(crate::models::user::CreateUserRequest {
             name: request.name.clone(),
             email: request.email.clone(),
@@ -247,7 +290,10 @@ impl ValidationService {
         })
     }
 
-    fn convert_parent_to_user_request(&self, request: &AdminCreateParentRequest) -> Result<crate::models::user::CreateUserRequest, AppError> {
+    fn convert_parent_to_user_request(
+        &self,
+        request: &AdminCreateParentRequest,
+    ) -> Result<crate::models::user::CreateUserRequest, AppError> {
         Ok(crate::models::user::CreateUserRequest {
             name: request.name.clone(),
             email: request.email.clone(),
@@ -260,7 +306,10 @@ impl ValidationService {
         })
     }
 
-    async fn validate_student_business_logic(&self, request: &AdminCreateStudentRequest) -> Result<(), AppError> {
+    async fn validate_student_business_logic(
+        &self,
+        request: &AdminCreateStudentRequest,
+    ) -> Result<(), AppError> {
         let mut errors = Vec::new();
 
         // Validate grade level if provided
@@ -294,7 +343,10 @@ impl ValidationService {
         Ok(())
     }
 
-    async fn validate_teacher_business_logic(&self, request: &AdminCreateTeacherRequest) -> Result<(), AppError> {
+    async fn validate_teacher_business_logic(
+        &self,
+        request: &AdminCreateTeacherRequest,
+    ) -> Result<(), AppError> {
         let mut errors = Vec::new();
 
         // Validate school ID
@@ -321,7 +373,10 @@ impl ValidationService {
         Ok(())
     }
 
-    async fn validate_parent_business_logic(&self, request: &AdminCreateParentRequest) -> Result<(), AppError> {
+    async fn validate_parent_business_logic(
+        &self,
+        request: &AdminCreateParentRequest,
+    ) -> Result<(), AppError> {
         let mut errors = Vec::new();
 
         // Validate school ID
@@ -348,7 +403,11 @@ impl ValidationService {
         Ok(())
     }
 
-    async fn check_email_uniqueness(&self, email: &str, exclude_user_id: Option<UserId>) -> Result<(), AppError> {
+    async fn check_email_uniqueness(
+        &self,
+        email: &str,
+        exclude_user_id: Option<UserId>,
+    ) -> Result<(), AppError> {
         // TODO: Implement actual database check
         // For now, simulate basic validation
 
@@ -365,7 +424,9 @@ impl ValidationService {
         let domain = email.split('@').nth(1).unwrap_or("");
 
         if blocked_domains.contains(&domain) {
-            return Err(AppError::Validation("Disposable email addresses are not allowed".to_string()));
+            return Err(AppError::Validation(
+                "Disposable email addresses are not allowed".to_string(),
+            ));
         }
 
         // In a real implementation, you would check against the database:

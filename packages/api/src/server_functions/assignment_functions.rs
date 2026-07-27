@@ -5,19 +5,19 @@
 //! - Publishing assignments (triggers custom assignment creation)
 //! - Personalizing assignments for students using DeepSeek LLM
 
+use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 #[cfg(feature = "server")]
 use {
-    crate::domain::{AssignmentId, TeacherId, StudentId, CustomAssignmentId, UserInfo},
-    crate::models::CreateAssignmentRequest,
-    crate::repositories::{AssignmentRepository, CustomAssignmentRepository},
-    crate::services::AssignmentPersonalizationService,
     crate::app_state::extract_server_state,
     crate::dioxus_fullstack::extract,
+    crate::domain::{AssignmentId, CustomAssignmentId, StudentId, TeacherId, UserInfo},
+    crate::models::CreateAssignmentRequest,
+    crate::repositories::{AssignmentRepository, CustomAssignmentRepository},
     crate::rls_context::RlsContext,
+    crate::services::AssignmentPersonalizationService,
     axum::Extension,
     uuid::Uuid,
 };
@@ -88,40 +88,48 @@ pub struct CreateAssignmentPayload {
 pub async fn get_all_assignments() -> Result<Vec<AssignmentResponse>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        
+
         // Set RLS context for Row Level Security
         let user_uuid = Uuid::parse_str(&user.id)
             .map_err(|e| ServerFnError::new(format!("Invalid user ID: {}", e)))?;
-        let school_id: Option<Uuid> = sqlx::query_scalar!(
-            "SELECT school_id FROM users WHERE id = $1", user_uuid
-        ).fetch_optional(&**pool).await.ok().flatten();
-        
-        RlsContext::set(&pool, &user.id, &user.role, school_id.as_ref().map(|id| id.to_string()).as_deref())
-            .await
-            .map_err(|e| ServerFnError::new(format!("Failed to set RLS context: {}", e)))?;
-        
-        // Get teacher ID from the teachers table based on user_id
-        let teacher_id: TeacherId = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM teachers WHERE user_id = $1"
+        let school_id: Option<Uuid> =
+            sqlx::query_scalar!("SELECT school_id FROM users WHERE id = $1", user_uuid)
+                .fetch_optional(&**pool)
+                .await
+                .ok()
+                .flatten();
+
+        RlsContext::set(
+            &pool,
+            &user.id,
+            &user.role,
+            school_id.as_ref().map(|id| id.to_string()).as_deref(),
         )
-        .bind(user_uuid)
-        .fetch_one(&**pool)
         .await
-        .map_err(|_| ServerFnError::new("Teacher not found"))?
-        .into();
-        
+        .map_err(|e| ServerFnError::new(format!("Failed to set RLS context: {}", e)))?;
+
+        // Get teacher ID from the teachers table based on user_id
+        let teacher_id: TeacherId =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM teachers WHERE user_id = $1")
+                .bind(user_uuid)
+                .fetch_one(&**pool)
+                .await
+                .map_err(|_| ServerFnError::new("Teacher not found"))?
+                .into();
+
         let assignment_repo = AssignmentRepository::new(state.services.pool.clone());
-        
+
         let assignments = assignment_repo
             .list_by_teacher(teacher_id, 100, 0)
             .await
             .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         let responses: Vec<AssignmentResponse> = assignments
             .into_iter()
             .map(|a| AssignmentResponse {
@@ -136,10 +144,10 @@ pub async fn get_all_assignments() -> Result<Vec<AssignmentResponse>, ServerFnEr
                 published_at: a.published_at,
             })
             .collect();
-        
+
         Ok(responses)
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Err(ServerFnError::new("Server only"))
@@ -148,20 +156,24 @@ pub async fn get_all_assignments() -> Result<Vec<AssignmentResponse>, ServerFnEr
 
 /// Get assignment by ID
 #[server(endpoint = "assignments/get_by_id")]
-pub async fn get_assignment_by_id(assignment_id: String) -> Result<Option<AssignmentResponse>, ServerFnError> {
+pub async fn get_assignment_by_id(
+    assignment_id: String,
+) -> Result<Option<AssignmentResponse>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(_user): Extension<UserInfo> = extract().await
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
-        
-        let id: AssignmentId = assignment_id.parse::<Uuid>()
+
+        let id: AssignmentId = assignment_id
+            .parse::<Uuid>()
             .map_err(|e| ServerFnError::new(format!("Invalid assignment ID: {}", e)))?
             .into();
-        
+
         let assignment_repo = AssignmentRepository::new(state.services.pool.clone());
-        
+
         match assignment_repo.find_with_details_by_id(id).await {
             Ok(a) => Ok(Some(AssignmentResponse {
                 id: a.id.to_string(),
@@ -177,7 +189,7 @@ pub async fn get_assignment_by_id(assignment_id: String) -> Result<Option<Assign
             Err(_) => Ok(None),
         }
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Ok(None)
@@ -186,37 +198,43 @@ pub async fn get_assignment_by_id(assignment_id: String) -> Result<Option<Assign
 
 /// Create a new assignment
 #[server(endpoint = "assignments/create")]
-pub async fn create_assignment(payload: CreateAssignmentPayload) -> Result<AssignmentResponse, ServerFnError> {
+pub async fn create_assignment(
+    payload: CreateAssignmentPayload,
+) -> Result<AssignmentResponse, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
-        
+
         // Get teacher ID from the teachers table based on user_id
         let user_uuid = Uuid::parse_str(&user.id)
             .map_err(|e| ServerFnError::new(format!("Invalid user ID: {}", e)))?;
-        
-        let teacher_id: TeacherId = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM teachers WHERE user_id = $1"
-        )
-        .bind(user_uuid)
-        .fetch_one(&*state.services.pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Teacher not found: {}", e)))?
-        .into();
-        
+
+        let teacher_id: TeacherId =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM teachers WHERE user_id = $1")
+                .bind(user_uuid)
+                .fetch_one(&*state.services.pool)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Teacher not found: {}", e)))?
+                .into();
+
         let request = CreateAssignmentRequest {
-            class_section_id: payload.class_section_id.parse::<Uuid>()
+            class_section_id: payload
+                .class_section_id
+                .parse::<Uuid>()
                 .map_err(|e| ServerFnError::new(format!("Invalid class section ID: {}", e)))?
                 .into(),
-            subject_id: payload.subject_id.parse::<Uuid>()
+            subject_id: payload
+                .subject_id
+                .parse::<Uuid>()
                 .map_err(|e| ServerFnError::new(format!("Invalid subject ID: {}", e)))?
                 .into(),
-            lecture_id: payload.lecture_id.and_then(|id| {
-                id.parse::<Uuid>().ok().map(Into::into)
-            }),
+            lecture_id: payload
+                .lecture_id
+                .and_then(|id| id.parse::<Uuid>().ok().map(Into::into)),
             lecture_title: payload.lecture_title,
             lecture_number: payload.lecture_number,
             title: payload.title,
@@ -224,20 +242,22 @@ pub async fn create_assignment(payload: CreateAssignmentPayload) -> Result<Assig
             due_at: payload.due_at,
             material_ids: payload.material_ids,
         };
-        
+
         let assignment_repo = AssignmentRepository::new(state.services.pool.clone());
-        
+
         let assignment = assignment_repo
             .create(teacher_id, request)
             .await
             .map_err(|e| ServerFnError::new(format!("Failed to create assignment: {}", e)))?;
-        
+
         // Get full details
         let details = assignment_repo
             .find_with_details_by_id(assignment.id)
             .await
-            .map_err(|e| ServerFnError::new(format!("Failed to fetch assignment details: {}", e)))?;
-        
+            .map_err(|e| {
+                ServerFnError::new(format!("Failed to fetch assignment details: {}", e))
+            })?;
+
         Ok(AssignmentResponse {
             id: details.id.to_string(),
             title: details.title,
@@ -250,7 +270,7 @@ pub async fn create_assignment(payload: CreateAssignmentPayload) -> Result<Assig
             published_at: details.published_at,
         })
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Err(ServerFnError::new("Server only"))
@@ -259,45 +279,59 @@ pub async fn create_assignment(payload: CreateAssignmentPayload) -> Result<Assig
 
 /// Publish an assignment (creates custom assignments for all enrolled students)
 #[server(endpoint = "assignments/publish")]
-pub async fn publish_assignment(assignment_id: String) -> Result<AssignmentResponse, ServerFnError> {
+pub async fn publish_assignment(
+    assignment_id: String,
+) -> Result<AssignmentResponse, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(_user): Extension<UserInfo> = extract().await
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
-        
-        let id: AssignmentId = assignment_id.parse::<Uuid>()
+
+        let id: AssignmentId = assignment_id
+            .parse::<Uuid>()
             .map_err(|e| ServerFnError::new(format!("Invalid assignment ID: {}", e)))?
             .into();
-        
+
         let assignment_repo = AssignmentRepository::new(state.services.pool.clone());
-        
+
         // Publish the assignment (this creates custom_assignments for all students)
         let assignment = assignment_repo
             .publish(id)
             .await
             .map_err(|e| ServerFnError::new(format!("Failed to publish assignment: {}", e)))?;
-        
+
         // Get full details
         let details = assignment_repo
             .find_with_details_by_id(assignment.id)
             .await
-            .map_err(|e| ServerFnError::new(format!("Failed to fetch assignment details: {}", e)))?;
-        
+            .map_err(|e| {
+                ServerFnError::new(format!("Failed to fetch assignment details: {}", e))
+            })?;
+
         // Trigger AI personalization for all enrolled students (background task)
         // This is non-blocking - publish returns immediately while personalization runs async
         let assignment_id_for_task = assignment.id;
         let class_section_id = details.class_section_id;
         let pool_for_task = state.services.pool.clone();
-        
-        println!("[AI-PERSONALIZATION] Starting background personalization for assignment {}", assignment_id_for_task);
-        
+
+        println!(
+            "[AI-PERSONALIZATION] Starting background personalization for assignment {}",
+            assignment_id_for_task
+        );
+
         tokio::spawn(async move {
-            println!("[AI-PERSONALIZATION] Background task started for assignment {}", assignment_id_for_task);
+            println!(
+                "[AI-PERSONALIZATION] Background task started for assignment {}",
+                assignment_id_for_task
+            );
             match AssignmentPersonalizationService::new(pool_for_task) {
                 Ok(service) => {
-                    println!("[AI-PERSONALIZATION] Service initialized, checking LLM availability...");
+                    println!(
+                        "[AI-PERSONALIZATION] Service initialized, checking LLM availability..."
+                    );
                     if service.is_llm_available() {
                         println!("[AI-PERSONALIZATION] LLM is available, personalizing for class section {}...", class_section_id);
                         tracing::info!(
@@ -305,15 +339,21 @@ pub async fn publish_assignment(assignment_id: String) -> Result<AssignmentRespo
                             assignment_id_for_task,
                             class_section_id
                         );
-                        match service.personalize_for_class_section(
-                            assignment_id_for_task,
-                            class_section_id,
-                            None
-                        ).await {
+                        match service
+                            .personalize_for_class_section(
+                                assignment_id_for_task,
+                                class_section_id,
+                                None,
+                            )
+                            .await
+                        {
                             Ok(results) => {
                                 let success_count = results.iter().filter(|r| r.success).count();
                                 let total = results.len();
-                                println!("[AI-PERSONALIZATION] Completed: {}/{} students personalized", success_count, total);
+                                println!(
+                                    "[AI-PERSONALIZATION] Completed: {}/{} students personalized",
+                                    success_count, total
+                                );
                                 tracing::info!(
                                     "AI personalization completed: {}/{} students personalized for assignment {}",
                                     success_count, total, assignment_id_for_task
@@ -323,7 +363,8 @@ pub async fn publish_assignment(assignment_id: String) -> Result<AssignmentRespo
                                 println!("[AI-PERSONALIZATION] Error: {}", e);
                                 tracing::warn!(
                                     "AI personalization failed for assignment {}: {}",
-                                    assignment_id_for_task, e
+                                    assignment_id_for_task,
+                                    e
                                 );
                             }
                         }
@@ -337,15 +378,11 @@ pub async fn publish_assignment(assignment_id: String) -> Result<AssignmentRespo
                 }
                 Err(e) => {
                     println!("[AI-PERSONALIZATION] Service init failed: {}", e);
-                    tracing::warn!(
-                        "Failed to initialize personalization service: {}",
-                        e
-                    );
+                    tracing::warn!("Failed to initialize personalization service: {}", e);
                 }
             }
         });
 
-        
         Ok(AssignmentResponse {
             id: details.id.to_string(),
             title: details.title,
@@ -358,13 +395,12 @@ pub async fn publish_assignment(assignment_id: String) -> Result<AssignmentRespo
             published_at: details.published_at,
         })
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Err(ServerFnError::new("Server only"))
     }
 }
-
 
 /// Personalize an assignment for a specific student using AI
 #[server(endpoint = "assignments/personalize")]
@@ -374,29 +410,37 @@ pub async fn personalize_for_student(
 ) -> Result<PersonalizedAssignmentResponse, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(_user): Extension<UserInfo> = extract().await
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
-        
-        let aid: AssignmentId = assignment_id.parse::<Uuid>()
+
+        let aid: AssignmentId = assignment_id
+            .parse::<Uuid>()
             .map_err(|e| ServerFnError::new(format!("Invalid assignment ID: {}", e)))?
             .into();
-        
-        let sid: StudentId = student_id.parse::<Uuid>()
+
+        let sid: StudentId = student_id
+            .parse::<Uuid>()
             .map_err(|e| ServerFnError::new(format!("Invalid student ID: {}", e)))?
             .into();
-        
+
         // Create personalization service
-        let service = AssignmentPersonalizationService::new(state.services.pool.clone())
-            .map_err(|e| ServerFnError::new(format!("Failed to initialize personalization service: {}", e)))?;
-        
+        let service =
+            AssignmentPersonalizationService::new(state.services.pool.clone()).map_err(|e| {
+                ServerFnError::new(format!(
+                    "Failed to initialize personalization service: {}",
+                    e
+                ))
+            })?;
+
         // Run personalization
         let result = service
             .personalize_for_student(aid, sid, None)
             .await
             .map_err(|e| ServerFnError::new(format!("Personalization failed: {}", e)))?;
-        
+
         // Build response
         let personalization = if result.success {
             Some(PersonalizationDetails {
@@ -411,7 +455,7 @@ pub async fn personalize_for_student(
         } else {
             None
         };
-        
+
         Ok(PersonalizedAssignmentResponse {
             id: result.custom_assignment_id.to_string(),
             assignment_id,
@@ -426,7 +470,7 @@ pub async fn personalize_for_student(
             assigned_at: Utc::now(),
         })
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Err(ServerFnError::new("Server only"))
@@ -440,71 +484,97 @@ pub async fn get_personalized_assignment(
 ) -> Result<Option<PersonalizedAssignmentResponse>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(_user): Extension<UserInfo> = extract().await
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
-        
-        let id: CustomAssignmentId = custom_assignment_id.parse::<Uuid>()
+
+        let id: CustomAssignmentId = custom_assignment_id
+            .parse::<Uuid>()
             .map_err(|e| ServerFnError::new(format!("Invalid custom assignment ID: {}", e)))?
             .into();
-        
+
         let custom_assignment_repo = CustomAssignmentRepository::new(state.services.pool.clone());
-        
+
         let custom_assignment = match custom_assignment_repo.find_with_details_by_id(id).await {
             Ok(ca) => ca,
             Err(_) => return Ok(None),
         };
-        
+
         // Check if personalized content exists
-        let (title, body, is_personalized, personalization) = if let Some(ref prompt_ctx) = custom_assignment.prompt_ctx {
-            if let Some(personalized) = prompt_ctx.get("personalized_assignment") {
-                let title = personalized.get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&custom_assignment.assignment_title)
-                    .to_string();
-                let body = personalized.get("body")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&custom_assignment.assignment_body)
-                    .to_string();
-                
-                let scope = personalized.get("scope");
-                let details = PersonalizationDetails {
-                    scope_type: scope.and_then(|s| s.get("type"))
+        let (title, body, is_personalized, personalization) =
+            if let Some(ref prompt_ctx) = custom_assignment.prompt_ctx {
+                if let Some(personalized) = prompt_ctx.get("personalized_assignment") {
+                    let title = personalized
+                        .get("title")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("default")
-                        .to_string(),
-                    estimated_hours: scope.and_then(|s| s.get("estimated_hours"))
-                        .and_then(|v| v.as_f64())
-                        .map(|v| v as f32),
-                    page_count: scope.and_then(|s| s.get("page_count"))
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as u32),
-                    word_count: scope.and_then(|s| s.get("word_count"))
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as u32),
-                    deliverables: scope.and_then(|s| s.get("deliverables"))
-                        .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                        .unwrap_or_default(),
-                    estimated_difficulty: personalized.get("estimated_difficulty")
+                        .unwrap_or(&custom_assignment.assignment_title)
+                        .to_string();
+                    let body = personalized
+                        .get("body")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("medium")
-                        .to_string(),
-                    personalization_notes: personalized.get("personalization_notes")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                };
-                
-                (title, body, true, Some(details))
+                        .unwrap_or(&custom_assignment.assignment_body)
+                        .to_string();
+
+                    let scope = personalized.get("scope");
+                    let details = PersonalizationDetails {
+                        scope_type: scope
+                            .and_then(|s| s.get("type"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("default")
+                            .to_string(),
+                        estimated_hours: scope
+                            .and_then(|s| s.get("estimated_hours"))
+                            .and_then(|v| v.as_f64())
+                            .map(|v| v as f32),
+                        page_count: scope
+                            .and_then(|s| s.get("page_count"))
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as u32),
+                        word_count: scope
+                            .and_then(|s| s.get("word_count"))
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as u32),
+                        deliverables: scope
+                            .and_then(|s| s.get("deliverables"))
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        estimated_difficulty: personalized
+                            .get("estimated_difficulty")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("medium")
+                            .to_string(),
+                        personalization_notes: personalized
+                            .get("personalization_notes")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    };
+
+                    (title, body, true, Some(details))
+                } else {
+                    (
+                        custom_assignment.assignment_title.clone(),
+                        custom_assignment.assignment_body.clone(),
+                        false,
+                        None,
+                    )
+                }
             } else {
-                (custom_assignment.assignment_title.clone(), custom_assignment.assignment_body.clone(), false, None)
-            }
-        } else {
-            (custom_assignment.assignment_title.clone(), custom_assignment.assignment_body.clone(), false, None)
-        };
-        
+                (
+                    custom_assignment.assignment_title.clone(),
+                    custom_assignment.assignment_body.clone(),
+                    false,
+                    None,
+                )
+            };
+
         Ok(Some(PersonalizedAssignmentResponse {
             id: custom_assignment.id.to_string(),
             assignment_id: custom_assignment.assignment_id.to_string(),
@@ -519,7 +589,7 @@ pub async fn get_personalized_assignment(
             assigned_at: custom_assignment.assigned_at,
         }))
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Ok(None)
@@ -533,22 +603,24 @@ pub async fn list_custom_assignments(
 ) -> Result<Vec<PersonalizedAssignmentResponse>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(_user): Extension<UserInfo> = extract().await
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
-        
-        let id: AssignmentId = assignment_id.parse::<Uuid>()
+
+        let id: AssignmentId = assignment_id
+            .parse::<Uuid>()
             .map_err(|e| ServerFnError::new(format!("Invalid assignment ID: {}", e)))?
             .into();
-        
+
         let custom_assignment_repo = CustomAssignmentRepository::new(state.services.pool.clone());
-        
+
         let custom_assignments = custom_assignment_repo
             .list_by_assignment(id, 1000, 0)
             .await
             .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         let responses: Vec<PersonalizedAssignmentResponse> = custom_assignments
             .into_iter()
             .map(|ca| {
@@ -556,11 +628,13 @@ pub async fn list_custom_assignments(
                 let (title, body) = if let Some(ref prompt_ctx) = ca.prompt_ctx {
                     if let Some(personalized) = prompt_ctx.get("personalized_assignment") {
                         (
-                            personalized.get("title")
+                            personalized
+                                .get("title")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or(&ca.assignment_title)
                                 .to_string(),
-                            personalized.get("body")
+                            personalized
+                                .get("body")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or(&ca.assignment_body)
                                 .to_string(),
@@ -571,7 +645,7 @@ pub async fn list_custom_assignments(
                 } else {
                     (ca.assignment_title.clone(), ca.assignment_body.clone())
                 };
-                
+
                 PersonalizedAssignmentResponse {
                     id: ca.id.to_string(),
                     assignment_id: ca.assignment_id.to_string(),
@@ -587,10 +661,10 @@ pub async fn list_custom_assignments(
                 }
             })
             .collect();
-        
+
         Ok(responses)
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Ok(vec![])
@@ -602,31 +676,31 @@ pub async fn list_custom_assignments(
 pub async fn get_my_assignments() -> Result<Vec<PersonalizedAssignmentResponse>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
-        
+
         let user_uuid = Uuid::parse_str(&user.id)
             .map_err(|e| ServerFnError::new(format!("Invalid user ID: {}", e)))?;
-        
+
         // Get student ID from the students table based on user_id
-        let student_id: StudentId = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM students WHERE user_id = $1"
-        )
-        .bind(user_uuid)
-        .fetch_one(&*state.services.pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Student not found: {}", e)))?
-        .into();
-        
+        let student_id: StudentId =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM students WHERE user_id = $1")
+                .bind(user_uuid)
+                .fetch_one(&*state.services.pool)
+                .await
+                .map_err(|e| ServerFnError::new(format!("Student not found: {}", e)))?
+                .into();
+
         let custom_assignment_repo = CustomAssignmentRepository::new(state.services.pool.clone());
-        
+
         let custom_assignments = custom_assignment_repo
             .list_by_student(student_id, 100, 0)
             .await
             .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         let responses: Vec<PersonalizedAssignmentResponse> = custom_assignments
             .into_iter()
             .map(|ca| {
@@ -634,11 +708,13 @@ pub async fn get_my_assignments() -> Result<Vec<PersonalizedAssignmentResponse>,
                 let (title, body) = if let Some(ref prompt_ctx) = ca.prompt_ctx {
                     if let Some(personalized) = prompt_ctx.get("personalized_assignment") {
                         (
-                            personalized.get("title")
+                            personalized
+                                .get("title")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or(&ca.assignment_title)
                                 .to_string(),
-                            personalized.get("body")
+                            personalized
+                                .get("body")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or(&ca.assignment_body)
                                 .to_string(),
@@ -649,7 +725,7 @@ pub async fn get_my_assignments() -> Result<Vec<PersonalizedAssignmentResponse>,
                 } else {
                     (ca.assignment_title.clone(), ca.assignment_body.clone())
                 };
-                
+
                 PersonalizedAssignmentResponse {
                     id: ca.id.to_string(),
                     assignment_id: ca.assignment_id.to_string(),
@@ -665,10 +741,10 @@ pub async fn get_my_assignments() -> Result<Vec<PersonalizedAssignmentResponse>,
                 }
             })
             .collect();
-        
+
         Ok(responses)
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Ok(vec![])
@@ -680,25 +756,27 @@ pub async fn get_my_assignments() -> Result<Vec<PersonalizedAssignmentResponse>,
 pub async fn delete_assignment(assignment_id: String) -> Result<(), ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(_user): Extension<UserInfo> = extract().await
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
-        
-        let id: AssignmentId = assignment_id.parse::<Uuid>()
+
+        let id: AssignmentId = assignment_id
+            .parse::<Uuid>()
             .map_err(|e| ServerFnError::new(format!("Invalid assignment ID: {}", e)))?
             .into();
-        
+
         let assignment_repo = AssignmentRepository::new(state.services.pool.clone());
-        
+
         assignment_repo
             .delete(id)
             .await
             .map_err(|e| ServerFnError::new(format!("Failed to delete assignment: {}", e)))?;
-        
+
         Ok(())
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Ok(())
@@ -708,7 +786,7 @@ pub async fn delete_assignment(assignment_id: String) -> Result<(), ServerFnErro
 /// Update an assignment
 #[server(endpoint = "assignments/update")]
 pub async fn update_assignment(
-    assignment_id: String, 
+    assignment_id: String,
     title: Option<String>,
     body: Option<String>,
     due_at: Option<DateTime<Utc>>,
@@ -716,16 +794,18 @@ pub async fn update_assignment(
     #[cfg(feature = "server")]
     {
         use crate::models::UpdateAssignmentRequest;
-        
-        let Extension(_user): Extension<UserInfo> = extract().await
+
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
-        
-        let id: AssignmentId = assignment_id.parse::<Uuid>()
+
+        let id: AssignmentId = assignment_id
+            .parse::<Uuid>()
             .map_err(|e| ServerFnError::new(format!("Invalid assignment ID: {}", e)))?
             .into();
-        
+
         let request = UpdateAssignmentRequest {
             title,
             body,
@@ -733,19 +813,21 @@ pub async fn update_assignment(
             lecture_title: None,
             lecture_number: None,
         };
-        
+
         let assignment_repo = AssignmentRepository::new(state.services.pool.clone());
-        
+
         let assignment = assignment_repo
             .update(id, request)
             .await
             .map_err(|e| ServerFnError::new(format!("Failed to update assignment: {}", e)))?;
-        
+
         let details = assignment_repo
             .find_with_details_by_id(assignment.id)
             .await
-            .map_err(|e| ServerFnError::new(format!("Failed to fetch assignment details: {}", e)))?;
-        
+            .map_err(|e| {
+                ServerFnError::new(format!("Failed to fetch assignment details: {}", e))
+            })?;
+
         Ok(AssignmentResponse {
             id: details.id.to_string(),
             title: details.title,
@@ -758,7 +840,7 @@ pub async fn update_assignment(
             published_at: details.published_at,
         })
     }
-    
+
     #[cfg(not(feature = "server"))]
     {
         Err(ServerFnError::new("Server only"))

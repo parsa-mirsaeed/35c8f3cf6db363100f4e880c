@@ -1,5 +1,5 @@
 //! Grading utilities for locale-specific grade handling
-//! 
+//!
 //! Implements the approved strategy: Store grades in the user's preferred scale
 //! - Farsi (fa): 0-20 scale (Iranian education standard)
 //! - English (en): 0-100 scale (International percentage-based)
@@ -96,11 +96,11 @@ impl LocalizedGrade {
     pub fn farsi_letter_grade(&self) -> &'static str {
         let percentage = self.as_percentage();
         match percentage as i32 {
-            90..=100 => "عالی",    // Excellent
-            80..=89 => "خوب",      // Good
-            70..=79 => "متوسط",    // Average
+            90..=100 => "عالی",     // Excellent
+            80..=89 => "خوب",       // Good
+            70..=79 => "متوسط",     // Average
             60..=69 => "قابل قبول", // Acceptable
-            _ => "مردود",          // Failed
+            _ => "مردود",           // Failed
         }
     }
 
@@ -154,7 +154,7 @@ pub fn from_persian_numerals(s: &str) -> String {
 pub fn parse_grade(input: &str, locale: Locale) -> Option<LocalizedGrade> {
     // Normalize Persian numerals if present
     let normalized = from_persian_numerals(input.trim());
-    
+
     // Remove common suffixes
     let cleaned = normalized
         .replace('%', "")
@@ -184,7 +184,10 @@ pub fn validate_grade(value: f64, locale: Locale) -> Result<(), String> {
     if value > max {
         return Err(match locale {
             Locale::En => format!("Grade cannot exceed {}", max),
-            Locale::Fa => format!("نمره نمی‌تواند بیشتر از {} باشد", to_persian_numerals(max.to_string())),
+            Locale::Fa => format!(
+                "نمره نمی‌تواند بیشتر از {} باشد",
+                to_persian_numerals(max.to_string())
+            ),
         });
     }
     Ok(())

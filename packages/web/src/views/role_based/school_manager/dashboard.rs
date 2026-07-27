@@ -1,12 +1,14 @@
+use super::settings::profile::ProfileSettings;
+use super::{ClassManagementSection, ReportsSection, SettingsSection, UserManagementSection};
+use crate::application::AuthHooks;
+use crate::domain::User;
+use crate::i18n::use_locale;
+use crate::views::role_based::components::{
+    DashboardCard, DashboardSection, ResponsiveDashboardLayout,
+};
+use api::server_functions::admin_functions::{get_activity_summary, get_recent_users};
 use dioxus::prelude::*;
 use gloo_storage::{LocalStorage, Storage};
-use crate::domain::User;
-use crate::application::AuthHooks;
-use super::{UserManagementSection, ClassManagementSection, ReportsSection, SettingsSection};
-use super::settings::profile::ProfileSettings;
-use crate::views::role_based::components::{ResponsiveDashboardLayout, DashboardSection, DashboardCard};
-use api::server_functions::admin_functions::{get_activity_summary, get_recent_users};
-use crate::i18n::use_locale;
 
 /// Main School Manager dashboard component
 #[component]
@@ -30,7 +32,7 @@ pub fn SchoolManagerDashboard() -> Element {
                 "reports" => rsx! { ReportsSection {} },
                 "settings" => rsx! { SettingsSection {} },
                 "profile" => rsx! { ProfileSettings {} }, // Linked Profile
-                _ => rsx! { SchoolManagerOverviewSection {} }
+                _ => rsx! { SchoolManagerOverviewSection {} },
             };
 
             rsx! {
@@ -74,20 +76,17 @@ pub fn SchoolManagerDashboard() -> Element {
 pub fn SchoolManagerOverviewSection() -> Element {
     // We keep the resource loading logic but strictly follow the HTML structure for UI
     let locale = use_locale();
-    let recent_users_resource = use_resource(move || {
-        async move {
-            get_recent_users(Some(10)).await.ok()
-        }
-    });
+    let recent_users_resource =
+        use_resource(move || async move { get_recent_users(Some(10)).await.ok() });
 
     rsx! {
         div {
             class: "grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-8",
-            
+
             // Main Column (2/3 width)
             div {
                 class: "lg:col-span-2 space-y-4 md:space-y-8",
-                
+
                 // Recent Activity Section
                 DashboardSection {
                     title: locale.t("school_manager.recent_activity"),
@@ -95,7 +94,7 @@ pub fn SchoolManagerOverviewSection() -> Element {
                     children: rsx! {
                         div {
                             class: "glass-card p-0 overflow-hidden",
-                            
+
                             // Hardcoded structure matching design, populated with real data if available
                             match recent_users_resource.read().as_ref() {
                                 Some(Some(data)) => rsx! {
@@ -149,7 +148,7 @@ pub fn SchoolManagerOverviewSection() -> Element {
                     children: rsx! {
                         div {
                             class: "grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-4",
-                            
+
                             DashboardCard {
                                 title: locale.t("school_manager.health.database"),
                                 value: "99.9%".to_string(),
@@ -255,7 +254,13 @@ fn ActivityItem(icon: String, message: String, time: String, color: String) -> E
 }
 
 #[component]
-fn QuickActionButton(icon: String, label: String, description: String, icon_bg: String, icon_color: String) -> Element {
+fn QuickActionButton(
+    icon: String,
+    label: String,
+    description: String,
+    icon_bg: String,
+    icon_color: String,
+) -> Element {
     rsx! {
         a {
             class: "flex items-start gap-4 p-4 rounded-xl glass-card hover:bg-white/40 dark:hover:bg-gray-800/60 transition-all duration-300 cursor-pointer group hover:-translate-y-0.5",

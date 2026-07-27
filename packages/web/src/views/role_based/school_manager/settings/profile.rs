@@ -1,13 +1,12 @@
-use dioxus::prelude::*;
-use api::server_functions::admin_functions::{get_admin_profile, update_admin_profile};
-use crate::views::role_based::shared::common::{Card, Button, ButtonVariant, ButtonSize, Modal};
+use crate::i18n::use_locale;
+use crate::views::role_based::shared::common::{Button, ButtonSize, ButtonVariant, Card, Modal};
 use crate::views::role_based::shared::forms::FormInput;
 use crate::views::role_based::shared::profile_request::ProfileChangeRequestForm;
-use crate::i18n::use_locale;
+use api::server_functions::admin_functions::{get_admin_profile, update_admin_profile};
+use dioxus::prelude::*;
 
 #[component]
 pub fn ProfileSettings() -> Element {
-
     // State for profile data
     let mut profile_name = use_signal(|| String::new());
     let mut profile_email = use_signal(|| String::new());
@@ -24,15 +23,51 @@ pub fn ProfileSettings() -> Element {
     let _profile_resource = use_resource(move || {
         async move {
             if let Ok(profile) = get_admin_profile().await {
-                profile_name.set(profile.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                profile_email.set(profile.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                
+                profile_name.set(
+                    profile
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                );
+                profile_email.set(
+                    profile
+                        .get("email")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                );
+
                 // Populate other fields if they exist in profile_fields or root
                 if let Some(fields) = profile.get("profile_fields") {
-                    phone_number.set(fields.get("phone_number").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                    office_location.set(fields.get("office_location").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                    work_hours.set(fields.get("work_hours").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                    emergency_contact.set(fields.get("emergency_contact").and_then(|v| v.as_str()).unwrap_or("").to_string());
+                    phone_number.set(
+                        fields
+                            .get("phone_number")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    office_location.set(
+                        fields
+                            .get("office_location")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    work_hours.set(
+                        fields
+                            .get("work_hours")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    emergency_contact.set(
+                        fields
+                            .get("emergency_contact")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
                 }
                 is_loading.set(false);
             }
@@ -54,7 +89,7 @@ pub fn ProfileSettings() -> Element {
                         } else {
                             div {
                                 class: "space-y-6",
-                                
+
                                 div {
                                     class: "grid grid-cols-1 md:grid-cols-2 gap-6",
                                     FormInput {
@@ -146,7 +181,7 @@ pub fn ProfileSettings() -> Element {
             // Profile Summary Sidebar
             div {
                 class: "space-y-6",
-                
+
                 Card {
                     children: rsx! {
                         div {
@@ -183,7 +218,7 @@ pub fn ProfileSettings() -> Element {
                                 icon: Some("edit_note".to_string()),
                                 onclick: move |_| show_request_form.set(true)
                             }
-                            
+
                             Button {
                                 text: locale.t("school_manager.settings.profile.change_pwd"),
                                 variant: ButtonVariant::Ghost,
@@ -230,7 +265,7 @@ fn ChangePasswordModal(on_close: EventHandler) -> Element {
     let mut new_password = use_signal(|| String::new());
     let mut confirm_password = use_signal(|| String::new());
     let locale = use_locale();
-    
+
     rsx! {
         Modal {
             title: locale.t("school_manager.settings.profile.change_pwd"),
@@ -239,7 +274,7 @@ fn ChangePasswordModal(on_close: EventHandler) -> Element {
             children: rsx! {
                 div {
                     class: "space-y-6",
-                    
+
                     FormInput {
                         label: locale.t("school_manager.settings.security.current_pwd"),
                         name: "current_password".to_string(),
@@ -247,7 +282,7 @@ fn ChangePasswordModal(on_close: EventHandler) -> Element {
                         input_type: Some("password".to_string()),
                         on_change: move |v| current_password.set(v)
                     }
-                    
+
                     FormInput {
                         label: locale.t("school_manager.settings.security.new_pwd"),
                         name: "new_password".to_string(),
@@ -255,7 +290,7 @@ fn ChangePasswordModal(on_close: EventHandler) -> Element {
                         input_type: Some("password".to_string()),
                         on_change: move |v| new_password.set(v)
                     }
-                    
+
                     FormInput {
                         label: locale.t("school_manager.settings.security.confirm_pwd"),
                         name: "confirm_password".to_string(),
@@ -263,30 +298,30 @@ fn ChangePasswordModal(on_close: EventHandler) -> Element {
                         input_type: Some("password".to_string()),
                         on_change: move |v| confirm_password.set(v)
                     }
-                    
+
                     // Password requirements
                     div {
                         class: "p-3 bg-gray-50 dark:bg-gray-800 rounded-lg text-sm text-gray-600 dark:text-gray-400",
                         p { class: "font-medium mb-2", "{locale.t(\"school_manager.settings.profile.pwd_requirements\")}" }
-                        ul { 
+                        ul {
                             class: "list-disc list-inside space-y-1 text-xs",
                             li { "{locale.t(\"school_manager.settings.profile.pwd_req_1\")}" }
                             li { "{locale.t(\"school_manager.settings.profile.pwd_req_2\")}" }
                             li { "{locale.t(\"school_manager.settings.profile.pwd_req_3\")}" }
                         }
                     }
-                    
+
                     // Coming soon notice
                     div {
                         class: "p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800/50",
                             div {
                                 class: "flex items-start gap-2",
                                 span { class: "material-icons-outlined text-yellow-600 dark:text-yellow-400 text-base", "schedule" }
-                                p { class: "text-sm text-yellow-700 dark:text-yellow-300", 
-                                    "{locale.t(\"school_manager.settings.profile.pwd_coming_soon\")}" 
+                                p { class: "text-sm text-yellow-700 dark:text-yellow-300",
+                                    "{locale.t(\"school_manager.settings.profile.pwd_coming_soon\")}"
                                 }
                             }                  }
-                    
+
                     div {
                         class: "flex justify-end gap-3",
                         Button {

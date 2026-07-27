@@ -1,26 +1,30 @@
 //! Supabase JWT verification and authentication system
 //! Ported from the previous backend system
 
+use crate::domain::UserInfo;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use jsonwebtoken::{decode_header, Algorithm, DecodingKey, Validation};
 use once_cell::sync::Lazy;
 use serde::Deserialize;
-use std::{collections::HashMap, sync::Arc, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::RwLock;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use crate::domain::UserInfo;
 
 #[derive(Debug, Clone, Deserialize)]
 struct Jwk {
-    kty: String,          // "EC" or "RSA"
+    kty: String, // "EC" or "RSA"
     kid: String,
-    alg: Option<String>,  // "ES256" or "RS256"
+    alg: Option<String>, // "ES256" or "RS256"
     // EC fields
-    crv: Option<String>,  // "P-256"
-    x: Option<String>,    // base64url
-    y: Option<String>,    // base64url
+    crv: Option<String>, // "P-256"
+    x: Option<String>,   // base64url
+    y: Option<String>,   // base64url
     // RSA fields
-    n: Option<String>,    // base64url
-    e: Option<String>,    // base64url
+    n: Option<String>, // base64url
+    e: Option<String>, // base64url
     #[allow(dead_code)]
     use_: Option<String>,
 }
@@ -45,7 +49,10 @@ pub struct JwksCache {
 impl JwksCache {
     pub fn new(url: String, ttl: Duration) -> Self {
         Self {
-            inner: RwLock::new(JwksCacheInner { jwks: None, fetched_at: None }),
+            inner: RwLock::new(JwksCacheInner {
+                jwks: None,
+                fetched_at: None,
+            }),
             ttl,
             url,
         }
@@ -60,7 +67,12 @@ impl JwksCache {
                 }
             }
         }
-        let jwks = reqwest::Client::new().get(&self.url).send().await?.json::<Jwks>().await?;
+        let jwks = reqwest::Client::new()
+            .get(&self.url)
+            .send()
+            .await?
+            .json::<Jwks>()
+            .await?;
         let mut guard = self.inner.write().await;
         guard.jwks = Some(jwks.clone());
         guard.fetched_at = Some(Instant::now());
@@ -69,7 +81,12 @@ impl JwksCache {
 
     /// Force re-fetch (used if a kid wasn't found)
     pub async fn refresh(&self) -> anyhow::Result<Jwks> {
-        let jwks = reqwest::Client::new().get(&self.url).send().await?.json::<Jwks>().await?;
+        let jwks = reqwest::Client::new()
+            .get(&self.url)
+            .send()
+            .await?
+            .json::<Jwks>()
+            .await?;
         let mut guard = self.inner.write().await;
         guard.jwks = Some(jwks.clone());
         guard.fetched_at = Some(Instant::now());
@@ -91,17 +108,32 @@ pub struct SupabaseClaims {
 
 /// Build a DecodingKey from EC JWK
 fn decoding_key_from_ec_jwk(jwk: &Jwk) -> anyhow::Result<DecodingKey> {
-    let x = jwk.x.as_deref().ok_or_else(|| anyhow::anyhow!("missing x"))?;
-    let y = jwk.y.as_deref().ok_or_else(|| anyhow::anyhow!("missing y"))?;
-    let crv = jwk.crv.as_deref().ok_or_else(|| anyhow::anyhow!("missing crv"))?;
+    let x = jwk
+        .x
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("missing x"))?;
+    let y = jwk
+        .y
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("missing y"))?;
+    let crv = jwk
+        .crv
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("missing crv"))?;
     anyhow::ensure!(jwk.kty == "EC" && crv == "P-256", "wrong key type/crv");
     Ok(DecodingKey::from_ec_components(x, y)?)
 }
 
 /// Build a DecodingKey from RSA JWK
 fn decoding_key_from_rsa_jwk(jwk: &Jwk) -> anyhow::Result<DecodingKey> {
-    let n = jwk.n.as_deref().ok_or_else(|| anyhow::anyhow!("missing n"))?;
-    let e = jwk.e.as_deref().ok_or_else(|| anyhow::anyhow!("missing e"))?;
+    let n = jwk
+        .n
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("missing n"))?;
+    let e = jwk
+        .e
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("missing e"))?;
     anyhow::ensure!(jwk.kty == "RSA", "wrong key type");
     Ok(DecodingKey::from_rsa_components(n, e)?)
 }
@@ -114,7 +146,10 @@ pub struct SupabaseVerifier {
 
 impl SupabaseVerifier {
     pub fn new(project_ref: &str, expected_aud: &str) -> Self {
-        let jwks_url = format!("https://{}.supabase.co/auth/v1/.well-known/jwks.json", project_ref);
+        let jwks_url = format!(
+            "https://{}.supabase.co/auth/v1/.well-known/jwks.json",
+            project_ref
+        );
         Self {
             cache: Arc::new(JwksCache::new(jwks_url, Duration::from_secs(60 * 10))), // 10 min
             expected_iss: format!("https://{}.supabase.co/auth/v1", project_ref),
@@ -159,7 +194,9 @@ impl SupabaseVerifier {
         let data = jsonwebtoken::decode::<SupabaseClaims>(token, &decoding_key, &validation)?;
 
         let claims = data.claims;
-        let email = claims.email.ok_or_else(|| anyhow::anyhow!("email not found in token"))?;
+        let email = claims
+            .email
+            .ok_or_else(|| anyhow::anyhow!("email not found in token"))?;
         let role = claims.role.unwrap_or_else(|| "authenticated".to_string());
 
         Ok(UserInfo {

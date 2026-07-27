@@ -1,4 +1,4 @@
-use crate::domain::{UserId, SchoolId, ClassSectionId, StudentId, Role};
+use crate::domain::{ClassSectionId, Role, SchoolId, StudentId, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

@@ -296,22 +296,21 @@ impl AssignmentPersonalizationService {
         assignment_body: &str,
         material_ids: &[uuid::Uuid],
     ) -> Vec<MaterialContext> {
-        let vectorization_service =
-            match MaterialVectorizationService::new(Arc::clone(&self.pool)).await {
-                Ok(service) if service.is_available() => service,
-                Ok(_) => {
-                    tracing::debug!(
-                        "Vector retrieval is unavailable; continuing without RAG context"
-                    );
-                    return Vec::new();
-                }
-                Err(_) => {
-                    tracing::debug!(
-                        "Vector retrieval could not initialize; continuing without RAG context"
-                    );
-                    return Vec::new();
-                }
-            };
+        let vectorization_service = match MaterialVectorizationService::new(Arc::clone(&self.pool))
+            .await
+        {
+            Ok(service) if service.is_available() => service,
+            Ok(_) => {
+                tracing::debug!("Vector retrieval is unavailable; continuing without RAG context");
+                return Vec::new();
+            }
+            Err(_) => {
+                tracing::debug!(
+                    "Vector retrieval could not initialize; continuing without RAG context"
+                );
+                return Vec::new();
+            }
+        };
         let material_filter = (!material_ids.is_empty()).then(|| material_ids.to_vec());
         match vectorization_service
             .search_relevant_chunks(

@@ -1,9 +1,8 @@
 //! Controlled external-AI gateway.
 //!
-//! The application sends only authenticated, tenant-scoped requests to this
-//! internal service. Provider credentials and destination URLs remain here. Core
-//! health is provider-independent: an outage opens a bounded circuit and returns
-//! a controlled unavailable response without affecting login or school services.
+//! The application sends authenticated, tenant-scoped requests to this internal
+//! service. Provider credentials and destination URLs remain here. Provider
+//! failure opens a bounded circuit and never changes the core application health.
 
 use crate::ai_gateway_protocol::{
     GatewayChatRequest, GatewayChatResponse, GatewayEmbeddingRequest, GatewayEmbeddingResponse,
@@ -13,11 +12,14 @@ use crate::services::embedding_profile::{
     resolve_embedding_profile, EmbeddingProfile, EmbeddingProviderKind,
 };
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{header::AUTHORIZATION, HeaderMap, StatusCode};
+use axum::http::{
+    header::AUTHORIZATION, HeaderMap as AxumHeaderMap, StatusCode as AxumStatusCode,
+};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use reqwest::Url;
+use reqwest::header::HeaderMap as ProviderHeaderMap;
+use reqwest::{StatusCode as ProviderStatusCode, Url};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env;
@@ -39,8 +41,8 @@ pub enum GatewayStartupError {
     InvalidConfig(String),
     #[error("Unable to build provider HTTP client: {0}")]
     HttpClient(#[from] reqwest::Error),
-    #[error("Unable to bind AI gateway: {0}")]
-    Bind(#[from] std::io::Error),
+    #[error("Unable to start AI gateway: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,8 +78,8 @@ struct ProviderConfig {
 }
 
 impl ProviderConfig {
-    fn endpoint(&self, suffix: &str) -> Result<Url, GatewayStartupError> {
-        self.base_url.join(suffix).map_err(|error| {
+    fn endpoint(&self, path: &str) -> Result<Url, GatewayStartupError> {
+        self.base_url.join(path).map_err(|error| {
             GatewayStartupError::InvalidConfig(format!(
                 "Unable to build provider endpoint from {}: {error}",
                 self.base_url
@@ -113,47 +115,33 @@ struct GatewayConfig {
 impl GatewayConfig {
     fn from_env() -> Result<Self, GatewayStartupError> {
         let mode = GatewayMode::parse(&env_value("AI_GATEWAY_MODE", "offline"))?;
-        let embedding_profile = resolve_embedding_profile(&env_value(
+        let profile_name = env_value(
             "EMBEDDING_PROFILE",
             if mode == GatewayMode::Connected {
                 "openai-v1"
             } else {
                 "local-bge-v1"
             },
-        ))
-        .map_err(|error| GatewayStartupError::InvalidConfig(error.to_string()))?;
+        );
+        let embedding_profile = resolve_embedding_profile(&profile_name)
+            .map_err(|error| GatewayStartupError::InvalidConfig(error.to_string()))?;
+        validate_mode_profile(mode, embedding_profile)?;
 
-        match (mode, embedding_profile.provider) {
-            (GatewayMode::Connected, EmbeddingProviderKind::OpenAi)
-            | (GatewayMode::Offline, EmbeddingProviderKind::LocalTei) => {}
-            (GatewayMode::Connected, _) => {
-                return Err(GatewayStartupError::InvalidConfig(
-                    "connected mode requires an OpenAI embedding profile".to_string(),
-                ));
-            }
-            (GatewayMode::Offline, _) => {
-                return Err(GatewayStartupError::InvalidConfig(
-                    "offline mode requires the local TEI embedding profile".to_string(),
-                ));
-            }
-        }
-
-        let internal_token = required_secret("AI_GATEWAY_INTERNAL_TOKEN")?;
         let embedding_provider = match mode {
             GatewayMode::Connected => ProviderConfig {
-                base_url: allowed_external_url(
-                    "AI_EMBEDDING_BASE_URL",
-                    "https://api.openai.com/v1/",
-                    "AI_ALLOWED_EMBEDDING_BASE_URLS",
-                    "https://api.openai.com/v1/",
+                base_url: exact_external_url(
+                    &env_value("AI_EMBEDDING_BASE_URL", "https://api.openai.com/v1/"),
+                    &env_value(
+                        "AI_ALLOWED_EMBEDDING_BASE_URLS",
+                        "https://api.openai.com/v1/",
+                    ),
                 )?,
                 api_key: Some(required_secret("OPENAI_API_KEY")?),
                 model: embedding_profile.model.to_string(),
             },
             GatewayMode::Offline => ProviderConfig {
-                base_url: allowed_local_url(
-                    "AI_EMBEDDING_BASE_URL",
-                    "http://embedding:80/v1/",
+                base_url: internal_provider_url(
+                    &env_value("AI_EMBEDDING_BASE_URL", "http://embedding:80/v1/"),
                     "embedding",
                 )?,
                 api_key: None,
@@ -163,11 +151,12 @@ impl GatewayConfig {
 
         let llm_provider = if mode == GatewayMode::Connected {
             Some(ProviderConfig {
-                base_url: allowed_external_url(
-                    "AI_LLM_BASE_URL",
-                    "https://api.deepseek.com/v1/",
-                    "AI_ALLOWED_LLM_BASE_URLS",
-                    "https://api.deepseek.com/v1/",
+                base_url: exact_external_url(
+                    &env_value("AI_LLM_BASE_URL", "https://api.deepseek.com/v1/"),
+                    &env_value(
+                        "AI_ALLOWED_LLM_BASE_URLS",
+                        "https://api.deepseek.com/v1/",
+                    ),
                 )?,
                 api_key: Some(required_secret("LLM_API_KEY")?),
                 model: env_value("LLM_MODEL", "deepseek-chat"),
@@ -184,13 +173,18 @@ impl GatewayConfig {
                         "AI_GATEWAY_LISTEN_ADDR is invalid: {error}"
                     ))
                 })?,
-            internal_token,
+            internal_token: required_secret("AI_GATEWAY_INTERNAL_TOKEN")?,
             mode,
             embedding_profile,
             embedding_provider,
             llm_provider,
             connect_timeout: Duration::from_secs(env_u64("AI_CONNECT_TIMEOUT_SECONDS", 5, 1, 30)),
-            request_timeout: Duration::from_secs(env_u64("AI_REQUEST_TIMEOUT_SECONDS", 45, 5, 180)),
+            request_timeout: Duration::from_secs(env_u64(
+                "AI_REQUEST_TIMEOUT_SECONDS",
+                45,
+                5,
+                180,
+            )),
             max_retries: env_u64("AI_MAX_RETRIES", 2, 0, 5) as u32,
             retry_base_delay: Duration::from_millis(env_u64(
                 "AI_RETRY_BASE_DELAY_MS",
@@ -198,15 +192,20 @@ impl GatewayConfig {
                 50,
                 5_000,
             )),
-            circuit_failure_threshold: env_u64("AI_CIRCUIT_FAILURE_THRESHOLD", 3, 1, 20)
-                as u32,
+            circuit_failure_threshold: env_u64(
+                "AI_CIRCUIT_FAILURE_THRESHOLD",
+                3,
+                1,
+                20,
+            ) as u32,
             circuit_open_for: Duration::from_secs(env_u64(
                 "AI_CIRCUIT_OPEN_SECONDS",
                 30,
                 1,
                 600,
             )),
-            embedding_concurrency: env_u64("AI_EMBEDDING_CONCURRENCY", 4, 1, 32) as usize,
+            embedding_concurrency: env_u64("AI_EMBEDDING_CONCURRENCY", 4, 1, 32)
+                as usize,
             llm_concurrency: env_u64("AI_LLM_CONCURRENCY", 2, 1, 16) as usize,
             embedding_quota_per_hour: env_u64(
                 "AI_EMBEDDING_QUOTA_REQUESTS_PER_HOUR",
@@ -222,7 +221,8 @@ impl GatewayConfig {
             ) as u32,
             max_body_bytes: env_u64("AI_MAX_BODY_BYTES", 262_144, 1_024, 4_194_304)
                 as usize,
-            max_embedding_inputs: env_u64("AI_MAX_EMBEDDING_INPUTS", 64, 1, 256) as usize,
+            max_embedding_inputs: env_u64("AI_MAX_EMBEDDING_INPUTS", 64, 1, 256)
+                as usize,
             max_embedding_chars: env_u64(
                 "AI_MAX_EMBEDDING_CHARS",
                 120_000,
@@ -232,6 +232,22 @@ impl GatewayConfig {
             max_prompt_chars: env_u64("AI_MAX_PROMPT_CHARS", 80_000, 1_000, 500_000)
                 as usize,
         })
+    }
+}
+
+fn validate_mode_profile(
+    mode: GatewayMode,
+    profile: EmbeddingProfile,
+) -> Result<(), GatewayStartupError> {
+    match (mode, profile.provider) {
+        (GatewayMode::Connected, EmbeddingProviderKind::OpenAi)
+        | (GatewayMode::Offline, EmbeddingProviderKind::LocalTei) => Ok(()),
+        (GatewayMode::Connected, _) => Err(GatewayStartupError::InvalidConfig(
+            "connected mode requires an OpenAI embedding profile".to_string(),
+        )),
+        (GatewayMode::Offline, _) => Err(GatewayStartupError::InvalidConfig(
+            "offline mode requires the local TEI embedding profile".to_string(),
+        )),
     }
 }
 
@@ -251,7 +267,6 @@ impl GatewayState {
         let client = reqwest::Client::builder()
             .connect_timeout(config.connect_timeout)
             .timeout(config.request_timeout)
-            .https_only(false)
             .build()?;
         let threshold = config.circuit_failure_threshold;
         let open_for = config.circuit_open_for;
@@ -314,9 +329,10 @@ impl QuotaLimiter {
             window.count = 0;
         }
         if window.count >= limit {
-            let retry_after = 3_600u64.saturating_sub(now.duration_since(window.started_at).as_secs());
+            let retry_after =
+                3_600u64.saturating_sub(now.duration_since(window.started_at).as_secs());
             return Err(GatewayHttpError::new(
-                StatusCode::TOO_MANY_REQUESTS,
+                AxumStatusCode::TOO_MANY_REQUESTS,
                 "quota_exceeded",
                 "AI request quota exceeded for this school",
             )
@@ -354,7 +370,7 @@ impl CircuitBreaker {
             let now = Instant::now();
             if now < open_until {
                 return Err(GatewayHttpError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
+                    AxumStatusCode::SERVICE_UNAVAILABLE,
                     "circuit_open",
                     "AI service temporarily unavailable",
                 )
@@ -382,7 +398,10 @@ impl CircuitBreaker {
 
     async fn status(&self) -> &'static str {
         let state = self.state.lock().await;
-        if state.open_until.is_some_and(|until| Instant::now() < until) {
+        if state
+            .open_until
+            .is_some_and(|open_until| Instant::now() < open_until)
+        {
             "open"
         } else {
             "closed"
@@ -398,18 +417,14 @@ struct RequestContext {
 
 #[derive(Debug)]
 struct GatewayHttpError {
-    status: StatusCode,
+    status: AxumStatusCode,
     code: &'static str,
     message: &'static str,
     retry_after_seconds: Option<u64>,
 }
 
 impl GatewayHttpError {
-    fn new(
-        status: StatusCode,
-        code: &'static str,
-        message: &'static str,
-    ) -> Self {
+    fn new(status: AxumStatusCode, code: &'static str, message: &'static str) -> Self {
         Self {
             status,
             code,
@@ -479,11 +494,12 @@ async fn health(State(state): State<GatewayState>) -> Json<HealthResponse> {
 
 async fn embeddings(
     State(state): State<GatewayState>,
-    headers: HeaderMap,
+    headers: AxumHeaderMap,
     Json(request): Json<GatewayEmbeddingRequest>,
 ) -> Result<Json<GatewayEmbeddingResponse>, GatewayHttpError> {
     let context = authenticate(&headers, &state.config.internal_token)?;
     validate_embedding_request(&state.config, &request)?;
+    state.embedding_breaker.before_call().await?;
     state
         .quota
         .consume(
@@ -492,15 +508,13 @@ async fn embeddings(
             state.config.embedding_quota_per_hour,
         )
         .await?;
-    state.embedding_breaker.before_call().await?;
     let _permit = state
         .embedding_slots
         .acquire()
         .await
         .map_err(|_| unavailable())?;
     let started = Instant::now();
-    let result = forward_embeddings(&state, &request).await;
-    match result {
+    match forward_embeddings(&state, &request).await {
         Ok(response) => {
             state.embedding_breaker.success().await;
             tracing::info!(
@@ -532,11 +546,12 @@ async fn embeddings(
 
 async fn chat_completions(
     State(state): State<GatewayState>,
-    headers: HeaderMap,
+    headers: AxumHeaderMap,
     Json(request): Json<GatewayChatRequest>,
 ) -> Result<Json<GatewayChatResponse>, GatewayHttpError> {
     let context = authenticate(&headers, &state.config.internal_token)?;
     validate_chat_request(&state.config, &request)?;
+    state.llm_breaker.before_call().await?;
     state
         .quota
         .consume(
@@ -545,15 +560,13 @@ async fn chat_completions(
             state.config.llm_quota_per_hour,
         )
         .await?;
-    state.llm_breaker.before_call().await?;
     let _permit = state
         .llm_slots
         .acquire()
         .await
         .map_err(|_| unavailable())?;
     let started = Instant::now();
-    let result = forward_chat(&state, &request).await;
-    match result {
+    match forward_chat(&state, &request).await {
         Ok(response) => {
             state.llm_breaker.success().await;
             tracing::info!(
@@ -583,13 +596,16 @@ async fn chat_completions(
     }
 }
 
-fn authenticate(headers: &HeaderMap, expected_token: &str) -> Result<RequestContext, GatewayHttpError> {
-    let authorization = headers
+fn authenticate(
+    headers: &AxumHeaderMap,
+    expected_token: &str,
+) -> Result<RequestContext, GatewayHttpError> {
+    let token = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or_else(unauthorized)?;
-    if !constant_time_eq(authorization.as_bytes(), expected_token.as_bytes()) {
+    if !constant_time_eq(token.as_bytes(), expected_token.as_bytes()) {
         return Err(unauthorized());
     }
     let school_id = headers
@@ -599,7 +615,7 @@ fn authenticate(headers: &HeaderMap, expected_token: &str) -> Result<RequestCont
         .filter(|value| !value.is_nil())
         .ok_or_else(|| {
             GatewayHttpError::new(
-                StatusCode::BAD_REQUEST,
+                AxumStatusCode::BAD_REQUEST,
                 "invalid_school_id",
                 "A non-nil school identifier is required",
             )
@@ -621,9 +637,9 @@ fn validate_embedding_request(
     request: &GatewayEmbeddingRequest,
 ) -> Result<(), GatewayHttpError> {
     let profile = config.embedding_profile;
-    if request.model != profile.model {
+    if request.model != config.embedding_provider.model {
         return Err(GatewayHttpError::new(
-            StatusCode::BAD_REQUEST,
+            AxumStatusCode::BAD_REQUEST,
             "model_mismatch",
             "Embedding model does not match the active profile",
         ));
@@ -631,29 +647,33 @@ fn validate_embedding_request(
     let expected_dimensions = profile.send_dimensions.then_some(profile.vector_size);
     if request.dimensions != expected_dimensions {
         return Err(GatewayHttpError::new(
-            StatusCode::BAD_REQUEST,
+            AxumStatusCode::BAD_REQUEST,
             "dimension_mismatch",
             "Embedding dimensions do not match the active profile",
         ));
     }
     if request.input.is_empty() || request.input.len() > config.max_embedding_inputs {
         return Err(GatewayHttpError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
+            AxumStatusCode::PAYLOAD_TOO_LARGE,
             "embedding_batch_too_large",
             "Embedding batch size is outside the configured limit",
         ));
     }
     if request.input.iter().any(|value| value.trim().is_empty()) {
         return Err(GatewayHttpError::new(
-            StatusCode::BAD_REQUEST,
+            AxumStatusCode::BAD_REQUEST,
             "empty_input",
             "Embedding inputs must not be empty",
         ));
     }
-    let total_chars = request.input.iter().map(|value| value.chars().count()).sum::<usize>();
+    let total_chars = request
+        .input
+        .iter()
+        .map(|value| value.chars().count())
+        .sum::<usize>();
     if total_chars > config.max_embedding_chars {
         return Err(GatewayHttpError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
+            AxumStatusCode::PAYLOAD_TOO_LARGE,
             "embedding_input_too_large",
             "Embedding input exceeds the configured character limit",
         ));
@@ -668,7 +688,7 @@ fn validate_chat_request(
     let provider = config.llm_provider.as_ref().ok_or_else(unavailable)?;
     if request.model != provider.model {
         return Err(GatewayHttpError::new(
-            StatusCode::BAD_REQUEST,
+            AxumStatusCode::BAD_REQUEST,
             "model_mismatch",
             "LLM model does not match the approved provider configuration",
         ));
@@ -680,7 +700,7 @@ fn validate_chat_request(
             .any(|message| message.content.trim().is_empty())
     {
         return Err(GatewayHttpError::new(
-            StatusCode::BAD_REQUEST,
+            AxumStatusCode::BAD_REQUEST,
             "invalid_messages",
             "Chat messages must contain non-empty content",
         ));
@@ -692,21 +712,21 @@ fn validate_chat_request(
         .sum::<usize>();
     if total_chars > config.max_prompt_chars {
         return Err(GatewayHttpError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
+            AxumStatusCode::PAYLOAD_TOO_LARGE,
             "prompt_too_large",
             "LLM prompt exceeds the configured character limit",
         ));
     }
     if request.max_tokens == 0 || request.max_tokens > 16_384 {
         return Err(GatewayHttpError::new(
-            StatusCode::BAD_REQUEST,
+            AxumStatusCode::BAD_REQUEST,
             "invalid_max_tokens",
             "max_tokens is outside the accepted range",
         ));
     }
     if !request.temperature.is_finite() || !(0.0..=2.0).contains(&request.temperature) {
         return Err(GatewayHttpError::new(
-            StatusCode::BAD_REQUEST,
+            AxumStatusCode::BAD_REQUEST,
             "invalid_temperature",
             "temperature is outside the accepted range",
         ));
@@ -724,11 +744,11 @@ async fn forward_embeddings(
         .endpoint("embeddings")
         .map_err(|_| unavailable())?;
     for attempt in 0..=state.config.max_retries {
-        let mut builder = state.client.post(url.clone()).json(request);
+        let mut outbound = state.client.post(url.clone()).json(request);
         if let Some(api_key) = state.config.embedding_provider.api_key.as_deref() {
-            builder = builder.bearer_auth(api_key);
+            outbound = outbound.bearer_auth(api_key);
         }
-        match builder.send().await {
+        match outbound.send().await {
             Ok(response) if response.status().is_success() => {
                 let parsed = response
                     .json::<GatewayEmbeddingResponse>()
@@ -747,7 +767,9 @@ async fn forward_embeddings(
                 return Err(provider_error(status, retry_after));
             }
             Err(error) => {
-                if (error.is_timeout() || error.is_connect()) && attempt < state.config.max_retries {
+                if (error.is_timeout() || error.is_connect())
+                    && attempt < state.config.max_retries
+                {
                     sleep_before_retry(&state.config, attempt, None).await;
                     continue;
                 }
@@ -767,11 +789,11 @@ async fn forward_chat(
         .endpoint("chat/completions")
         .map_err(|_| unavailable())?;
     for attempt in 0..=state.config.max_retries {
-        let mut builder = state.client.post(url.clone()).json(request);
+        let mut outbound = state.client.post(url.clone()).json(request);
         if let Some(api_key) = provider.api_key.as_deref() {
-            builder = builder.bearer_auth(api_key);
+            outbound = outbound.bearer_auth(api_key);
         }
-        match builder.send().await {
+        match outbound.send().await {
             Ok(response) if response.status().is_success() => {
                 let parsed = response
                     .json::<GatewayChatResponse>()
@@ -797,7 +819,9 @@ async fn forward_chat(
                 return Err(provider_error(status, retry_after));
             }
             Err(error) => {
-                if (error.is_timeout() || error.is_connect()) && attempt < state.config.max_retries {
+                if (error.is_timeout() || error.is_connect())
+                    && attempt < state.config.max_retries
+                {
                     sleep_before_retry(&state.config, attempt, None).await;
                     continue;
                 }
@@ -833,10 +857,13 @@ fn validate_embedding_response(
     Ok(())
 }
 
-fn provider_error(status: StatusCode, retry_after: Option<u64>) -> GatewayHttpError {
-    if status == StatusCode::TOO_MANY_REQUESTS {
+fn provider_error(
+    status: ProviderStatusCode,
+    retry_after: Option<u64>,
+) -> GatewayHttpError {
+    if status == ProviderStatusCode::TOO_MANY_REQUESTS {
         return GatewayHttpError::new(
-            StatusCode::TOO_MANY_REQUESTS,
+            AxumStatusCode::TOO_MANY_REQUESTS,
             "provider_rate_limited",
             "AI provider rate limit reached",
         )
@@ -847,7 +874,7 @@ fn provider_error(status: StatusCode, retry_after: Option<u64>) -> GatewayHttpEr
 
 fn unavailable() -> GatewayHttpError {
     GatewayHttpError::new(
-        StatusCode::SERVICE_UNAVAILABLE,
+        AxumStatusCode::SERVICE_UNAVAILABLE,
         "ai_temporarily_unavailable",
         "AI service temporarily unavailable",
     )
@@ -855,7 +882,7 @@ fn unavailable() -> GatewayHttpError {
 
 fn unauthorized() -> GatewayHttpError {
     GatewayHttpError::new(
-        StatusCode::UNAUTHORIZED,
+        AxumStatusCode::UNAUTHORIZED,
         "invalid_gateway_token",
         "AI gateway authentication failed",
     )
@@ -863,18 +890,18 @@ fn unauthorized() -> GatewayHttpError {
 
 fn invalid_provider_response() -> GatewayHttpError {
     GatewayHttpError::new(
-        StatusCode::BAD_GATEWAY,
+        AxumStatusCode::BAD_GATEWAY,
         "invalid_provider_response",
         "AI provider returned an invalid response",
     )
 }
 
-fn is_retryable_status(status: StatusCode) -> bool {
-    status == StatusCode::TOO_MANY_REQUESTS
+fn is_retryable_status(status: ProviderStatusCode) -> bool {
+    status == ProviderStatusCode::TOO_MANY_REQUESTS
         || matches!(status.as_u16(), 500 | 502 | 503 | 504)
 }
 
-fn retry_after_seconds(headers: &HeaderMap) -> Option<u64> {
+fn retry_after_seconds(headers: &ProviderHeaderMap) -> Option<u64> {
     headers
         .get("retry-after")
         .and_then(|value| value.to_str().ok())
@@ -883,9 +910,11 @@ fn retry_after_seconds(headers: &HeaderMap) -> Option<u64> {
 }
 
 async fn sleep_before_retry(config: &GatewayConfig, attempt: u32, retry_after: Option<u64>) {
-    let delay = retry_after
-        .map(Duration::from_secs)
-        .unwrap_or_else(|| config.retry_base_delay.saturating_mul(1u32 << attempt.min(8)));
+    let delay = retry_after.map(Duration::from_secs).unwrap_or_else(|| {
+        config
+            .retry_base_delay
+            .saturating_mul(1u32 << attempt.min(8))
+    });
     tokio::time::sleep(delay.min(Duration::from_secs(10))).await;
 }
 
@@ -895,7 +924,9 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     }
     left.iter()
         .zip(right)
-        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
+        .fold(0u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
         == 0
 }
 
@@ -903,10 +934,8 @@ fn required_secret(name: &str) -> Result<String, GatewayStartupError> {
     let value = env::var(name).map_err(|_| {
         GatewayStartupError::InvalidConfig(format!("{name} must be configured"))
     })?;
-    if value.len() < 24
-        || value.to_ascii_lowercase().contains("replace")
-        || value.to_ascii_lowercase().contains("example")
-    {
+    let lowered = value.to_ascii_lowercase();
+    if value.len() < 24 || lowered.contains("replace") || lowered.contains("example") {
         return Err(GatewayStartupError::InvalidConfig(format!(
             "{name} is missing or unsafe"
         )));
@@ -914,49 +943,40 @@ fn required_secret(name: &str) -> Result<String, GatewayStartupError> {
     Ok(value)
 }
 
-fn allowed_external_url(
-    value_name: &str,
-    default_value: &str,
-    allowlist_name: &str,
-    default_allowlist: &str,
-) -> Result<Url, GatewayStartupError> {
-    let url = normalize_url(&env_value(value_name, default_value))?;
-    if url.scheme() != "https" || url.host_str().is_none() {
-        return Err(GatewayStartupError::InvalidConfig(format!(
-            "{value_name} must be an absolute HTTPS URL"
-        )));
+fn exact_external_url(value: &str, allowlist: &str) -> Result<Url, GatewayStartupError> {
+    let requested = normalized_provider_url(value)?;
+    if requested.scheme() != "https" || requested.host_str().is_none() {
+        return Err(GatewayStartupError::InvalidConfig(
+            "External AI provider URLs must be absolute HTTPS URLs".to_string(),
+        ));
     }
-    let allowed = env_value(allowlist_name, default_allowlist)
+    let allowed = allowlist
         .split(',')
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(normalize_url)
+        .filter(|entry| !entry.is_empty())
+        .map(normalized_provider_url)
         .collect::<Result<Vec<_>, _>>()?;
-    if !allowed.iter().any(|candidate| candidate == &url) {
-        return Err(GatewayStartupError::InvalidConfig(format!(
-            "{value_name} is not present in {allowlist_name}"
-        )));
+    if !allowed.iter().any(|candidate| candidate == &requested) {
+        return Err(GatewayStartupError::InvalidConfig(
+            "AI provider URL is not present in its exact allowlist".to_string(),
+        ));
     }
-    Ok(url)
+    Ok(requested)
 }
 
-fn allowed_local_url(
-    value_name: &str,
-    default_value: &str,
-    expected_host: &str,
-) -> Result<Url, GatewayStartupError> {
-    let url = normalize_url(&env_value(value_name, default_value))?;
-    if url.scheme() != "http" || url.host_str() != Some(expected_host) {
+fn internal_provider_url(value: &str, expected_host: &str) -> Result<Url, GatewayStartupError> {
+    let requested = normalized_provider_url(value)?;
+    if requested.scheme() != "http" || requested.host_str() != Some(expected_host) {
         return Err(GatewayStartupError::InvalidConfig(format!(
-            "{value_name} must target the internal {expected_host} service"
+            "Offline embedding URL must target the internal {expected_host} service"
         )));
     }
-    Ok(url)
+    Ok(requested)
 }
 
-fn normalize_url(value: &str) -> Result<Url, GatewayStartupError> {
+fn normalized_provider_url(value: &str) -> Result<Url, GatewayStartupError> {
     let mut url = Url::parse(value).map_err(|error| {
-        GatewayStartupError::InvalidConfig(format!("Invalid provider URL: {error}"))
+        GatewayStartupError::InvalidConfig(format!("Invalid AI provider URL: {error}"))
     })?;
     if !url.username().is_empty()
         || url.password().is_some()
@@ -964,7 +984,8 @@ fn normalize_url(value: &str) -> Result<Url, GatewayStartupError> {
         || url.fragment().is_some()
     {
         return Err(GatewayStartupError::InvalidConfig(
-            "Provider URLs must not contain credentials, query strings, or fragments".to_string(),
+            "AI provider URLs must not contain credentials, query strings, or fragments"
+                .to_string(),
         ));
     }
     if !url.path().ends_with('/') {
@@ -1022,7 +1043,7 @@ mod tests {
             llm_concurrency: 1,
             embedding_quota_per_hour: 1,
             llm_quota_per_hour: 1,
-            max_body_bytes: 1024,
+            max_body_bytes: 1_024,
             max_embedding_inputs: 2,
             max_embedding_chars: 20,
             max_prompt_chars: 20,
@@ -1031,33 +1052,37 @@ mod tests {
 
     #[test]
     fn provider_url_requires_exact_allowlist_membership() {
-        std::env::set_var("TEST_PROVIDER_URL", "https://api.openai.com/v1");
-        std::env::set_var(
-            "TEST_PROVIDER_ALLOWLIST",
-            "https://api.openai.com/v1/,https://example.invalid/v1/",
+        assert_eq!(
+            exact_external_url(
+                "https://api.openai.com/v1",
+                "https://api.openai.com/v1/,https://example.invalid/v1/"
+            )
+            .unwrap()
+            .as_str(),
+            "https://api.openai.com/v1/"
         );
-        let url = allowed_external_url(
-            "TEST_PROVIDER_URL",
-            "https://invalid.example/",
-            "TEST_PROVIDER_ALLOWLIST",
-            "https://invalid.example/",
-        )
-        .unwrap();
-        assert_eq!(url.as_str(), "https://api.openai.com/v1/");
-        std::env::set_var("TEST_PROVIDER_URL", "https://attacker.invalid/v1/");
-        assert!(allowed_external_url(
-            "TEST_PROVIDER_URL",
-            "https://invalid.example/",
-            "TEST_PROVIDER_ALLOWLIST",
-            "https://invalid.example/",
+        assert!(exact_external_url(
+            "https://attacker.invalid/v1/",
+            "https://api.openai.com/v1/"
         )
         .is_err());
-        std::env::remove_var("TEST_PROVIDER_URL");
-        std::env::remove_var("TEST_PROVIDER_ALLOWLIST");
+        assert!(exact_external_url(
+            "https://user:password@api.openai.com/v1/",
+            "https://user:password@api.openai.com/v1/"
+        )
+        .is_err());
     }
 
     #[test]
-    fn embedding_request_rejects_wrong_model_dimension_and_excessive_input() {
+    fn connected_and_offline_modes_require_matching_profiles() {
+        validate_mode_profile(GatewayMode::Connected, OPENAI_V1).unwrap();
+        validate_mode_profile(GatewayMode::Offline, LOCAL_BGE_V1).unwrap();
+        assert!(validate_mode_profile(GatewayMode::Connected, LOCAL_BGE_V1).is_err());
+        assert!(validate_mode_profile(GatewayMode::Offline, OPENAI_V1).is_err());
+    }
+
+    #[test]
+    fn embedding_request_rejects_wrong_model_dimension_and_size() {
         let config = test_config(OPENAI_V1);
         let valid = GatewayEmbeddingRequest {
             model: OPENAI_V1.model.to_string(),
@@ -1093,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_response_requires_complete_indexes_and_exact_dimensions() {
+    fn provider_response_requires_indexes_and_exact_dimensions() {
         let request = GatewayEmbeddingRequest {
             model: LOCAL_BGE_V1.model.to_string(),
             input: vec!["a".to_string()],
@@ -1158,7 +1183,7 @@ mod tests {
             response_format: None,
         };
         validate_chat_request(&config, &valid).unwrap();
-        let mut invalid = valid.clone();
+        let mut invalid = valid;
         invalid.messages[0].content = "123456789012345678901".to_string();
         assert_eq!(
             validate_chat_request(&config, &invalid).unwrap_err().code,
@@ -1167,9 +1192,16 @@ mod tests {
     }
 
     #[test]
-    fn token_comparison_does_not_accept_prefixes() {
+    fn token_comparison_rejects_prefixes() {
         assert!(constant_time_eq(b"same", b"same"));
         assert!(!constant_time_eq(b"same", b"same-extra"));
         assert!(!constant_time_eq(b"same", b"diff"));
+    }
+
+    #[test]
+    fn retry_policy_is_bounded_to_transient_statuses() {
+        assert!(is_retryable_status(ProviderStatusCode::TOO_MANY_REQUESTS));
+        assert!(is_retryable_status(ProviderStatusCode::SERVICE_UNAVAILABLE));
+        assert!(!is_retryable_status(ProviderStatusCode::BAD_REQUEST));
     }
 }

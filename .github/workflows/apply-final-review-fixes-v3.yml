@@ -1,0 +1,162 @@
+name: Apply indentation-safe final review fixes
+
+on:
+  push:
+    branches:
+      - feature/controlled-external-ai
+    paths:
+      - .github/workflows/apply-final-review-fixes-v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/controlled-external-ai
+          fetch-depth: 0
+
+      - name: Apply final review fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import subprocess
+
+          def load(path):
+              return Path(path).read_text(encoding="utf-8")
+
+          def save(path, text):
+              Path(path).write_text(text, encoding="utf-8")
+
+          old_collection = "edutalent_local_bge_v1"
+          legacy_collection = "edutalent_materials_local_v1"
+          paths = subprocess.check_output(
+              ["git", "grep", "-l", old_collection, "--", ":(exclude).github/workflows"],
+              text=True,
+          ).splitlines()
+          if not paths:
+              raise SystemExit("local profile references not found")
+          for path in paths:
+              save(path, load(path).replace(old_collection, legacy_collection))
+
+          path = "packages/api/src/services/knowledge_vector_store_service.rs"
+          text = load(path)
+          text, count = re.subn(
+              r'^\s*Condition::matches\("embedding_profile", self\.profile\.id\.to_string\(\)\),\n',
+              "",
+              text,
+              flags=re.MULTILINE,
+          )
+          if count != 3:
+              raise SystemExit(f"expected three knowledge profile payload filters, found {count}")
+          save(path, text)
+
+          path = "packages/api/src/services/vector_store_service.rs"
+          text = load(path)
+          text, count = re.subn(
+              r'''        let mut required = vec!\[Condition::matches\(\n            "embedding_profile",\n            self\.profile\.id\.to_string\(\),\n        \)\];''',
+              '''        // Collection and dimensions are the immutable profile boundary. Legacy\n        // points in the unchanged local collection predate this payload field.\n        let mut required = Vec::new();''',
+              text,
+          )
+          if count != 1:
+              raise SystemExit(f"expected one material profile payload filter, found {count}")
+          save(path, text)
+
+          path = "packages/api/src/services/embedding_profile.rs"
+          text = load(path)
+          marker = "    #[test]\n    fn matching_overrides_are_accepted() {"
+          test = '''    #[test]\n    fn local_profile_preserves_the_existing_production_collection() {\n        assert_eq!(LOCAL_BGE_V1.collection, "edutalent_materials_local_v1");\n        assert_ne!(LOCAL_BGE_V1.collection, OPENAI_V1.collection);\n    }\n\n'''
+          if test not in text:
+              if text.count(marker) != 1:
+                  raise SystemExit("embedding profile test marker changed")
+              text = text.replace(marker, test + marker, 1)
+          save(path, text)
+
+          path = "README.md"
+          text = load(path)
+          old = "Changing profiles requires a distinct collection and complete re-index; automatic fallback between vector spaces is forbidden."
+          new = "The unchanged local BGE profile deliberately retains the existing production collection name `edutalent_materials_local_v1`, so upgrades keep previously indexed local vectors available. The OpenAI profile uses its own collection. Changing either model or dimensions still requires a distinct collection and complete re-index; automatic fallback between vector spaces is forbidden."
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit("README profile note changed")
+              text = text.replace(old, new, 1)
+          save(path, text)
+
+          path = "docs/adr/0002-controlled-external-ai.md"
+          text = load(path)
+          old = "A profile change requires a distinct collection and complete re-index. Automatic fallback between profiles is forbidden because it would mix vector spaces. Qdrant writes and searches validate the active collection and dimensions, and governed knowledge queries retain PostgreSQL authorization before exact Qdrant asset filtering."
+          new = "The unchanged local BGE profile retains the existing production collection name `edutalent_materials_local_v1` so an upgrade does not hide previously indexed vectors. Its collection and 384-dimensional contract remain the profile boundary even for legacy points that predate the `embedding_profile` payload field. A model or dimension change requires a distinct collection and complete re-index. Automatic fallback between profiles is forbidden, and governed knowledge queries retain PostgreSQL authorization before exact Qdrant asset filtering."
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit("ADR profile note changed")
+              text = text.replace(old, new, 1)
+          save(path, text)
+
+          path = "edutalent"
+          text = load(path)
+          old = '        exec docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" --profile dev up --build dev'
+          new = '        exec docker compose --env-file "${ENV_FILE}" -f "${DEV_COMPOSE}" --profile dev up --build ai-gateway dev'
+          if text.count(old) != 1:
+              raise SystemExit("dev startup command changed")
+          text = text.replace(old, new, 1)
+          old = "        compose_dev --profile app up --build --detach app"
+          if text.count(old) != 2:
+              raise SystemExit("app startup commands changed")
+          text = text.replace(old, "        compose_dev --profile app up --build --detach ai-gateway app")
+          anchor = "        grep -Fq 'production-ai-check' edutalent"
+          checks = "\n        grep -Fq -- '--profile dev up --build ai-gateway dev' edutalent\n        grep -Fq -- '--profile app up --build --detach ai-gateway app' edutalent"
+          if checks.strip() not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit("command validation marker changed")
+              text = text.replace(anchor, anchor + checks, 1)
+          save(path, text)
+
+          path = "packages/api/src/ai_gateway_runtime.rs"
+          text = load(path)
+          start = text.index("async fn bounded_body(")
+          end = text.index("fn validate_embedding_response(", start)
+          function = '''async fn bounded_body(\n    mut response: reqwest::Response,\n    maximum: usize,\n) -> Result<Vec<u8>, ProviderFailure> {\n    if response\n        .content_length()\n        .is_some_and(|length| length > maximum as u64)\n    {\n        return Err(ProviderFailure::ResponseTooLarge);\n    }\n\n    let initial_capacity = response\n        .content_length()\n        .and_then(|length| usize::try_from(length).ok())\n        .unwrap_or_default()\n        .min(maximum);\n    let mut body = Vec::with_capacity(initial_capacity);\n    while let Some(chunk) = response\n        .chunk()\n        .await\n        .map_err(|_| ProviderFailure::InvalidResponse)?\n    {\n        let next_length = body\n            .len()\n            .checked_add(chunk.len())\n            .ok_or(ProviderFailure::ResponseTooLarge)?;\n        if next_length > maximum {\n            return Err(ProviderFailure::ResponseTooLarge);\n        }\n        body.extend_from_slice(&chunk);\n    }\n    Ok(body)\n}\n\n'''
+          text = text[:start] + function + text[end:]
+
+          import_line = "    use std::sync::atomic::{AtomicUsize, Ordering};"
+          io_import = "    use tokio::io::{AsyncReadExt, AsyncWriteExt};"
+          if io_import not in text:
+              if text.count(import_line) != 1:
+                  raise SystemExit("test import marker changed")
+              text = text.replace(import_line, import_line + "\n" + io_import, 1)
+
+          marker = "    async fn spawn_embedding_mock("
+          test_name = "chunked_provider_body_stops_at_the_configured_limit"
+          if test_name not in text:
+              if text.count(marker) != 1:
+                  raise SystemExit("provider mock marker changed")
+              addition = '''    async fn spawn_chunked_response(chunks: Vec<&'static [u8]>) -> Url {\n        let listener = TcpListener::bind("127.0.0.1:0")\n            .await\n            .expect("bind chunked response");\n        let address = listener.local_addr().expect("chunked response address");\n        tokio::spawn(async move {\n            let (mut socket, _) = listener.accept().await.expect("accept request");\n            let mut request = [0_u8; 1_024];\n            let _ = socket.read(&mut request).await;\n            socket\n                .write_all(b"HTTP/1.1 200 OK\\r\\nTransfer-Encoding: chunked\\r\\nConnection: close\\r\\n\\r\\n")\n                .await\n                .expect("write response headers");\n            for chunk in chunks {\n                socket\n                    .write_all(format!("{:X}\\r\\n", chunk.len()).as_bytes())\n                    .await\n                    .expect("write chunk size");\n                socket.write_all(chunk).await.expect("write chunk");\n                socket.write_all(b"\\r\\n").await.expect("finish chunk");\n            }\n            socket.write_all(b"0\\r\\n\\r\\n").await.expect("finish response");\n        });\n        Url::parse(&format!("http://{address}/")).expect("chunked response URL")\n    }\n\n    #[tokio::test]\n    async fn chunked_provider_body_stops_at_the_configured_limit() {\n        let response = reqwest::get(\n            spawn_chunked_response(vec![&b"abcd"[..], &b"efgh"[..]]).await,\n        )\n        .await\n        .expect("chunked response");\n        assert!(matches!(\n            bounded_body(response, 7).await,\n            Err(ProviderFailure::ResponseTooLarge)\n        ));\n    }\n\n'''
+              text = text.replace(marker, addition + marker, 1)
+          save(path, text)
+          PY
+
+          rustup component add rustfmt
+          cargo fmt --all
+          bash -n edutalent
+          python3 -m py_compile deploy/production/validate-rendered-compose.py
+          git diff --check
+          ! git grep -n 'edutalent_local_bge_v1' -- ':(exclude).github/workflows'
+          grep -Fq 'response.chunk()' packages/api/src/ai_gateway_runtime.rs
+          grep -Fq 'chunked_provider_body_stops_at_the_configured_limit' packages/api/src/ai_gateway_runtime.rs
+
+      - name: Commit final source fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -u ':!.github/workflows'
+          git commit -m "fix(ai): close final review gaps"
+          git push origin HEAD:feature/controlled-external-ai

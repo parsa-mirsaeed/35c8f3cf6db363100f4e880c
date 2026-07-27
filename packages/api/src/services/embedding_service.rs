@@ -1,8 +1,8 @@
 //! Embedding client for the internal AI gateway.
 //!
 //! Provider URLs and provider API keys are intentionally unsupported here. The
-//! application authenticates to the local gateway, which owns external egress,
-//! retries, quotas, and circuit breakers.
+//! application authenticates to the fixed local gateway, which owns external
+//! egress, retries, quotas, and circuit breakers.
 
 use crate::ai_gateway_protocol::{
     GatewayEmbeddingRequest, GatewayEmbeddingResponse, GatewayErrorEnvelope,
@@ -11,11 +11,14 @@ use crate::services::embedding_profile::{
     resolve_embedding_profile, validate_profile_overrides, EmbeddingProfile,
     EmbeddingProfileError,
 };
+use reqwest::redirect::Policy as RedirectPolicy;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
+
+const INTERNAL_GATEWAY_ORIGIN: &str = "http://ai-gateway:8090";
 
 #[derive(Debug, Error)]
 pub enum EmbeddingError {
@@ -53,6 +56,7 @@ impl EmbeddingProvider {
 #[derive(Debug, Clone)]
 pub struct EmbeddingConfig {
     pub provider: EmbeddingProvider,
+    /// Internal gateway bearer token. This is never an external provider key.
     pub api_key: Option<String>,
     pub base_url: String,
     pub model: String,
@@ -66,10 +70,13 @@ pub struct EmbeddingConfig {
 impl EmbeddingConfig {
     pub fn from_env() -> Result<Self, EmbeddingError> {
         let profile = resolve_embedding_profile(
-            &env::var("EMBEDDING_PROFILE").unwrap_or_else(|_| "local-bge-v1".to_string()),
+            &env::var("EMBEDDING_PROFILE").unwrap_or_else(|_| "openai-v1".to_string()),
         )?;
         let configured_model = env::var("EMBEDDING_MODEL").ok();
         let configured_size = env::var("EMBEDDING_VECTOR_SIZE")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok());
+        let configured_qdrant_size = env::var("QDRANT_VECTOR_SIZE")
             .ok()
             .and_then(|value| value.parse::<u64>().ok());
         let configured_collection = env::var("QDRANT_COLLECTION").ok();
@@ -79,23 +86,23 @@ impl EmbeddingConfig {
             configured_size,
             configured_collection.as_deref(),
         )?;
+        validate_profile_overrides(
+            profile,
+            None,
+            configured_qdrant_size,
+            configured_collection.as_deref(),
+        )?;
 
         let token = env::var("AI_GATEWAY_INTERNAL_TOKEN")
             .map_err(|_| EmbeddingError::MissingConfig("AI_GATEWAY_INTERNAL_TOKEN".to_string()))?;
-        if token.len() < 24 {
+        if token.len() < 32 || looks_like_placeholder(&token) {
             return Err(EmbeddingError::MissingConfig(
-                "AI_GATEWAY_INTERNAL_TOKEN is too short".to_string(),
+                "AI_GATEWAY_INTERNAL_TOKEN is missing or unsafe".to_string(),
             ));
         }
         let base_url = env::var("AI_GATEWAY_URL")
-            .unwrap_or_else(|_| "http://ai-gateway:8090".to_string());
-        let parsed = reqwest::Url::parse(&base_url)
-            .map_err(|_| EmbeddingError::MissingConfig("AI_GATEWAY_URL is invalid".to_string()))?;
-        if parsed.scheme() != "http" || parsed.host_str().is_none() {
-            return Err(EmbeddingError::MissingConfig(
-                "AI_GATEWAY_URL must be an internal HTTP URL".to_string(),
-            ));
-        }
+            .unwrap_or_else(|_| INTERNAL_GATEWAY_ORIGIN.to_string());
+        validate_internal_gateway_url(&base_url)?;
 
         Ok(Self {
             provider: EmbeddingProvider::Gateway,
@@ -155,11 +162,12 @@ impl EmbeddingClient {
     }
 
     pub fn with_config(config: EmbeddingConfig) -> Result<Self, EmbeddingError> {
+        validate_internal_gateway_url(&config.base_url)?;
         let client = reqwest::Client::builder()
             .timeout(config.request_timeout)
+            .redirect(RedirectPolicy::none())
             .build()?;
         tracing::info!(
-            gateway_url = %config.base_url,
             profile = config.profile.id,
             model = %config.model,
             vector_size = config.vector_size,
@@ -269,9 +277,10 @@ impl EmbeddingClient {
                 "provider_rate_limited" | "quota_exceeded" => Err(EmbeddingError::RateLimited {
                     retry_after_seconds: retry_after.unwrap_or(60),
                 }),
-                "ai_temporarily_unavailable" | "circuit_open" => {
-                    Err(EmbeddingError::TemporarilyUnavailable)
-                }
+                "ai_temporarily_unavailable"
+                | "circuit_open"
+                | "provider_unconfigured"
+                | "gateway_shutting_down" => Err(EmbeddingError::TemporarilyUnavailable),
                 _ => Err(EmbeddingError::GatewayError {
                     status: status.as_u16(),
                     code: code.to_string(),
@@ -288,7 +297,9 @@ impl EmbeddingClient {
         }
         body.data.sort_by_key(|item| item.index);
         if body.data.iter().enumerate().any(|(index, item)| {
-            item.index != index || item.embedding.len() as u64 != self.config.vector_size
+            item.index != index
+                || item.embedding.len() as u64 != self.config.vector_size
+                || item.embedding.iter().any(|value| !value.is_finite())
         }) {
             return Err(EmbeddingError::InvalidResponse);
         }
@@ -299,8 +310,8 @@ impl EmbeddingClient {
         self.config
             .api_key
             .as_deref()
-            .is_some_and(|token| token.len() >= 24)
-            && !self.config.base_url.is_empty()
+            .is_some_and(|token| token.len() >= 32)
+            && self.config.base_url.trim_end_matches('/') == INTERNAL_GATEWAY_ORIGIN
     }
 
     pub fn vector_size(&self) -> u64 {
@@ -323,6 +334,30 @@ impl EmbeddingClient {
     pub fn request_delay_seconds(&self) -> u64 {
         0
     }
+}
+
+fn validate_internal_gateway_url(value: &str) -> Result<(), EmbeddingError> {
+    let parsed = reqwest::Url::parse(value)
+        .map_err(|_| EmbeddingError::MissingConfig("AI_GATEWAY_URL is invalid".to_string()))?;
+    if value.trim_end_matches('/') != INTERNAL_GATEWAY_ORIGIN
+        || parsed.scheme() != "http"
+        || parsed.host_str() != Some("ai-gateway")
+        || parsed.port_or_known_default() != Some(8090)
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(EmbeddingError::MissingConfig(format!(
+            "AI_GATEWAY_URL must be exactly {INTERNAL_GATEWAY_ORIGIN}"
+        )));
+    }
+    Ok(())
+}
+
+fn looks_like_placeholder(value: &str) -> bool {
+    let lowered = value.to_ascii_lowercase();
+    lowered.contains("replace") || lowered.contains("example") || lowered.contains("insecure")
 }
 
 pub fn chunk_document(
@@ -415,12 +450,12 @@ mod tests {
     }
 
     #[test]
-    fn gateway_url_is_internal_and_profile_bound() {
+    fn gateway_url_is_fixed_and_profile_bound() {
         let school_id = Uuid::new_v4();
         let config = EmbeddingConfig {
             provider: EmbeddingProvider::Gateway,
             api_key: Some("abcdefghijklmnopqrstuvwxyz123456".to_string()),
-            base_url: "http://ai-gateway:8090/".to_string(),
+            base_url: INTERNAL_GATEWAY_ORIGIN.to_string(),
             model: LOCAL_BGE_V1.model.to_string(),
             vector_size: LOCAL_BGE_V1.vector_size,
             profile: LOCAL_BGE_V1,
@@ -439,11 +474,22 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_internal_or_external_gateway_urls_are_rejected() {
+        for value in [
+            "http://other-service:8090",
+            "https://api.openai.com/v1",
+            "http://user@ai-gateway:8090",
+        ] {
+            assert!(validate_internal_gateway_url(value).is_err());
+        }
+    }
+
+    #[test]
     fn compatibility_paths_require_an_appliance_school_id() {
         let config = EmbeddingConfig {
             provider: EmbeddingProvider::Gateway,
             api_key: Some("abcdefghijklmnopqrstuvwxyz123456".to_string()),
-            base_url: "http://ai-gateway:8090".to_string(),
+            base_url: INTERNAL_GATEWAY_ORIGIN.to_string(),
             model: LOCAL_BGE_V1.model.to_string(),
             vector_size: LOCAL_BGE_V1.vector_size,
             profile: LOCAL_BGE_V1,

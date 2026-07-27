@@ -58,13 +58,22 @@ read_env() {
   awk -F= -v key="${key}" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "${file}"
 }
 
-for key in APP_DOMAIN SUPABASE_DOMAIN ADMIN_DOMAIN ADMIN_ALLOWED_CIDRS TLS_CERT_FILE TLS_KEY_FILE DATABASE_APP_USER DATABASE_APP_PASSWORD QDRANT_API_KEY AI_GATEWAY_INTERNAL_TOKEN AI_GATEWAY_DEFAULT_SCHOOL_ID AI_GATEWAY_MODE EMBEDDING_PROFILE EMBEDDING_MODEL EMBEDDING_VECTOR_SIZE QDRANT_COLLECTION QDRANT_VECTOR_SIZE; do
+for key in APP_DOMAIN SUPABASE_DOMAIN ADMIN_DOMAIN ADMIN_ALLOWED_CIDRS TLS_CERT_FILE TLS_KEY_FILE DATABASE_APP_USER DATABASE_APP_PASSWORD QDRANT_API_KEY AI_GATEWAY_INTERNAL_TOKEN AI_GATEWAY_MODE EMBEDDING_PROFILE EMBEDDING_MODEL EMBEDDING_VECTOR_SIZE QDRANT_COLLECTION QDRANT_VECTOR_SIZE; do
   value="$(read_env "${APP_ENV}" "${key}")"
   if [[ -z "${value}" || "${value}" == *example.invalid* || "${value}" == *replace* ]]; then
     echo "${key} is missing or contains a placeholder in ${APP_ENV}." >&2
     exit 1
   fi
 done
+
+if grep -q '^AI_GATEWAY_DEFAULT_SCHOOL_ID=' "${APP_ENV}"; then
+  echo "AI_GATEWAY_DEFAULT_SCHOOL_ID is forbidden; AI requests must carry the authoritative school ID." >&2
+  exit 1
+fi
+if grep -Eq '^AI_ALLOWED_(EMBEDDING|LLM)_BASE_URLS=' "${APP_ENV}"; then
+  echo "Operator-configurable AI allowlists are forbidden; provider origins are fixed in code." >&2
+  exit 1
+fi
 
 app_domain="$(read_env "${APP_ENV}" APP_DOMAIN)"
 supabase_domain="$(read_env "${APP_ENV}" SUPABASE_DOMAIN)"
@@ -98,17 +107,6 @@ database_app_password="$(read_env "${APP_ENV}" DATABASE_APP_PASSWORD)"
 
 ai_gateway_token="$(read_env "${APP_ENV}" AI_GATEWAY_INTERNAL_TOKEN)"
 [[ "${ai_gateway_token}" =~ ^[A-Za-z0-9._~-]{32,128}$ ]] || { echo "AI_GATEWAY_INTERNAL_TOKEN must be 32-128 URL-safe characters." >&2; exit 1; }
-ai_school_id="$(read_env "${APP_ENV}" AI_GATEWAY_DEFAULT_SCHOOL_ID)"
-python3 - "${ai_school_id}" <<'PY'
-import sys
-import uuid
-try:
-    value = uuid.UUID(sys.argv[1])
-except ValueError as error:
-    raise SystemExit("AI_GATEWAY_DEFAULT_SCHOOL_ID must be a UUID") from error
-if value.int == 0:
-    raise SystemExit("AI_GATEWAY_DEFAULT_SCHOOL_ID must not be nil")
-PY
 
 ai_mode="$(read_env "${APP_ENV}" AI_GATEWAY_MODE)"
 embedding_profile="$(read_env "${APP_ENV}" EMBEDDING_PROFILE)"
@@ -132,30 +130,17 @@ case "${embedding_profile}" in
       echo "openai-v1 profile values do not match the registry." >&2
       exit 1
     }
+    [[ "$(read_env "${APP_ENV}" AI_EMBEDDING_BASE_URL)" == "https://api.openai.com/v1/" ]] || {
+      echo "Connected embeddings must use the approved OpenAI origin." >&2
+      exit 1
+    }
+    [[ "$(read_env "${APP_ENV}" AI_LLM_BASE_URL)" == "https://api.deepseek.com/v1/" ]] || {
+      echo "Connected LLM requests must use the approved LLM origin." >&2
+      exit 1
+    }
     for key in OPENAI_API_KEY LLM_API_KEY; do
       value="$(read_env "${APP_ENV}" "${key}")"
       [[ "${#value}" -ge 24 && "${value}" != *replace* ]] || { echo "Connected mode requires ${key}." >&2; exit 1; }
-    done
-    for pair in "AI_EMBEDDING_BASE_URL:AI_ALLOWED_EMBEDDING_BASE_URLS" "AI_LLM_BASE_URL:AI_ALLOWED_LLM_BASE_URLS"; do
-      key="${pair%%:*}"
-      allowed_key="${pair#*:}"
-      value="$(read_env "${APP_ENV}" "${key}")"
-      allowed="$(read_env "${APP_ENV}" "${allowed_key}")"
-      [[ "${value}" == https://* ]] || { echo "${key} must use HTTPS." >&2; exit 1; }
-      python3 - "${value}" "${allowed}" <<'PY'
-import sys
-from urllib.parse import urlsplit
-
-def normalize(value: str) -> str:
-    parsed = urlsplit(value)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise SystemExit(f"Unsafe provider URL: {value}")
-    return value.rstrip("/") + "/"
-requested = normalize(sys.argv[1])
-allowed = {normalize(item.strip()) for item in sys.argv[2].split(",") if item.strip()}
-if requested not in allowed:
-    raise SystemExit("Provider URL is absent from its exact allowlist")
-PY
     done
     ;;
   *) echo "Unsupported EMBEDDING_PROFILE=${embedding_profile}" >&2; exit 1 ;;

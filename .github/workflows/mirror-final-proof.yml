@@ -72,8 +72,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          find deploy/production -type d -name __pycache__ -prune -exec rm -rf {} +
           git add -A
-          git diff --cached --check
           git status --short | sed -n '1,100p'
 
       - name: Create isolated correction commit

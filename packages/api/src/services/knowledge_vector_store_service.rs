@@ -5,15 +5,12 @@
 //! active immutable embedding profile, so profile changes require a distinct
 //! collection and complete re-index.
 
-use crate::services::embedding_profile::{
-    EmbeddingProfile, LOCAL_BGE_V1, OPENAI_V1,
-};
+use crate::services::embedding_profile::{EmbeddingProfile, LOCAL_BGE_V1, OPENAI_V1};
 use crate::services::vector_store_service::{QdrantConfig, VectorStoreError};
 use qdrant_client::qdrant::{
-    vectors_config::Config, Condition, CreateCollectionBuilder,
-    CreateFieldIndexCollectionBuilder, Distance, FieldType, Filter, PointStruct,
-    SearchPointsBuilder, UpsertPointsBuilder, Value as QdrantValue, VectorParamsBuilder,
-    VectorsConfig,
+    vectors_config::Config, Condition, CreateCollectionBuilder, CreateFieldIndexCollectionBuilder,
+    Distance, FieldType, Filter, PointStruct, SearchPointsBuilder, UpsertPointsBuilder,
+    Value as QdrantValue, VectorParamsBuilder, VectorsConfig,
 };
 use qdrant_client::Qdrant;
 use serde::{Deserialize, Serialize};
@@ -84,11 +81,8 @@ impl KnowledgeVectorStoreService {
                     CreateCollectionBuilder::new(&self.config.collection_name).vectors_config(
                         VectorsConfig {
                             config: Some(Config::Params(
-                                VectorParamsBuilder::new(
-                                    self.config.vector_size,
-                                    Distance::Cosine,
-                                )
-                                .build(),
+                                VectorParamsBuilder::new(self.config.vector_size, Distance::Cosine)
+                                    .build(),
                             )),
                         },
                     ),
@@ -296,13 +290,11 @@ impl KnowledgeVectorStoreService {
     pub async fn delete_asset(&self, asset_id: &str) -> Result<(), VectorStoreError> {
         self.client
             .delete_points(
-                qdrant_client::qdrant::DeletePointsBuilder::new(
-                    &self.config.collection_name,
-                )
-                .points(Filter::must(vec![
-                    Condition::matches("knowledge_asset_id", asset_id.to_string()),
-                    Condition::matches("embedding_profile", self.profile.id.to_string()),
-                ])),
+                qdrant_client::qdrant::DeletePointsBuilder::new(&self.config.collection_name)
+                    .points(Filter::must(vec![
+                        Condition::matches("knowledge_asset_id", asset_id.to_string()),
+                        Condition::matches("embedding_profile", self.profile.id.to_string()),
+                    ])),
             )
             .await
             .map_err(|error| VectorStoreError::ClientError(error.to_string()))?;
@@ -316,9 +308,7 @@ fn profile_for_contract(
 ) -> Result<EmbeddingProfile, VectorStoreError> {
     [OPENAI_V1, LOCAL_BGE_V1]
         .into_iter()
-        .find(|profile| {
-            profile.collection == collection_name && profile.vector_size == vector_size
-        })
+        .find(|profile| profile.collection == collection_name && profile.vector_size == vector_size)
         .ok_or_else(|| {
             VectorStoreError::ProfileMismatch(format!(
                 "collection {collection_name} with dimension {vector_size} is not registered"
@@ -338,9 +328,7 @@ fn payload_string(payload: &HashMap<String, QdrantValue>, key: &str) -> String {
     payload
         .get(key)
         .and_then(|value| match &value.kind {
-            Some(qdrant_client::qdrant::value::Kind::StringValue(value)) => {
-                Some(value.clone())
-            }
+            Some(qdrant_client::qdrant::value::Kind::StringValue(value)) => Some(value.clone()),
             _ => None,
         })
         .unwrap_or_default()

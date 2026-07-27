@@ -43,18 +43,20 @@ def volume_mounts(service: dict[str, Any]) -> list[dict[str, Any]]:
     return mounts
 
 
-def mount_for_target(
-    service: dict[str, Any], target: str
-) -> dict[str, Any] | None:
+def mount_for_target(service: dict[str, Any], target: str) -> dict[str, Any] | None:
     return next(
         (mount for mount in volume_mounts(service) if mount.get("target") == target),
         None,
     )
 
 
+def dependencies(service: dict[str, Any]) -> dict[str, Any]:
+    value = service.get("depends_on", {}) or {}
+    return value if isinstance(value, dict) else {}
+
+
 def dependency_condition(service: dict[str, Any], dependency: str) -> str | None:
-    dependencies = service.get("depends_on", {}) or {}
-    entry = dependencies.get(dependency)
+    entry = dependencies(service).get(dependency)
     if isinstance(entry, dict):
         value = entry.get("condition")
         return str(value) if value is not None else None
@@ -93,6 +95,14 @@ def require_exact_network(
         fail(f"network {network} membership must be {sorted(expected)}, got {sorted(actual)}")
 
 
+def require_no_capabilities(service: dict[str, Any], name: str) -> None:
+    if service.get("cap_add"):
+        fail(f"{name} must not receive Linux capabilities")
+    cap_drop = {str(value).upper() for value in service.get("cap_drop", []) or []}
+    if "ALL" not in cap_drop:
+        fail(f"{name} must drop all Linux capabilities")
+
+
 def main() -> None:
     if len(sys.argv) not in {2, 3}:
         fail(
@@ -125,6 +135,10 @@ def main() -> None:
         fail("gateway initialization must own persistent Caddy state volumes")
     if "chmod 0700 /data /config" not in overlay_text:
         fail("gateway initialization must restrict persistent Caddy state volumes")
+    if "AI_GATEWAY_DEFAULT_SCHOOL_ID" in overlay_text:
+        fail("production topology must not contain a shared AI tenant fallback")
+    if "AI_ALLOWED_EMBEDDING_BASE_URLS" in overlay_text or "AI_ALLOWED_LLM_BASE_URLS" in overlay_text:
+        fail("production topology must not contain operator-defined AI allowlists")
 
     document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     services = document.get("services")
@@ -234,8 +248,7 @@ def main() -> None:
     expected_gateway_user = f"{gateway_uid}:{gateway_gid}"
     if str(gateway.get("user", "")) != expected_gateway_user:
         fail(f"gateway user must match initialization owner {expected_gateway_user}")
-    if gateway.get("cap_add"):
-        fail("gateway must not require Linux capabilities")
+    require_no_capabilities(gateway, "gateway")
     gateway_ports = gateway.get("ports", []) or []
     port_map = {
         str(item.get("published")): str(item.get("target"))
@@ -300,7 +313,11 @@ def main() -> None:
 
     require_exact_network(services, "ingress", {"gateway"})
     require_exact_network(services, "ai_egress", {"ai-gateway"})
-    require_exact_network(services, "ai_internal", {"app", "ai-gateway"} | ({"embedding"} if "embedding" in services else set()))
+    require_exact_network(
+        services,
+        "ai_internal",
+        {"app", "ai-gateway"} | ({"embedding"} if "embedding" in services else set()),
+    )
 
     auth_env = services["auth"].get("environment", {}) or {}
     for key, expected in {
@@ -314,7 +331,7 @@ def main() -> None:
             fail(f"Supabase Auth setting {key} must be {expected}, got {actual or 'missing'}")
 
     pooler_nofile = (services["supavisor"].get("ulimits", {}) or {}).get("nofile", {}) or {}
-    if not isinstance(pooler_nofile, dict) or {
+    if {
         str(pooler_nofile.get("soft")),
         str(pooler_nofile.get("hard")),
     } != {"100000"}:
@@ -355,8 +372,8 @@ def main() -> None:
     app_env = app.get("environment", {}) or {}
     if dependency_condition(app, "database-access") != "service_completed_successfully":
         fail("app must wait for role configuration")
-    if dependency_condition(app, "ai-gateway") != "service_healthy":
-        fail("app must wait only for provider-independent AI gateway health")
+    if "ai-gateway" in dependencies(app):
+        fail("app must start independently of AI gateway health")
     if dependency_condition(app, "qdrant") != "service_started":
         fail("Qdrant readiness must remain degradable")
     if "DATABASE_ADMIN_URL" in app_env or "POSTGRES_PASSWORD" in app_env:
@@ -379,10 +396,11 @@ def main() -> None:
         "AI_LLM_BASE_URL",
         "AI_ALLOWED_EMBEDDING_BASE_URLS",
         "AI_ALLOWED_LLM_BASE_URLS",
+        "AI_GATEWAY_DEFAULT_SCHOOL_ID",
     }
     leaked = sorted(forbidden_app_ai_keys & set(app_env))
     if leaked:
-        fail(f"provider credentials/destinations reached app environment: {leaked}")
+        fail(f"provider credentials/destinations or shared tenant identity reached app: {leaked}")
 
     ai_gateway = services["ai-gateway"]
     ai_env = ai_gateway.get("environment", {}) or {}
@@ -390,16 +408,20 @@ def main() -> None:
         fail("AI gateway must run the dedicated gateway binary")
     if str(ai_gateway.get("user", "")) in {"", "0", "0:0", "root"}:
         fail("AI gateway must run as a numeric non-root identity")
-    if ai_gateway.get("cap_add"):
-        fail("AI gateway must not receive Linux capabilities")
+    require_no_capabilities(ai_gateway, "AI gateway")
     if ai_gateway.get("read_only") is not True:
         fail("AI gateway root filesystem must be read-only")
+    if not ai_gateway.get("healthcheck"):
+        fail("AI gateway must expose a provider-independent local health check")
     for forbidden in (
         "DATABASE_URL",
         "DATABASE_ADMIN_URL",
         "POSTGRES_PASSWORD",
         "QDRANT_API_KEY",
         "SUPABASE_SECRET_KEY",
+        "AI_GATEWAY_DEFAULT_SCHOOL_ID",
+        "AI_ALLOWED_EMBEDDING_BASE_URLS",
+        "AI_ALLOWED_LLM_BASE_URLS",
     ):
         if forbidden in ai_env:
             fail(f"AI gateway must not receive {forbidden}")
@@ -446,12 +468,15 @@ def main() -> None:
             value = str(ai_env.get(key, ""))
             if len(value) < 24 or "replace" in value.lower():
                 fail(f"connected mode requires safe {key}")
-        for key in ("AI_EMBEDDING_BASE_URL", "AI_LLM_BASE_URL"):
-            if not str(ai_env.get(key, "")).startswith("https://"):
-                fail(f"connected mode requires HTTPS {key}")
+        if ai_env.get("AI_EMBEDDING_BASE_URL") != "https://api.openai.com/v1/":
+            fail("connected embeddings must use the exact approved OpenAI origin")
+        if ai_env.get("AI_LLM_BASE_URL") != "https://api.deepseek.com/v1/":
+            fail("connected LLM requests must use the exact approved LLM origin")
     else:
         if ai_env.get("AI_EMBEDDING_BASE_URL") != "http://embedding:80/v1/":
             fail("offline profile must use the internal TEI service")
+        if "embedding" not in services:
+            fail("offline profile must render the local TEI service")
 
     print("Rendered production Compose security and AI egress invariants verified.")
 

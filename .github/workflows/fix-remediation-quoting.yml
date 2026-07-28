@@ -1,0 +1,51 @@
+name: Fix remediation quoting
+
+on:
+  push:
+    branches:
+      - feature/air-gapped-packaging-ghcr
+    paths:
+      - .github/workflows/fix-remediation-quoting.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/air-gapped-packaging-ghcr
+          fetch-depth: 0
+
+      - name: Correct generated-script delimiter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/full-validation.yml')
+          text = path.read_text(encoding='utf-8')
+          opening = "hardening.write_text('''#!/usr/bin/env bash"
+          closing = "''', encoding='utf-8')\n          hardening.chmod(0o755)"
+          if text.count(opening) != 1 or text.count(closing) != 1:
+              raise SystemExit('remediation string delimiters changed unexpectedly')
+          text = text.replace(opening, 'hardening.write_text(r"""#!/usr/bin/env bash', 1)
+          text = text.replace(closing, '""", encoding=\'utf-8\')\n          hardening.chmod(0o755)', 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm .github/workflows/fix-remediation-quoting.yml
+          git diff --check
+
+      - name: Commit quoting correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/full-validation.yml .github/workflows/fix-remediation-quoting.yml
+          git commit -m 'fix(ci): correct remediation script delimiter'
+          git push origin HEAD:feature/air-gapped-packaging-ghcr

@@ -54,3 +54,5 @@ jobs:
           git add .github/workflows/production-foundation.yml .github/workflows/patch-production-proof-gating.yml
           git commit -m 'ci(production): reserve complete proof for dispatcher'
           git push origin HEAD:feature/air-gapped-packaging-ghcr
+
+# Trigger after the workflow exists on the branch.

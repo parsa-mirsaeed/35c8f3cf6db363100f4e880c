@@ -24,7 +24,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'full-validation') &&
       github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 360
     env:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
@@ -60,15 +60,12 @@ jobs:
 
           ai_run_id="$(find_pr_run 'AI Change Proof')"
           full_run_id="$(find_pr_run 'Full Validation')"
-          production_run_id="$(find_pr_run 'Production Foundation')"
           {
             echo "ai_run_id=$ai_run_id"
             echo "full_run_id=$full_run_id"
-            echo "production_run_id=$production_run_id"
           } >> "$GITHUB_OUTPUT"
           echo "AI Change Proof run: $ai_run_id"
           echo "Full Validation run: $full_run_id"
-          echo "Production Foundation run: $production_run_id"
 
       - name: Wait for exact-head pull-request gates
         shell: bash
@@ -78,10 +75,8 @@ jobs:
             --repo "$REPOSITORY" --exit-status
           gh run watch '${{ steps.pr-runs.outputs.full_run_id }}' \
             --repo "$REPOSITORY" --exit-status
-          gh run watch '${{ steps.pr-runs.outputs.production_run_id }}' \
-            --repo "$REPOSITORY" --exit-status
 
-      - name: Enforce AI, full validation, and production jobs
+      - name: Enforce AI and full-validation jobs
         shell: bash
         run: |
           set -euo pipefail
@@ -91,18 +86,14 @@ jobs:
           gh run view '${{ steps.pr-runs.outputs.full_run_id }}' \
             --repo "$REPOSITORY" \
             --json headSha,event,status,conclusion,jobs,url > full-validation-run.json
-          gh run view '${{ steps.pr-runs.outputs.production_run_id }}' \
-            --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > production-run.json
 
-          python3 - "$HEAD_SHA" ai-run.json full-validation-run.json production-run.json <<'PY'
+          python3 - "$HEAD_SHA" ai-run.json full-validation-run.json <<'PY'
           import json
           import sys
 
-          expected_sha, ai_path, full_path, production_path = sys.argv[1:]
+          expected_sha, ai_path, full_path = sys.argv[1:]
           ai = json.load(open(ai_path, encoding="utf-8"))
           full = json.load(open(full_path, encoding="utf-8"))
-          production = json.load(open(production_path, encoding="utf-8"))
 
           def require_pr_run(run, name):
               assert run["headSha"] == expected_sha, (name, run["headSha"], expected_sha)
@@ -112,7 +103,6 @@ jobs:
 
           require_pr_run(ai, "AI Change Proof")
           require_pr_run(full, "Full Validation")
-          require_pr_run(production, "Production Foundation")
 
           ai_jobs = {job["name"]: job["conclusion"] for job in ai["jobs"]}
           assert ai_jobs.get("AI change gate") == "success", ai_jobs
@@ -125,20 +115,70 @@ jobs:
               "Full validation gate",
           ):
               assert full_jobs.get(job_name) == "success", (job_name, full_jobs.get(job_name))
+          PY
 
-          production_jobs = {job["name"]: job["conclusion"] for job in production["jobs"]}
+      - name: Dispatch complete exact-head Production Foundation
+        id: production
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous="$(gh run list \
+            --repo "$REPOSITORY" \
+            --workflow 'Production Foundation' \
+            --branch "$HEAD_REF" \
+            --event workflow_dispatch \
+            --limit 50 \
+            --json databaseId,headSha \
+            --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
+          gh workflow run production-foundation.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
+          for attempt in $(seq 1 120); do
+            run_id="$(gh run list \
+              --repo "$REPOSITORY" \
+              --workflow 'Production Foundation' \
+              --branch "$HEAD_REF" \
+              --event workflow_dispatch \
+              --limit 50 \
+              --json databaseId,headSha \
+              --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
+            if (( run_id > previous )); then
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "Production Foundation run: $run_id"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Unable to resolve newly dispatched Production Foundation run at $HEAD_SHA" >&2
+          exit 1
+
+      - name: Wait for and inspect complete Production Foundation proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run watch '${{ steps.production.outputs.run_id }}' \
+            --repo "$REPOSITORY" --exit-status
+          gh run view '${{ steps.production.outputs.run_id }}' \
+            --repo "$REPOSITORY" \
+            --json headSha,event,status,conclusion,jobs,url > production-run.json
+          python3 - "$HEAD_SHA" production-run.json <<'PY'
+          import json
+          import sys
+
+          expected_sha, path = sys.argv[1:]
+          run = json.load(open(path, encoding="utf-8"))
+          assert run["headSha"] == expected_sha, (run["headSha"], expected_sha)
+          assert run["event"] == "workflow_dispatch", run["event"]
+          assert run["status"] == "completed", run["status"]
+          assert run["conclusion"] == "success", run["conclusion"]
+          jobs = {job["name"]: job["conclusion"] for job in run["jobs"]}
           for job_name in (
               "Render and verify production topology",
               "Apply migrations and roles on pinned Supabase PostgreSQL 17",
               "Start complete production stack",
           ):
-              assert production_jobs.get(job_name) == "success", (
-                  job_name,
-                  production_jobs.get(job_name),
-              )
+              assert jobs.get(job_name) == "success", (job_name, jobs.get(job_name))
           PY
 
-      - name: Dispatch exact-head Package after prerequisite gates
+      - name: Dispatch exact-head Package after Production Foundation
         id: package
         shell: bash
         run: |

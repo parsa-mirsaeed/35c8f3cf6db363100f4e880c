@@ -15,6 +15,10 @@ if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" == v* ]]; then
 fi
 
 [[ -n "${VERSION}" ]] || { echo "Usage: build.sh <version>" >&2; exit 2; }
+[[ "${VERSION}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+  echo "Version must be a safe tag and path component." >&2
+  exit 2
+}
 if [[ -z "${GIT_SHA}" ]]; then
   GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse HEAD)"
 fi
@@ -274,20 +278,52 @@ for service in sorted(service_sources):
         f"    image: {source_tags[source]}",
         "    pull_policy: never",
     ])
-lines.extend([
-    "  embedding:",
-    "    command:",
-    "      - --model-id",
-    "      - /models/local-bge-v1",
-    "      - --served-model-name",
-    "      - BAAI/bge-small-en-v1.5",
-    "    volumes:",
-    "      - type: bind",
-    "        source: ${EDUTALENT_APPLIANCE_MODEL_DIR:?EDUTALENT_APPLIANCE_MODEL_DIR is required}",
-    "        target: /models/local-bge-v1",
-    "        read_only: true",
-])
+    if service == "embedding":
+        lines.extend([
+            "    command:",
+            "      - --model-id",
+            "      - /models/local-bge-v1",
+            "      - --served-model-name",
+            "      - BAAI/bge-small-en-v1.5",
+            "    volumes:",
+            "      - type: bind",
+            "        source: ${EDUTALENT_APPLIANCE_MODEL_DIR:?EDUTALENT_APPLIANCE_MODEL_DIR is required}",
+            "        target: /models/local-bge-v1",
+            "        read_only: true",
+        ])
 Path(sys.argv[3]).write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+
+python3 - "${BUNDLE_DIR}/provenance/release-builder.json" "${GIT_SHA}" "${PLATFORM}" \
+  "$(docker version --format '{{.Server.Version}}')" \
+  "$(docker buildx version | awk '{print $2}')" \
+  "$(syft version -o json | jq -r '.version')" \
+  "$(cosign version --json | jq -r '.gitVersion // .git_version // "unknown"')" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output, git_sha, platform, docker_version, buildx_version, syft_version, cosign_version = sys.argv[1:]
+Path(output).write_text(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "builder": "scripts/appliance/build.sh",
+            "git_sha": git_sha,
+            "platform": platform,
+            "tools": {
+                "docker": docker_version,
+                "buildx": buildx_version,
+                "syft": syft_version,
+                "cosign": cosign_version,
+            },
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
 PY
 
 syft "dir:${BUNDLE_DIR}" --exclude './images/**' --exclude './signatures/**' \

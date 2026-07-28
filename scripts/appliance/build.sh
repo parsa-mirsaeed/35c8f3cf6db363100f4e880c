@@ -9,6 +9,11 @@ SIGNING_MODE="${EDUTALENT_APPLIANCE_SIGNING_MODE:-ephemeral}"
 CREATE_ARCHIVE="${EDUTALENT_APPLIANCE_CREATE_ARCHIVE:-false}"
 GIT_SHA="${GITHUB_SHA:-}"
 
+if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" == v* ]]; then
+  SIGNING_MODE=keyless
+  CREATE_ARCHIVE=true
+fi
+
 [[ -n "${VERSION}" ]] || { echo "Usage: build.sh <version>" >&2; exit 2; }
 if [[ -z "${GIT_SHA}" ]]; then
   GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse HEAD)"
@@ -297,17 +302,46 @@ python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" generate \
 bash "${ROOT_DIR}/scripts/appliance/sign_release.sh" "${BUNDLE_DIR}" "${SIGNING_MODE}"
 bash "${BUNDLE_DIR}/edutalent-appliance" verify
 
+sign_external_payload() {
+  local payload="$1" temp_signing
+  case "${SIGNING_MODE}" in
+    ephemeral)
+      temp_signing="$(mktemp -d)"
+      COSIGN_PASSWORD='' cosign generate-key-pair --output-key-prefix "${temp_signing}/verification" >/dev/null
+      COSIGN_PASSWORD='' cosign sign-blob --yes \
+        --key "${temp_signing}/verification.key" \
+        --output-signature "${payload}.sig" \
+        "${payload}" >/dev/null
+      cp "${temp_signing}/verification.pub" "${payload}.pub"
+      cosign verify-blob --key "${payload}.pub" --signature "${payload}.sig" "${payload}" >/dev/null
+      rm -rf "${temp_signing}"
+      ;;
+    keyless)
+      cosign sign-blob --yes --bundle "${payload}.sigstore.json" "${payload}" >/dev/null
+      ;;
+    *) echo "Unsupported signing mode: ${SIGNING_MODE}" >&2; exit 2 ;;
+  esac
+}
+
 if [[ "${CREATE_ARCHIVE}" == "true" ]]; then
   archive="${ROOT_DIR}/dist/${BUNDLE_NAME}.tar.gz"
-  rm -f "${archive}" "${archive}.part-"*
+  rm -f "${archive}" "${archive}.part-"* "${archive}.sig" "${archive}.pub" "${archive}.sigstore.json"
   tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
     -C "${ROOT_DIR}/dist" -cf - "${BUNDLE_NAME}" | gzip -n -9 > "${archive}"
   if (( $(stat -c %s "${archive}") > 1900000000 )); then
     split -b 1800m -d -a 3 "${archive}" "${archive}.part-"
     rm -f "${archive}"
-    sha256sum "${archive}.part-"* > "${ROOT_DIR}/dist/${BUNDLE_NAME}.parts.SHA256SUMS"
+    checksum_file="${ROOT_DIR}/dist/${BUNDLE_NAME}.parts.SHA256SUMS"
+    sha256sum "${archive}.part-"* > "${checksum_file}"
+    for part in "${archive}.part-"*; do
+      sign_external_payload "${part}"
+    done
+    sign_external_payload "${checksum_file}"
   else
-    sha256sum "${archive}" > "${archive}.SHA256SUMS"
+    checksum_file="${archive}.SHA256SUMS"
+    sha256sum "${archive}" > "${checksum_file}"
+    sign_external_payload "${archive}"
+    sign_external_payload "${checksum_file}"
   fi
 fi
 

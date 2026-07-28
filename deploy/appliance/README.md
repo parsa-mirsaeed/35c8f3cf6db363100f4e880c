@@ -37,8 +37,10 @@ EDUTALENT_APPLIANCE_SIGNING_MODE=ephemeral \
 Tagged protected releases use keyless Sigstore signing and publish custom
 multi-architecture images to GHCR. Pull-request validation uses an ephemeral key
 only to prove the sign/verify mechanism; that key is not a production trust root.
-The signed manifest binds the accepted signing mode so a keyless release cannot be
-downgraded by adding an attacker-controlled public key.
+The signed manifest binds the accepted signing mode, and installed appliances
+reject ephemeral signatures unless the operator independently sets
+`EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES=true`. Never enable that flag for a
+production release.
 
 Keyless verification never accepts issuer or workflow identity from the bundle.
 Obtain the approved values independently from the authoritative release policy and

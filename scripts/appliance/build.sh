@@ -385,14 +385,20 @@ if [[ "${CREATE_ARCHIVE}" == "true" ]]; then
     split -b 1800m -d -a 3 "${archive}" "${archive}.part-"
     rm -f "${archive}"
     checksum_file="${ROOT_DIR}/dist/${BUNDLE_NAME}.parts.SHA256SUMS"
-    sha256sum "${archive}.part-"* > "${checksum_file}"
+    (
+      cd "${ROOT_DIR}/dist"
+      sha256sum "${BUNDLE_NAME}.tar.gz.part-"*
+    ) > "${checksum_file}"
     for part in "${archive}.part-"*; do
       sign_external_payload "${part}"
     done
     sign_external_payload "${checksum_file}"
   else
     checksum_file="${archive}.SHA256SUMS"
-    sha256sum "${archive}" > "${checksum_file}"
+    (
+      cd "${ROOT_DIR}/dist"
+      sha256sum "${BUNDLE_NAME}.tar.gz"
+    ) > "${checksum_file}"
     sign_external_payload "${archive}"
     sign_external_payload "${checksum_file}"
   fi

@@ -298,4 +298,45 @@ if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
   exit 1
 fi
 
+python3 - "${ROOT_DIR}/scripts/appliance/release_manifest.py" "${fixture}/private-key-scan" <<'PYTEST'
+import importlib.util
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+root = Path(sys.argv[2])
+root.mkdir(parents=True, exist_ok=True)
+spec = importlib.util.spec_from_file_location("appliance_release_manifest", source)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+markers = (
+    b"-----BEGIN PRIVATE KEY-----",
+    b"-----BEGIN RSA PRIVATE KEY-----",
+    b"-----BEGIN EC PRIVATE KEY-----",
+    b"-----BEGIN DSA PRIVATE KEY-----",
+    b"-----BEGIN OPENSSH PRIVATE KEY-----",
+    b"-----BEGIN ENCRYPTED PRIVATE KEY-----",
+    b"-----BEGIN PGP PRIVATE KEY BLOCK-----",
+)
+candidate = root / "arbitrary-release-note.txt"
+for marker in markers:
+    candidate.write_bytes(marker + b"\nfixture\n")
+    try:
+        module.reject_forbidden_file(root, candidate)
+    except RuntimeError:
+        continue
+    raise AssertionError(f"private-key marker was accepted: {marker!r}")
+PYTEST
+
+portable_checksums="${fixture}/portable-checksums"
+mkdir -p "${portable_checksums}/source" "${portable_checksums}/moved"
+printf 'portable archive\n' > "${portable_checksums}/source/release.tar.gz"
+(cd "${portable_checksums}/source" && sha256sum release.tar.gz > release.tar.gz.SHA256SUMS)
+cp "${portable_checksums}/source/release.tar.gz"   "${portable_checksums}/source/release.tar.gz.SHA256SUMS"   "${portable_checksums}/moved/"
+(cd "${portable_checksums}/moved" && sha256sum --check release.tar.gz.SHA256SUMS)
+test "$(awk '{print $2}' "${portable_checksums}/moved/release.tar.gz.SHA256SUMS")" = 'release.tar.gz'
+grep -Fq 'sha256sum "${BUNDLE_NAME}.tar.gz.part-"*' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'sha256sum "${BUNDLE_NAME}.tar.gz"' "${ROOT_DIR}/scripts/appliance/build.sh"
+
 echo "Air-gapped appliance definitions and integrity regression tests passed."

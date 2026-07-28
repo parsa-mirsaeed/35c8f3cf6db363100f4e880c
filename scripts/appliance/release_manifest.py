@@ -22,6 +22,11 @@ FORBIDDEN_NAMES = {".env", "id_rsa", "id_ed25519", "credentials.json"}
 PRIVATE_KEY_MARKERS = (
     b"-----BEGIN " + b"PRIVATE KEY-----",
     b"-----BEGIN RSA " + b"PRIVATE KEY-----",
+    b"-----BEGIN EC " + b"PRIVATE KEY-----",
+    b"-----BEGIN DSA " + b"PRIVATE KEY-----",
+    b"-----BEGIN OPENSSH " + b"PRIVATE KEY-----",
+    b"-----BEGIN ENCRYPTED " + b"PRIVATE KEY-----",
+    b"-----BEGIN PGP " + b"PRIVATE KEY BLOCK-----",
 )
 TEXT_LIMIT = 4 * 1024 * 1024
 MUTABLE_INSTALLATION_FILES = frozenset(

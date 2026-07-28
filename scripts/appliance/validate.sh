@@ -11,6 +11,7 @@ for file in \
 done
 python3 -m py_compile \
   "${ROOT_DIR}/scripts/appliance/fetch_model.py" \
+  "${ROOT_DIR}/scripts/appliance/patch_production_command.py" \
   "${ROOT_DIR}/scripts/appliance/release_manifest.py"
 
 python3 - "${ROOT_DIR}/deploy/appliance/model.lock.json" <<'PY'
@@ -28,9 +29,10 @@ assert lock["primary_weight"]["path"] == "model.safetensors"
 assert "pytorch_model.bin" not in lock["allow_patterns"]
 PY
 
+test "$(cat "${ROOT_DIR}/scripts/appliance/requirements.txt")" = "huggingface_hub==0.34.4"
 grep -Fq 'pull_policy: never' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq '/models/local-bge-v1' "${ROOT_DIR}/scripts/appliance/build.sh"
-grep -Fq 'EDUTALENT_COMPOSE_OVERRIDE' "${ROOT_DIR}/deploy/production/edutalent-production"
+grep -Fq 'EDUTALENT_COMPOSE_OVERRIDE' "${ROOT_DIR}/scripts/appliance/patch_production_command.py"
 grep -Fq 'docker load' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 grep -Fq 'syft' "${ROOT_DIR}/scripts/appliance/build.sh"
@@ -42,6 +44,12 @@ grep -Fq 'linux/amd64,linux/arm64' "${ROOT_DIR}/.github/workflows/air-gapped-app
 
 fixture="$(mktemp -d)"
 trap 'rm -rf "${fixture}"' EXIT
+cp "${ROOT_DIR}/deploy/production/edutalent-production" "${fixture}/edutalent-production"
+python3 "${ROOT_DIR}/scripts/appliance/patch_production_command.py" \
+  "${fixture}/edutalent-production"
+grep -Fq 'EDUTALENT_COMPOSE_OVERRIDE' "${fixture}/edutalent-production"
+bash -n "${fixture}/edutalent-production"
+
 mkdir -p \
   "${fixture}/bundle/images" \
   "${fixture}/bundle/manifests" \
@@ -96,6 +104,13 @@ python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" generate \
   --model-lock "${fixture}/model.lock.json"
 python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
   --bundle "${fixture}/bundle"
+printf 'untracked\n' > "${fixture}/bundle/untracked.txt"
+if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+  echo "untracked appliance payload was accepted" >&2
+  exit 1
+fi
+rm -f "${fixture}/bundle/untracked.txt"
 printf 'tampered\n' >> "${fixture}/bundle/images/fixture.tar.gz"
 if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
   --bundle "${fixture}/bundle" >/dev/null 2>&1; then

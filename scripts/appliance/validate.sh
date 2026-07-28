@@ -38,7 +38,22 @@ grep -Fq 'docker load' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq "'{{.Id}}'" "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 grep -Fq 'syft' "${ROOT_DIR}/scripts/appliance/build.sh"
-grep -Fq 'linux/amd64,linux/arm64' "${ROOT_DIR}/.github/workflows/air-gapped-appliance.yml"
+
+air_workflow="${ROOT_DIR}/.github/workflows/air-gapped-appliance.yml"
+mirror_workflow="${ROOT_DIR}/.github/workflows/mirror-final-proof.yml"
+grep -Fq 'runs-on: ubuntu-24.04-arm' "${air_workflow}"
+grep -Fq 'platform: linux/arm64' "${air_workflow}"
+grep -Fq "if: github.event_name != 'pull_request'" "${air_workflow}"
+grep -Fq "inputs.publish && github.ref == 'refs/heads/main'" "${air_workflow}"
+grep -Fq 'Build custom images natively for arm64' "${air_workflow}"
+grep -Fq 'Verify final PR gates then dispatch appliance proof' "${mirror_workflow}"
+grep -Fq "github.event.pull_request.draft == false" "${mirror_workflow}"
+grep -Fq "--event pull_request" "${mirror_workflow}"
+grep -Fq "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}"
+if grep -Fq 'setup-qemu-action' "${air_workflow}"; then
+  echo "Air-gapped workflow must use native architecture runners, not QEMU." >&2
+  exit 1
+fi
 if grep -R --line-number --exclude=validate.sh -E '(^|[/:])latest([@:]|$)' \
   "${ROOT_DIR}/Dockerfile.appliance-tools" \
   "${ROOT_DIR}/deploy/appliance" \

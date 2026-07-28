@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
 import stat
 import sys
@@ -92,7 +91,6 @@ def main() -> int:
         )
 
     reject_unsafe_tree(output)
-    write_checksums(output)
     metadata = {
         "schema_version": 1,
         "profile": lock["profile"],
@@ -114,6 +112,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as error:  # fail closed at the command boundary
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
         print(f"model preparation failed: {error}", file=sys.stderr)
         raise SystemExit(1)

@@ -73,14 +73,13 @@ grep -Fq "if: github.event_name != 'pull_request'" "${package_workflow}"
 grep -Fq 'Verify and serialize complete exact-head proof' "${mirror_workflow}"
 grep -Fq "github.event.pull_request.draft == false" "${mirror_workflow}"
 grep -Fq -- "--event pull_request" "${mirror_workflow}"
+grep -Fq "gh workflow run production-foundation.yml" "${mirror_workflow}"
 grep -Fq "gh workflow run package.yml" "${mirror_workflow}"
 grep -Fq "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}"
-if grep -Fq "gh workflow run production-foundation.yml" "${mirror_workflow}"; then
-  echo "Production Foundation must be an exact-head prerequisite, not a duplicate dispatch." >&2
-  exit 1
-fi
+production_line="$(grep -n "gh workflow run production-foundation.yml" "${mirror_workflow}" | cut -d: -f1)"
 package_line="$(grep -n "gh workflow run package.yml" "${mirror_workflow}" | cut -d: -f1)"
 appliance_line="$(grep -n "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}" | cut -d: -f1)"
+test "${production_line}" -lt "${package_line}"
 test "${package_line}" -lt "${appliance_line}"
 if grep -Fq 'setup-qemu-action' "${air_workflow}"; then
   echo "Air-gapped workflow must use native architecture runners, not QEMU." >&2

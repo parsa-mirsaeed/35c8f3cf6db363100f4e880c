@@ -6,6 +6,7 @@ ENV_FILE="${EDUTALENT_ENV_FILE:-${ROOT_DIR}/.env}"
 DEV_COMPOSE="${ROOT_DIR}/compose.yaml"
 RELEASE_COMPOSE="${ROOT_DIR}/compose.release.yaml"
 PRODUCTION_COMMAND="${ROOT_DIR}/deploy/production/edutalent-production"
+APPLIANCE_BUILD="${ROOT_DIR}/scripts/appliance/build.sh"
 
 cd "${ROOT_DIR}"
 
@@ -26,8 +27,10 @@ Development and package commands:
   ps                   Show stack status
   migrate              Run all PostgreSQL migrations transactionally
   build [tag]          Build the final runtime image
-  package [version]    Build a source-free Docker release bundle in dist/
+  package [version]    Build a source-free application-image bundle in dist/
   publish [version]    Build and push the runtime image to IMAGE_REPOSITORY
+  appliance-build [version] Build the complete signed air-gapped appliance
+  appliance-verify <bundle> Verify an extracted air-gapped appliance
   smoke                Start the lightweight stack and verify /healthz
   validate             Validate shell and Compose packaging definitions
   clean                Stop the lightweight stack and remove its volumes
@@ -233,8 +236,28 @@ case "${command}" in
             --cache-from "type=gha,scope=${cache_scope}" \
             --cache-to "type=gha,mode=max,scope=${cache_scope}" \
             --tag "${repository}:${version}" \
-            --tag "${repository}:latest" \
             --push .
+        ;;
+    appliance-build)
+        [[ -x "${APPLIANCE_BUILD}" || -f "${APPLIANCE_BUILD}" ]] || {
+            echo "Air-gapped appliance builder is missing: ${APPLIANCE_BUILD}" >&2
+            exit 1
+        }
+        version="$(version_name "${1:-}")"
+        exec bash "${APPLIANCE_BUILD}" "${version}"
+        ;;
+    appliance-verify)
+        bundle="${1:-}"
+        [[ -n "${bundle}" ]] || {
+            echo "appliance-verify requires an extracted appliance directory" >&2
+            exit 2
+        }
+        bundle="$(cd "${bundle}" && pwd)"
+        [[ -x "${bundle}/edutalent-appliance" ]] || {
+            echo "Missing appliance command: ${bundle}/edutalent-appliance" >&2
+            exit 1
+        }
+        exec "${bundle}/edutalent-appliance" verify
         ;;
     smoke)
         ensure_docker
@@ -252,11 +275,19 @@ case "${command}" in
             build-for-render.sh \
             scripts/ci/apply_migrations.sh \
             scripts/ci/configure_database_role.sh \
+            scripts/appliance/build.sh \
+            scripts/appliance/sign_release.sh \
+            scripts/appliance/offline_smoke.sh \
+            deploy/appliance/edutalent-appliance \
             deploy/production/bootstrap-supabase.sh \
             deploy/production/generate-secrets.sh \
             deploy/production/preflight.sh \
             deploy/production/edutalent-production
-        python3 -m py_compile deploy/production/validate-rendered-compose.py
+        python3 -m py_compile \
+            deploy/production/validate-rendered-compose.py \
+            scripts/appliance/fetch_model.py \
+            scripts/appliance/patch_production_command.py \
+            scripts/appliance/release_manifest.py
         docker compose --env-file "${ENV_FILE}" -f compose.yaml config --quiet
         docker compose --env-file "${ENV_FILE}" -f compose.release.yaml config --quiet
         grep -Fq 'cargo chef cook' Dockerfile
@@ -268,7 +299,8 @@ case "${command}" in
         grep -Fq -- '--profile dev up --build ai-gateway dev' edutalent
         grep -Fq -- '--profile app up --build --detach ai-gateway app' edutalent
         grep -Eq '^[0-9a-f]{40}$' deploy/production/SUPABASE_UPSTREAM
-        echo "Packaging and production command definitions are valid."
+        bash scripts/appliance/validate.sh
+        echo "Packaging, appliance, and production command definitions are valid."
         ;;
     clean)
         ensure_docker

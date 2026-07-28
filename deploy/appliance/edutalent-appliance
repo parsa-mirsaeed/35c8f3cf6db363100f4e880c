@@ -69,42 +69,54 @@ verify_signatures() {
   local checksums_signature="${ROOT_DIR}/signatures/SHA256SUMS.sig"
   local manifest_bundle="${ROOT_DIR}/signatures/release-manifest.sigstore.json"
   local checksums_bundle="${ROOT_DIR}/signatures/SHA256SUMS.sigstore.json"
-  local policy="${ROOT_DIR}/signatures/policy.json"
+  local signing_mode
+  signing_mode="$(manifest_value release.signing_mode)"
 
   require_command cosign
-  if [[ -f "${public_key}" && -f "${manifest_signature}" && -f "${checksums_signature}" ]]; then
-    cosign verify-blob \
-      --key "${public_key}" \
-      --signature "${manifest_signature}" \
-      "${MANIFEST}" >/dev/null
-    cosign verify-blob \
-      --key "${public_key}" \
-      --signature "${checksums_signature}" \
-      "${CHECKSUMS}" >/dev/null
-    echo "Verified release manifest and checksum set with the packaged public key."
-    return 0
-  fi
-
-  if [[ -f "${manifest_bundle}" && -f "${checksums_bundle}" && -f "${policy}" ]]; then
-    local issuer identity
-    issuer="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["certificate_oidc_issuer"])' "${policy}")"
-    identity="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["certificate_identity_regexp"])' "${policy}")"
-    cosign verify-blob \
-      --bundle "${manifest_bundle}" \
-      --certificate-oidc-issuer "${issuer}" \
-      --certificate-identity-regexp "${identity}" \
-      "${MANIFEST}" >/dev/null
-    cosign verify-blob \
-      --bundle "${checksums_bundle}" \
-      --certificate-oidc-issuer "${issuer}" \
-      --certificate-identity-regexp "${identity}" \
-      "${CHECKSUMS}" >/dev/null
-    echo "Verified keyless release manifest and checksum-set signatures."
-    return 0
-  fi
-
-  echo "Complete release signature material is missing." >&2
-  return 1
+  case "${signing_mode}" in
+    ephemeral)
+      [[ -f "${public_key}" && -f "${manifest_signature}" && -f "${checksums_signature}" ]] || {
+        echo "Complete ephemeral release signature material is missing." >&2
+        return 1
+      }
+      cosign verify-blob \
+        --key "${public_key}" \
+        --signature "${manifest_signature}" \
+        "${MANIFEST}" >/dev/null
+      cosign verify-blob \
+        --key "${public_key}" \
+        --signature "${checksums_signature}" \
+        "${CHECKSUMS}" >/dev/null
+      echo "Verified ephemeral validation signatures with the packaged public key."
+      ;;
+    keyless)
+      [[ -f "${manifest_bundle}" && -f "${checksums_bundle}" ]] || {
+        echo "Complete keyless release signature material is missing." >&2
+        return 1
+      }
+      local issuer="${EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER:-}"
+      local identity="${EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP:-}"
+      [[ -n "${issuer}" && -n "${identity}" ]] || {
+        echo "Keyless verification requires independently supplied EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER and EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP." >&2
+        return 1
+      }
+      cosign verify-blob \
+        --bundle "${manifest_bundle}" \
+        --certificate-oidc-issuer "${issuer}" \
+        --certificate-identity-regexp "${identity}" \
+        "${MANIFEST}" >/dev/null
+      cosign verify-blob \
+        --bundle "${checksums_bundle}" \
+        --certificate-oidc-issuer "${issuer}" \
+        --certificate-identity-regexp "${identity}" \
+        "${CHECKSUMS}" >/dev/null
+      echo "Verified keyless release signatures against the independently supplied trust policy."
+      ;;
+    *)
+      echo "Unsupported signed release mode: ${signing_mode}" >&2
+      return 1
+      ;;
+  esac
 }
 
 verify_bundle() {

@@ -7,6 +7,7 @@ on:
       - synchronize
       - reopened
       - labeled
+      - ready_for_review
 
 permissions:
   contents: read
@@ -21,7 +22,7 @@ jobs:
     name: Verify final PR gates then dispatch appliance proof
     if: >-
       contains(github.event.pull_request.labels.*.name, 'full-validation') &&
-      contains(github.event.pull_request.labels.*.name, 'appliance-proof')
+      github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:

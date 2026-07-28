@@ -37,6 +37,11 @@ grep -Fq 'if service == "embedding"' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'SOURCE_PRODUCTION_DIR=' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'PRODUCTION_DIR="${TEMP_DIR}/production"' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'stage_production.py' "${ROOT_DIR}/scripts/appliance/build.sh"
+if grep -Fq 'rm -f "${APP_ENV}"' "${ROOT_DIR}/scripts/appliance/build.sh"; then
+  echo "Appliance builder must not delete source-tree production environments." >&2
+  exit 1
+fi
+grep -Fq -- '--signing-mode "${SIGNING_MODE}"' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'EDUTALENT_COMPOSE_OVERRIDE' "${ROOT_DIR}/scripts/appliance/patch_production_command.py"
 grep -Fq 'docker load' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq "'{{.Id}}'" "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
@@ -46,6 +51,8 @@ grep -Fq 'release.signing_mode' "${ROOT_DIR}/deploy/appliance/edutalent-applianc
 grep -Fq 'EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 ! grep -Fq 'signatures/policy.json' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'MUTABLE_INSTALLATION_FILES' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+grep -Fq 'actual_mode' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 ! grep -Fq 'policy.json' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 grep -Fq 'syft' "${ROOT_DIR}/scripts/appliance/build.sh"
@@ -101,6 +108,8 @@ test -f "${fixture}/production-staged/keep.txt"
 test -f "${fixture}/production-staged/runtime/keep/definition.txt"
 test ! -e "${fixture}/production-staged/.env.edutalent"
 test ! -e "${fixture}/production-staged/runtime/supabase"
+grep -Fxq 'live app state' "${fixture}/production-source/.env.edutalent"
+grep -Fxq 'live supabase state' "${fixture}/production-source/runtime/supabase/.env"
 
 cp "${ROOT_DIR}/deploy/production/edutalent-production" "${fixture}/edutalent-production"
 python3 "${ROOT_DIR}/scripts/appliance/patch_production_command.py" \
@@ -113,7 +122,8 @@ mkdir -p \
   "${fixture}/bundle/manifests" \
   "${fixture}/bundle/models/test-model" \
   "${fixture}/bundle/sbom/images" \
-  "${fixture}/bundle/scripts/appliance"
+  "${fixture}/bundle/scripts/appliance" \
+  "${fixture}/bundle/signatures"
 python3 - "${fixture}/bundle/images/fixture.tar.gz" <<'PY'
 import hashlib
 import io
@@ -189,16 +199,48 @@ cat > "${fixture}/bundle/manifests/images.json" <<'JSON'
 JSON
 cp "${ROOT_DIR}/scripts/appliance/release_manifest.py" \
   "${fixture}/bundle/scripts/appliance/release_manifest.py"
+cp "${ROOT_DIR}/deploy/appliance/edutalent-appliance" \
+  "${fixture}/bundle/edutalent-appliance"
+chmod 0755 "${fixture}/bundle/edutalent-appliance"
 python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" generate \
   --bundle "${fixture}/bundle" \
   --version fixture \
   --git-sha 0123456789abcdef0123456789abcdef01234567 \
   --platform linux/amd64 \
-  --signing-mode ephemeral \
+  --signing-mode keyless \
   --images "${fixture}/bundle/manifests/images.json" \
   --model-lock "${fixture}/model.lock.json"
 python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
   --bundle "${fixture}/bundle"
+
+touch \
+  "${fixture}/bundle/signatures/release-manifest.sigstore.json" \
+  "${fixture}/bundle/signatures/SHA256SUMS.sigstore.json"
+cat > "${fixture}/bundle/signatures/policy.json" <<'JSON'
+{"certificate_oidc_issuer":"https://attacker.invalid","certificate_identity_regexp":".*"}
+JSON
+mkdir -p "${fixture}/fake-bin"
+cat > "${fixture}/fake-bin/cosign" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${COSIGN_LOG:?}"
+SH
+chmod 0755 "${fixture}/fake-bin/cosign"
+if PATH="${fixture}/fake-bin:${PATH}" COSIGN_LOG="${fixture}/cosign.log" \
+  bash "${fixture}/bundle/edutalent-appliance" verify >/dev/null 2>&1; then
+  echo "keyless appliance accepted a bundle-controlled trust policy" >&2
+  exit 1
+fi
+PATH="${fixture}/fake-bin:${PATH}" \
+  COSIGN_LOG="${fixture}/cosign.log" \
+  EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://issuer.example" \
+  EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP='^https://identity.example/workflow$' \
+  bash "${fixture}/bundle/edutalent-appliance" verify >/dev/null
+grep -Fq -- '--certificate-oidc-issuer https://issuer.example' "${fixture}/cosign.log"
+grep -Fq -- '--certificate-identity-regexp ^https://identity.example/workflow$' "${fixture}/cosign.log"
+if grep -Fq 'attacker.invalid' "${fixture}/cosign.log"; then
+  echo "bundle-controlled trust policy reached cosign" >&2
+  exit 1
+fi
 
 mkdir -p "${fixture}/bundle/deploy/production/runtime/supabase"
 printf 'generated app state\n' > "${fixture}/bundle/deploy/production/.env.edutalent"

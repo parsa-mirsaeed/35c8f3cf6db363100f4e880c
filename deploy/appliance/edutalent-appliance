@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR}/../../scripts/appliance/release_manifest.py" ]]; then
+  ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+else
+  ROOT_DIR="${SCRIPT_DIR}"
+fi
+MANIFEST="${ROOT_DIR}/manifests/release-manifest.json"
+PRODUCTION_DIR="${ROOT_DIR}/deploy/production"
+MODEL_DIR="${ROOT_DIR}/models/local-bge-v1"
+LOCKED_COMPOSE="${ROOT_DIR}/manifests/compose.locked.yaml"
+
+usage() {
+  cat <<'USAGE'
+EduTalent air-gapped appliance
+
+Usage: edutalent-appliance <command> [arguments]
+
+Commands:
+  verify                 Verify manifest, checksums, signature, and release policy
+  load                   Load every packaged OCI/Docker image without registry access
+  init                   Generate fresh installation secrets using the packaged tools image
+  start                  Start the complete appliance with pull policy disabled
+  stop                   Stop the appliance without deleting data
+  status                 Show appliance service status
+  checks                 Run database, gateway, AI outage/recovery, and Qdrant checks
+  install <directory>    Copy the verified appliance to a destination directory
+  help                   Show this help
+USAGE
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "Required command not found: $1" >&2
+    exit 1
+  }
+}
+
+manifest_value() {
+  local expression="$1"
+  python3 - "${MANIFEST}" "${expression}" <<'PY'
+import json
+import sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+value = manifest
+for part in sys.argv[2].split("."):
+    value = value[part]
+print(value)
+PY
+}
+
+host_platform() {
+  local machine
+  machine="$(uname -m)"
+  case "${machine}" in
+    x86_64|amd64) echo linux/amd64 ;;
+    aarch64|arm64) echo linux/arm64 ;;
+    *) echo "Unsupported host architecture: ${machine}" >&2; return 1 ;;
+  esac
+}
+
+verify_signature() {
+  local manifest_signature="${ROOT_DIR}/signatures/release-manifest.sig"
+  local public_key="${ROOT_DIR}/signatures/verification.pub"
+  local sigstore_bundle="${ROOT_DIR}/signatures/release-manifest.sigstore.json"
+  local policy="${ROOT_DIR}/signatures/policy.json"
+
+  if [[ -f "${manifest_signature}" && -f "${public_key}" ]]; then
+    require_command cosign
+    cosign verify-blob \
+      --key "${public_key}" \
+      --signature "${manifest_signature}" \
+      "${MANIFEST}" >/dev/null
+    echo "Verified release manifest with packaged public key."
+    return 0
+  fi
+
+  if [[ -f "${sigstore_bundle}" && -f "${policy}" ]]; then
+    require_command cosign
+    local issuer identity
+    issuer="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["certificate_oidc_issuer"])' "${policy}")"
+    identity="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["certificate_identity_regexp"])' "${policy}")"
+    cosign verify-blob \
+      --bundle "${sigstore_bundle}" \
+      --certificate-oidc-issuer "${issuer}" \
+      --certificate-identity-regexp "${identity}" \
+      "${MANIFEST}" >/dev/null
+    echo "Verified keyless release manifest signature."
+    return 0
+  fi
+
+  echo "Release signature material is missing." >&2
+  return 1
+}
+
+verify_bundle() {
+  require_command python3
+  [[ -f "${MANIFEST}" ]] || { echo "Missing release manifest: ${MANIFEST}" >&2; exit 1; }
+  python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify --bundle "${ROOT_DIR}"
+  verify_signature
+  local expected actual
+  expected="$(manifest_value release.platform)"
+  actual="$(host_platform)"
+  [[ "${expected}" == "${actual}" ]] || {
+    echo "Appliance platform ${expected} does not match host ${actual}." >&2
+    exit 1
+  }
+}
+
+image_rows() {
+  python3 - "${MANIFEST}" <<'PY'
+import json
+import sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+for image in manifest["images"]:
+    print(f"{image['archive']}\t{image['local_tag']}")
+PY
+}
+
+tools_image() {
+  python3 - "${MANIFEST}" <<'PY'
+import json
+import sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+for image in manifest["images"]:
+    if image["component"] == "appliance-tools":
+        print(image["local_tag"])
+        raise SystemExit(0)
+raise SystemExit("appliance-tools image is missing from the manifest")
+PY
+}
+
+load_images() {
+  verify_bundle
+  require_command docker
+  while IFS=$'\t' read -r archive tag; do
+    echo "Loading ${tag}"
+    gzip -dc "${ROOT_DIR}/${archive}" | docker load >/dev/null
+    docker image inspect "${tag}" >/dev/null
+  done < <(image_rows)
+  echo "All appliance images loaded without registry access."
+}
+
+production() {
+  local command="$1"
+  shift
+  export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
+  export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
+  exec bash "${PRODUCTION_DIR}/edutalent-production" "${command}" "$@"
+}
+
+init_secrets() {
+  load_images
+  [[ -d "${PRODUCTION_DIR}/runtime/supabase" ]] || {
+    echo "Packaged Supabase runtime is missing." >&2
+    exit 1
+  }
+  if [[ ! -f "${PRODUCTION_DIR}/.env.edutalent" ]]; then
+    cp "${PRODUCTION_DIR}/.env.edutalent.example" "${PRODUCTION_DIR}/.env.edutalent"
+    chmod 600 "${PRODUCTION_DIR}/.env.edutalent"
+    echo "Created ${PRODUCTION_DIR}/.env.edutalent."
+    echo "Set domains, administrative CIDRs, and absolute TLS paths, then rerun init."
+    return 0
+  fi
+  local tools
+  tools="$(tools_image)"
+  docker run --rm --network none \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp \
+    -v "${ROOT_DIR}:/appliance" \
+    -w /appliance/deploy/production \
+    "${tools}" ./generate-secrets.sh
+}
+
+install_bundle() {
+  local destination="${1:-}"
+  [[ -n "${destination}" ]] || { echo "install requires a destination directory" >&2; exit 2; }
+  verify_bundle
+  destination="$(mkdir -p "${destination}" && cd "${destination}" && pwd)"
+  [[ "${destination}" != "${ROOT_DIR}" ]] || { echo "destination is the current bundle" >&2; exit 2; }
+  require_command tar
+  (cd "${ROOT_DIR}" && tar --exclude='./deploy/production/.env.edutalent' --exclude='./deploy/production/runtime/supabase/.env' -cf - .) \
+    | (cd "${destination}" && tar -xf -)
+  chmod 0755 "${destination}/edutalent-appliance"
+  echo "Installed verified appliance at ${destination}"
+}
+
+command="${1:-help}"
+shift || true
+case "${command}" in
+  verify) verify_bundle ;;
+  load) load_images ;;
+  init) init_secrets ;;
+  start)
+    load_images
+    production up "$@"
+    ;;
+  stop) production down "$@" ;;
+  status) production ps "$@" ;;
+  checks)
+    export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
+    export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
+    bash "${PRODUCTION_DIR}/edutalent-production" database-check
+    bash "${PRODUCTION_DIR}/edutalent-production" gateway-check
+    bash "${PRODUCTION_DIR}/edutalent-production" ai-check
+    bash "${PRODUCTION_DIR}/edutalent-production" qdrant-check
+    ;;
+  install) install_bundle "$@" ;;
+  help|-h|--help) usage ;;
+  *) echo "Unknown command: ${command}" >&2; usage >&2; exit 2 ;;
+esac

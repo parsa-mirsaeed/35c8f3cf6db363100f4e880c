@@ -8,5 +8,8 @@ target
 dist
 bin-build
 node_modules
+deploy/appliance
+scripts/appliance
+docs
 .DS_Store
 *.log

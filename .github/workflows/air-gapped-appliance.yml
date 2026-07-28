@@ -50,7 +50,7 @@ permissions:
   attestations: write
 
 concurrency:
-  group: air-gapped-appliance-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -78,7 +78,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'full-validation')
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     outputs:
       version: ${{ steps.version.outputs.version }}
       bundle_dir: ${{ steps.version.outputs.bundle_dir }}
@@ -87,10 +87,6 @@ jobs:
         with:
           fetch-depth: 0
           show-progress: false
-
-      - uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - uses: docker/setup-buildx-action@v3
         with:
@@ -105,9 +101,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: scripts/appliance/requirements.txt
 
       - name: Install pinned connected-builder model client
-        run: python -m pip install --require-hashes -r scripts/appliance/requirements.txt
+        run: python -m pip install -r scripts/appliance/requirements.txt
 
       - id: version
         name: Resolve exact appliance version
@@ -214,7 +211,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'full-validation')
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
@@ -252,12 +249,12 @@ jobs:
     name: Publish signed multi-architecture GHCR images
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish)
+      (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')
     needs:
       - validate
       - multiarch
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
@@ -390,7 +387,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-          PUBLISH_REQUESTED: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+          PUBLISH_REQUESTED: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           OFFLINE_RESULT: ${{ needs.build-offline.result }}
           MULTIARCH_RESULT: ${{ needs.multiarch.result }}

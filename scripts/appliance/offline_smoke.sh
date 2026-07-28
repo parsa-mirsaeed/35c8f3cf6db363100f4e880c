@@ -43,7 +43,7 @@ done
 "${appliance}" load
 for tag in "${local_tags[@]}"; do
   docker image inspect "${tag}" >/dev/null
- done
+done
 
 mkdir -p "${tls_dir}"
 openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \

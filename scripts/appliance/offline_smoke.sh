@@ -21,6 +21,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+signing_mode="$(python3 - "${bundle}/manifests/release-manifest.json" <<'PY'
+import json
+import sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["release"]["signing_mode"])
+PY
+)"
+if [[ "${signing_mode}" == "keyless" && "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required for CI keyless verification}"
+  : "${GITHUB_REF:?GITHUB_REF is required for CI keyless verification}"
+  export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"
+  export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/air-gapped-appliance\\.yml@${GITHUB_REF}$"
+fi
+
 "${appliance}" verify
 
 mapfile -t local_tags < <(python3 - "${bundle}/manifests/release-manifest.json" <<'PY'

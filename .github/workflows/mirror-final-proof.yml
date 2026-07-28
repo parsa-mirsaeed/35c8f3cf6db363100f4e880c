@@ -21,19 +21,20 @@ jobs:
     name: Dispatch and verify complete public-runner proof
     if: contains(github.event.pull_request.labels.*.name, 'full-validation')
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
     env:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
-      - name: Dispatch exact-head Package and Production Foundation
+      - name: Dispatch exact-head Package, Production, and Appliance workflows
         shell: bash
         run: |
           set -euo pipefail
           gh workflow run package.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
           gh workflow run production-foundation.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
+          gh workflow run air-gapped-appliance.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
 
       - name: Resolve dispatched run IDs
         id: runs
@@ -64,10 +65,13 @@ jobs:
 
           package_run_id="$(find_run 'Package')"
           production_run_id="$(find_run 'Production Foundation')"
+          appliance_run_id="$(find_run 'Air-gapped Appliance')"
           echo "package_run_id=$package_run_id" >> "$GITHUB_OUTPUT"
           echo "production_run_id=$production_run_id" >> "$GITHUB_OUTPUT"
+          echo "appliance_run_id=$appliance_run_id" >> "$GITHUB_OUTPUT"
           echo "Package run: $package_run_id"
           echo "Production Foundation run: $production_run_id"
+          echo "Air-gapped Appliance run: $appliance_run_id"
 
       - name: Wait for complete workflows
         shell: bash
@@ -76,6 +80,8 @@ jobs:
           gh run watch '${{ steps.runs.outputs.package_run_id }}' \
             --repo "$REPOSITORY" --exit-status
           gh run watch '${{ steps.runs.outputs.production_run_id }}' \
+            --repo "$REPOSITORY" --exit-status
+          gh run watch '${{ steps.runs.outputs.appliance_run_id }}' \
             --repo "$REPOSITORY" --exit-status
 
       - name: Enforce exact head and required jobs
@@ -89,14 +95,18 @@ jobs:
           gh run view '${{ steps.runs.outputs.production_run_id }}' \
             --repo "$REPOSITORY" \
             --json headSha,event,status,conclusion,jobs,url > production-run.json
+          gh run view '${{ steps.runs.outputs.appliance_run_id }}' \
+            --repo "$REPOSITORY" \
+            --json headSha,event,status,conclusion,jobs,url > appliance-run.json
 
-          python3 - "$HEAD_SHA" package-run.json production-run.json <<'PY'
+          python3 - "$HEAD_SHA" package-run.json production-run.json appliance-run.json <<'PY'
           import json
           import sys
 
-          expected_sha, package_path, production_path = sys.argv[1:]
+          expected_sha, package_path, production_path, appliance_path = sys.argv[1:]
           package = json.load(open(package_path, encoding="utf-8"))
           production = json.load(open(production_path, encoding="utf-8"))
+          appliance = json.load(open(appliance_path, encoding="utf-8"))
 
           def require_run(run, name):
               assert run["headSha"] == expected_sha, (name, run["headSha"], expected_sha)
@@ -106,6 +116,7 @@ jobs:
 
           require_run(package, "Package")
           require_run(production, "Production Foundation")
+          require_run(appliance, "Air-gapped Appliance")
 
           package_jobs = {job["name"]: job["conclusion"] for job in package["jobs"]}
           for job_name in (
@@ -125,7 +136,23 @@ jobs:
                   production_jobs.get(job_name),
               )
 
-          print("Complete exact-head Package and Production Foundation proof verified.")
+          appliance_jobs = {job["name"]: job["conclusion"] for job in appliance["jobs"]}
+          for job_name in (
+              "Validate appliance definitions",
+              "Build and verify complete air-gapped appliance",
+              "Build custom images for amd64 and arm64",
+              "Air-gapped appliance gate",
+          ):
+              assert appliance_jobs.get(job_name) == "success", (
+                  job_name,
+                  appliance_jobs.get(job_name),
+              )
+          assert appliance_jobs.get("Publish signed multi-architecture GHCR images") == "skipped", appliance_jobs
+
+          print(
+              "Complete exact-head Package, Production Foundation, and "
+              "Air-gapped Appliance proof verified."
+          )
           PY
 
       - name: Upload dispatched-run evidence
@@ -135,5 +162,6 @@ jobs:
           path: |
             package-run.json
             production-run.json
+            appliance-run.json
           if-no-files-found: error
           retention-days: 14

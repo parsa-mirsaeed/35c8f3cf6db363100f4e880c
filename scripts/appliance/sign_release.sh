@@ -7,7 +7,9 @@ Usage: sign_release.sh <bundle-dir> <ephemeral|keyless>
 
 Ephemeral mode proves signing and verification during pull-request validation and
 packages only the generated public key. Keyless mode uses GitHub OIDC and emits a
-Sigstore bundle suitable for tagged releases.
+Sigstore bundle suitable for tagged releases. The accepted keyless issuer and
+workflow identity are intentionally not packaged; verifiers must obtain that trust
+policy independently.
 USAGE
 }
 
@@ -49,12 +51,6 @@ case "${mode}" in
     cosign sign-blob --yes \
       --bundle "${signatures}/SHA256SUMS.sigstore.json" \
       "${sums}" >/dev/null
-    cat > "${signatures}/policy.json" <<'JSON'
-{
-  "certificate_oidc_issuer": "https://token.actions.githubusercontent.com",
-  "certificate_identity_regexp": "^https://github.com/parsa-mirsaeed/35c8f3cf6db363100f4e880c/.github/workflows/air-gapped-appliance.yml@refs/(heads/main|tags/v.*)$"
-}
-JSON
     ;;
   *) usage >&2; exit 2 ;;
 esac

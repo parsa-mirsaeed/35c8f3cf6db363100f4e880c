@@ -24,6 +24,12 @@ PRIVATE_KEY_MARKERS = (
     b"-----BEGIN RSA " + b"PRIVATE KEY-----",
 )
 TEXT_LIMIT = 4 * 1024 * 1024
+MUTABLE_INSTALLATION_FILES = frozenset(
+    {
+        "deploy/production/.env.edutalent",
+        "deploy/production/runtime/supabase/.env",
+    }
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -51,6 +57,10 @@ def is_manifest_input(relative: Path) -> bool:
         "SHA256SUMS",
         "manifests/release-manifest.json",
     } and not value.startswith("signatures/")
+
+
+def is_mutable_installation_file(relative: Path) -> bool:
+    return relative.as_posix() in MUTABLE_INSTALLATION_FILES
 
 
 def reject_forbidden_file(root: Path, path: Path) -> None:
@@ -238,6 +248,7 @@ def generate(args: argparse.Namespace) -> None:
             "version": args.version,
             "git_sha": args.git_sha,
             "platform": args.platform,
+            "signing_mode": args.signing_mode,
             "created_by": "scripts/appliance/build.sh",
         },
         "images": validate_images(root, images, args.platform),
@@ -266,6 +277,8 @@ def verify(args: argparse.Namespace) -> None:
         raise RuntimeError("release manifest git SHA is invalid")
     if release.get("platform") not in {"linux/amd64", "linux/arm64"}:
         raise RuntimeError("release manifest platform is invalid")
+    if release.get("signing_mode") not in {"ephemeral", "keyless"}:
+        raise RuntimeError("release manifest signing mode is invalid")
     expected_files = {row["path"]: row for row in manifest.get("files", [])}
     if not expected_files:
         raise RuntimeError("release file inventory is empty")
@@ -273,6 +286,7 @@ def verify(args: argparse.Namespace) -> None:
         path.relative_to(root).as_posix()
         for path in relative_files(root)
         if is_manifest_input(path.relative_to(root))
+        and not is_mutable_installation_file(path.relative_to(root))
     }
     if actual_inputs != set(expected_files):
         extra = sorted(actual_inputs.difference(expected_files))
@@ -281,7 +295,12 @@ def verify(args: argparse.Namespace) -> None:
     for relative, row in expected_files.items():
         path = root / relative
         reject_forbidden_file(root, path)
-        if sha256_file(path) != row["sha256"] or path.stat().st_size != row["size"]:
+        actual_mode = format(stat.S_IMODE(path.stat().st_mode), "04o")
+        if (
+            sha256_file(path) != row["sha256"]
+            or path.stat().st_size != row["size"]
+            or actual_mode != row.get("mode")
+        ):
             raise RuntimeError(f"release file integrity failure: {relative}")
     sums: dict[str, str] = {}
     for line in sums_path.read_text(encoding="utf-8").splitlines():
@@ -325,6 +344,9 @@ def parse_args() -> argparse.Namespace:
     generate_parser.add_argument("--version", required=True)
     generate_parser.add_argument("--git-sha", required=True)
     generate_parser.add_argument("--platform", required=True)
+    generate_parser.add_argument(
+        "--signing-mode", required=True, choices=("ephemeral", "keyless")
+    )
     generate_parser.add_argument("--images", required=True, type=Path)
     generate_parser.add_argument("--model-lock", required=True, type=Path)
     verify_parser = subparsers.add_parser("verify")

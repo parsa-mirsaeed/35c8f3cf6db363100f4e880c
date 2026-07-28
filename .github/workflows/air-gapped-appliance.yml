@@ -1,0 +1,433 @@
+name: Air-gapped Appliance
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+    paths:
+      - Dockerfile
+      - Dockerfile.appliance-tools
+      - compose.yaml
+      - compose.release.yaml
+      - edutalent
+      - Makefile
+      - deploy/appliance/**
+      - deploy/production/**
+      - scripts/appliance/**
+      - scripts/ci/**
+      - migrations/**
+      - packages/**
+      - .github/workflows/air-gapped-appliance.yml
+      - .github/workflows/package.yml
+      - .github/workflows/mirror-final-proof.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Appliance version; defaults to the exact commit prefix
+        required: false
+        type: string
+      publish:
+        description: Publish signed multi-architecture custom images to GHCR
+        required: false
+        default: false
+        type: boolean
+      create_archive:
+        description: Create split offline release archive parts
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: air-gapped-appliance-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  APP_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-app
+  TOOLS_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-appliance-tools
+
+jobs:
+  validate:
+    name: Validate appliance definitions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Validate scripts, lock files, and tamper detection
+        run: bash scripts/appliance/validate.sh
+
+  build-offline:
+    name: Build and verify complete air-gapped appliance
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'full-validation')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      bundle_dir: ${{ steps.version.outputs.bundle_dir }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          show-progress: false
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          name: edutalent-appliance-builder
+          keep-state: true
+
+      - uses: sigstore/cosign-installer@v3
+
+      - uses: anchore/sbom-action/download-syft@v0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned connected-builder model client
+        run: python -m pip install --require-hashes -r scripts/appliance/requirements.txt
+
+      - id: version
+        name: Resolve exact appliance version
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested='${{ inputs.version }}'
+          if [[ -n "${requested}" ]]; then
+            version="${requested}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${GITHUB_SHA::12}"
+          fi
+          test -n "${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "bundle_dir=dist/edutalent-appliance-${version}-amd64" >> "${GITHUB_OUTPUT}"
+
+      - name: Build every selected image, model, SBOM, manifest, and signature
+        shell: bash
+        env:
+          EDUTALENT_APPLIANCE_PLATFORM: linux/amd64
+          EDUTALENT_APPLIANCE_SIGNING_MODE: ephemeral
+          EDUTALENT_APPLIANCE_CREATE_ARCHIVE: ${{ inputs.create_archive || false }}
+          EDUTALENT_BUILD_CACHE_SCOPE: air-gapped-appliance-amd64
+        run: |
+          set -o pipefail
+          bash scripts/appliance/build.sh '${{ steps.version.outputs.version }}' \
+            2>&1 | tee appliance-build.log
+
+      - name: Prove first startup with all registry pulls disabled
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/appliance/offline_smoke.sh '${{ steps.version.outputs.bundle_dir }}' \
+            2>&1 | tee appliance-offline-smoke.log
+
+      - name: Write exact-head appliance evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle='${{ steps.version.outputs.bundle_dir }}'
+          python3 - "${bundle}" "${GITHUB_SHA}" > appliance-evidence.json <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          bundle = Path(sys.argv[1])
+          expected_sha = sys.argv[2]
+          manifest_path = bundle / "manifests/release-manifest.json"
+          manifest = json.load(manifest_path.open(encoding="utf-8"))
+          assert manifest["release"]["git_sha"] == expected_sha
+          assert manifest["release"]["platform"] == "linux/amd64"
+          assert len(manifest["images"]) >= 10, len(manifest["images"])
+          assert manifest["model"]["revision"] == "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+          assert all(image["source_digest"].startswith("sha256:") for image in manifest["images"])
+          assert all(not image["local_tag"].endswith(":latest") for image in manifest["images"])
+          evidence = {
+              "head_sha": expected_sha,
+              "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+              "image_count": len(manifest["images"]),
+              "platform": manifest["release"]["platform"],
+              "model_revision": manifest["model"]["revision"],
+              "offline_startup": "success",
+              "registry_pull_policy": "never",
+          }
+          print(json.dumps(evidence, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload appliance proof and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: air-gapped-appliance-evidence
+          path: |
+            appliance-build.log
+            appliance-offline-smoke.log
+            appliance-evidence.json
+            ${{ steps.version.outputs.bundle_dir }}/manifests/**
+            ${{ steps.version.outputs.bundle_dir }}/signatures/**
+            ${{ steps.version.outputs.bundle_dir }}/sbom/**
+            ${{ steps.version.outputs.bundle_dir }}/models/local-bge-v1/MODEL_METADATA.json
+            ${{ steps.version.outputs.bundle_dir }}/models/local-bge-v1/MODEL_SHA256SUMS
+            dist/edutalent-appliance-*.parts.SHA256SUMS
+            dist/edutalent-appliance-*.tar.gz.SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop and remove appliance smoke data
+        if: always()
+        shell: bash
+        run: |
+          bundle='${{ steps.version.outputs.bundle_dir }}'
+          if [[ -x "${bundle}/edutalent-appliance" ]]; then
+            "${bundle}/edutalent-appliance" stop >/dev/null 2>&1 || true
+          fi
+          docker system prune --all --force --volumes >/dev/null 2>&1 || true
+
+  multiarch:
+    name: Build custom images for amd64 and arm64
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'full-validation')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build runtime image for both supported architectures
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: false
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=airgap-multiarch-app
+          cache-to: type=gha,mode=max,scope=airgap-multiarch-app
+
+      - name: Build installer tools image for both supported architectures
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.appliance-tools
+          platforms: linux/amd64,linux/arm64
+          push: false
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=airgap-multiarch-tools
+          cache-to: type=gha,mode=max,scope=airgap-multiarch-tools
+
+  publish:
+    name: Publish signed multi-architecture GHCR images
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    needs:
+      - validate
+      - multiarch
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: version
+        name: Resolve publish version
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested='${{ inputs.version }}'
+          if [[ -n "${requested}" ]]; then
+            version="${requested}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${GITHUB_SHA::12}"
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - id: app
+        name: Publish EduTalent runtime image with SBOM and provenance
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.APP_IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.APP_IMAGE }}:sha-${{ github.sha }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=airgap-publish-app
+          cache-to: type=gha,mode=max,scope=airgap-publish-app
+
+      - id: tools
+        name: Publish appliance tools image with SBOM and provenance
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.appliance-tools
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.TOOLS_IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.TOOLS_IMAGE }}:sha-${{ github.sha }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=airgap-publish-tools
+          cache-to: type=gha,mode=max,scope=airgap-publish-tools
+
+      - name: Sign both published image indexes with GitHub OIDC
+        env:
+          APP_DIGEST: ${{ steps.app.outputs.digest }}
+          TOOLS_DIGEST: ${{ steps.tools.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${APP_IMAGE}@${APP_DIGEST}"
+          cosign sign --yes "${TOOLS_IMAGE}@${TOOLS_DIGEST}"
+
+      - name: Attest runtime image build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.APP_IMAGE }}
+          subject-digest: ${{ steps.app.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest tools image build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.TOOLS_IMAGE }}
+          subject-digest: ${{ steps.tools.outputs.digest }}
+          push-to-registry: true
+
+      - name: Write publication evidence
+        shell: bash
+        env:
+          APP_DIGEST: ${{ steps.app.outputs.digest }}
+          TOOLS_DIGEST: ${{ steps.tools.outputs.digest }}
+        run: |
+          cat > ghcr-publication-evidence.json <<EOF
+          {
+            "head_sha": "${GITHUB_SHA}",
+            "version": "${{ steps.version.outputs.version }}",
+            "platforms": ["linux/amd64", "linux/arm64"],
+            "app": "${APP_IMAGE}@${APP_DIGEST}",
+            "tools": "${TOOLS_IMAGE}@${TOOLS_DIGEST}",
+            "signed": true,
+            "sbom": true,
+            "provenance": true
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ghcr-publication-evidence
+          path: ghcr-publication-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  gate:
+    name: Air-gapped appliance gate
+    if: always()
+    needs:
+      - validate
+      - build-offline
+      - multiarch
+      - publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enforce exact required outcomes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PUBLISH_REQUESTED: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          OFFLINE_RESULT: ${{ needs.build-offline.result }}
+          MULTIARCH_RESULT: ${{ needs.multiarch.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "${VALIDATE_RESULT}" = success
+          require_full=false
+          if [[ "${EVENT_NAME}" != pull_request || ",${LABELS}," == *",full-validation,"* ]]; then
+            require_full=true
+          fi
+          if [[ "${require_full}" == true ]]; then
+            test "${OFFLINE_RESULT}" = success
+            test "${MULTIARCH_RESULT}" = success
+          else
+            test "${OFFLINE_RESULT}" = skipped
+            test "${MULTIARCH_RESULT}" = skipped
+          fi
+          if [[ "${PUBLISH_REQUESTED}" == true ]]; then
+            test "${PUBLISH_RESULT}" = success
+          else
+            test "${PUBLISH_RESULT}" = skipped
+          fi
+          cat > air-gapped-appliance-gate.json <<EOF
+          {
+            "head_sha": "${HEAD_SHA}",
+            "validation": "${VALIDATE_RESULT}",
+            "offline_appliance": "${OFFLINE_RESULT}",
+            "multiarch": "${MULTIARCH_RESULT}",
+            "ghcr_publish": "${PUBLISH_RESULT}"
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: air-gapped-appliance-gate
+          path: air-gapped-appliance-gate.json
+          if-no-files-found: error
+          retention-days: 14

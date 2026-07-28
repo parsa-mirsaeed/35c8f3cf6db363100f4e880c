@@ -117,11 +117,75 @@ jobs:
               assert full_jobs.get(job_name) == "success", (job_name, full_jobs.get(job_name))
           PY
 
-      - name: Dispatch complete exact-head Production Foundation
+      - name: Reuse or dispatch complete exact-head Production Foundation
         id: production
         shell: bash
         run: |
           set -euo pipefail
+
+          pr_run_id="$(gh run list \
+            --repo "$REPOSITORY" \
+            --workflow 'Production Foundation' \
+            --branch "$HEAD_REF" \
+            --event pull_request \
+            --limit 50 \
+            --json databaseId,headSha \
+            --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end")"
+
+          if [[ -n "$pr_run_id" ]]; then
+            gh run watch "$pr_run_id" --repo "$REPOSITORY" --exit-status
+            gh run view "$pr_run_id" \
+              --repo "$REPOSITORY" \
+              --json headSha,event,status,conclusion,jobs,url > production-pr-run.json
+
+            set +e
+            python3 - "$HEAD_SHA" production-pr-run.json <<'PY'
+          import json
+          import sys
+
+          expected_sha, path = sys.argv[1:]
+          run = json.load(open(path, encoding="utf-8"))
+          assert run["headSha"] == expected_sha, (run["headSha"], expected_sha)
+          assert run["event"] == "pull_request", run["event"]
+          assert run["status"] == "completed", run["status"]
+          assert run["conclusion"] == "success", run["conclusion"]
+          jobs = {job["name"]: job["conclusion"] for job in run["jobs"]}
+          required = (
+              "Render and verify production topology",
+              "Apply migrations and roles on pinned Supabase PostgreSQL 17",
+              "Start complete production stack",
+          )
+          if all(jobs.get(name) == "success" for name in required):
+              raise SystemExit(0)
+          if (
+              jobs.get(required[0]) == "success"
+              and jobs.get(required[1]) == "skipped"
+              and jobs.get(required[2]) == "skipped"
+          ):
+              raise SystemExit(10)
+          raise AssertionError({name: jobs.get(name) for name in required})
+          PY
+            pr_status=$?
+            set -e
+
+            if [[ "$pr_status" -eq 0 ]]; then
+              {
+                echo "run_id=$pr_run_id"
+                echo "expected_event=pull_request"
+                echo "source=pull-request"
+              } >> "$GITHUB_OUTPUT"
+              echo "Reusing complete Production Foundation PR run: $pr_run_id"
+              exit 0
+            fi
+            if [[ "$pr_status" -ne 10 ]]; then
+              echo "Exact-head Production Foundation PR run failed required-job enforcement." >&2
+              exit "$pr_status"
+            fi
+            echo "Exact-head PR run was focused-only; dispatching complete Production Foundation."
+          else
+            echo "No exact-head Production Foundation PR run exists; dispatching complete proof."
+          fi
+
           previous="$(gh run list \
             --repo "$REPOSITORY" \
             --workflow 'Production Foundation' \
@@ -141,8 +205,12 @@ jobs:
               --json databaseId,headSha \
               --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
             if (( run_id > previous )); then
-              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-              echo "Production Foundation run: $run_id"
+              {
+                echo "run_id=$run_id"
+                echo "expected_event=workflow_dispatch"
+                echo "source=workflow-dispatch"
+              } >> "$GITHUB_OUTPUT"
+              echo "Production Foundation dispatch: $run_id"
               exit 0
             fi
             sleep 5
@@ -159,14 +227,17 @@ jobs:
           gh run view '${{ steps.production.outputs.run_id }}' \
             --repo "$REPOSITORY" \
             --json headSha,event,status,conclusion,jobs,url > production-run.json
-          python3 - "$HEAD_SHA" production-run.json <<'PY'
+          python3 - \
+            "$HEAD_SHA" \
+            '${{ steps.production.outputs.expected_event }}' \
+            production-run.json <<'PY'
           import json
           import sys
 
-          expected_sha, path = sys.argv[1:]
+          expected_sha, expected_event, path = sys.argv[1:]
           run = json.load(open(path, encoding="utf-8"))
           assert run["headSha"] == expected_sha, (run["headSha"], expected_sha)
-          assert run["event"] == "workflow_dispatch", run["event"]
+          assert run["event"] == expected_event, (run["event"], expected_event)
           assert run["status"] == "completed", run["status"]
           assert run["conclusion"] == "success", run["conclusion"]
           jobs = {job["name"]: job["conclusion"] for job in run["jobs"]}
@@ -177,6 +248,7 @@ jobs:
           ):
               assert jobs.get(job_name) == "success", (job_name, jobs.get(job_name))
           PY
+          echo "Production proof source: ${{ steps.production.outputs.source }}"
 
       - name: Dispatch exact-head Package after Production Foundation
         id: package
@@ -299,8 +371,12 @@ jobs:
               "Air-gapped appliance gate",
           ):
               assert jobs.get(job_name) == "success", (job_name, jobs.get(job_name))
-          assert jobs.get("Publish native ${{ matrix.arch }} GHCR images") == "skipped", jobs
-          assert jobs.get("Assemble, sign, and attest multi-architecture GHCR indexes") == "skipped", jobs
+          for job_name in (
+              "Publish native amd64 GHCR images",
+              "Publish native arm64 GHCR images",
+              "Assemble, sign, and attest multi-architecture GHCR indexes",
+          ):
+              assert jobs.get(job_name) == "skipped", (job_name, jobs.get(job_name))
           print("Complete serialized exact-head proof verified.")
           PY
 
@@ -311,6 +387,7 @@ jobs:
           path: |
             ai-run.json
             full-validation-run.json
+            production-pr-run.json
             production-run.json
             package-run.json
             appliance-run.json

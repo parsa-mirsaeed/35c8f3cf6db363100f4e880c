@@ -37,6 +37,27 @@ EDUTALENT_APPLIANCE_SIGNING_MODE=ephemeral \
 Tagged protected releases use keyless Sigstore signing and publish custom
 multi-architecture images to GHCR. Pull-request validation uses an ephemeral key
 only to prove the sign/verify mechanism; that key is not a production trust root.
+The signed manifest binds the accepted signing mode so a keyless release cannot be
+downgraded by adding an attacker-controlled public key.
+
+Keyless verification never accepts issuer or workflow identity from the bundle.
+Obtain the approved values independently from the authoritative release policy and
+export them before verifying a tagged release:
+
+```bash
+export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER=https://token.actions.githubusercontent.com
+export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP='^https://github.com/<owner>/<repository>/\.github/workflows/air-gapped-appliance\.yml@refs/tags/v.*$'
+./edutalent-appliance verify
+```
+
+Treat the verifier command and expected policy as trust-bootstrap material: obtain
+them through an independently authenticated channel rather than learning either
+value from the appliance being checked.
+
+The connected builder stages production definitions in a temporary directory,
+bootstraps Supabase there, and removes the staging tree on exit. Existing production
+configuration and generated secrets in the checkout are never overwritten or
+deleted by an appliance build.
 
 ## Staged validation
 
@@ -95,7 +116,9 @@ archives in lexical order when needed, then:
 The first `init` creates `deploy/production/.env.edutalent`. Set the three domains,
 restricted administrative CIDRs, and absolute operator-supplied TLS certificate
 and key paths. Run `init` again to generate fresh installation-specific secrets
-inside the packaged, network-disabled tools container.
+inside the packaged, network-disabled tools container. Integrity verification
+permits only that file and `deploy/production/runtime/supabase/.env` as mutable
+installation state; every other appliance file remains exactly manifest-bound.
 
 ```bash
 ./edutalent-appliance start

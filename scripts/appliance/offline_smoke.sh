@@ -9,7 +9,7 @@ appliance="${bundle}/edutalent-appliance"
 production_dir="${bundle}/deploy/production"
 app_env="${production_dir}/.env.edutalent"
 supabase_env="${production_dir}/runtime/supabase/.env"
-tls_dir="${production_dir}/.offline-smoke-tls"
+tls_dir="$(mktemp -d)"
 started=false
 
 cleanup() {
@@ -27,11 +27,18 @@ import sys
 print(json.load(open(sys.argv[1], encoding="utf-8"))["release"]["signing_mode"])
 PY
 )"
-if [[ "${signing_mode}" == "keyless" && "${GITHUB_ACTIONS:-false}" == "true" ]]; then
-  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required for CI keyless verification}"
-  : "${GITHUB_REF:?GITHUB_REF is required for CI keyless verification}"
-  export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"
-  export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/air-gapped-appliance\\.yml@${GITHUB_REF}$"
+if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+  case "${signing_mode}" in
+    ephemeral)
+      export EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES=true
+      ;;
+    keyless)
+      : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required for CI keyless verification}"
+      : "${GITHUB_REF:?GITHUB_REF is required for CI keyless verification}"
+      export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"
+      export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/air-gapped-appliance\\.yml@${GITHUB_REF}$"
+      ;;
+  esac
 fi
 
 "${appliance}" verify
@@ -58,7 +65,6 @@ for tag in "${local_tags[@]}"; do
   docker image inspect "${tag}" >/dev/null
 done
 
-mkdir -p "${tls_dir}"
 openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
   -subj '/CN=app.offline.internal' \
   -addext 'subjectAltName=DNS:app.offline.internal,DNS:supabase.offline.internal,DNS:admin.offline.internal' \

@@ -48,7 +48,7 @@ grep -Fq "inputs.publish && github.ref == 'refs/heads/main'" "${air_workflow}"
 grep -Fq 'Build custom images natively for arm64' "${air_workflow}"
 grep -Fq 'Verify final PR gates then dispatch appliance proof' "${mirror_workflow}"
 grep -Fq "github.event.pull_request.draft == false" "${mirror_workflow}"
-grep -Fq "--event pull_request" "${mirror_workflow}"
+grep -Fq -- "--event pull_request" "${mirror_workflow}"
 grep -Fq "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}"
 if grep -Fq 'setup-qemu-action' "${air_workflow}"; then
   echo "Air-gapped workflow must use native architecture runners, not QEMU." >&2

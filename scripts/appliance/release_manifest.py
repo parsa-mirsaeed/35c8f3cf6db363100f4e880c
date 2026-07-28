@@ -9,6 +9,7 @@ import json
 import re
 import stat
 import sys
+import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,34 @@ def reject_forbidden_file(root: Path, path: Path) -> None:
                 raise RuntimeError(f"credentialed database URL entered release: {relative}")
 
 
+def docker_archive_identity(path: Path) -> tuple[str, set[str]]:
+    try:
+        with tarfile.open(path, mode="r:gz") as archive:
+            manifest_handle = archive.extractfile("manifest.json")
+            if manifest_handle is None:
+                raise RuntimeError("Docker archive manifest.json is missing")
+            entries = json.loads(manifest_handle.read())
+            if not isinstance(entries, list) or len(entries) != 1:
+                raise RuntimeError("each appliance archive must contain exactly one image")
+            entry = entries[0]
+            config_name = entry.get("Config", "")
+            if not isinstance(config_name, str) or not config_name.endswith(".json"):
+                raise RuntimeError("Docker archive image config is invalid")
+            config_handle = archive.extractfile(config_name)
+            if config_handle is None:
+                raise RuntimeError("Docker archive image config is missing")
+            config = config_handle.read()
+            digest = hashlib.sha256(config).hexdigest()
+            if Path(config_name).name != f"{digest}.json":
+                raise RuntimeError("Docker archive config name does not match its content digest")
+            tags = entry.get("RepoTags") or []
+            if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+                raise RuntimeError("Docker archive RepoTags are invalid")
+            return f"sha256:{digest}", set(tags)
+    except (tarfile.TarError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"invalid Docker image archive: {path.name}") from error
+
+
 def file_inventory(root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in relative_files(root):
@@ -105,7 +134,6 @@ def validate_images(root: Path, images: dict[str, Any], platform: str) -> list[d
             "services",
             "source_ref",
             "source_digest",
-            "image_id",
             "local_tag",
             "archive",
             "platform",
@@ -120,8 +148,6 @@ def validate_images(root: Path, images: dict[str, Any], platform: str) -> list[d
             raise RuntimeError(f"image platform mismatch for {record['component']}")
         if not DIGEST.fullmatch(record["source_digest"]):
             raise RuntimeError(f"invalid source digest for {record['component']}")
-        if not DIGEST.fullmatch(record["image_id"]):
-            raise RuntimeError(f"invalid image content ID for {record['component']}")
         if record["local_tag"].endswith(":latest") or "@" in record["local_tag"]:
             raise RuntimeError(f"non-immutable local tag for {record['component']}")
         if record["local_tag"] in local_tags:
@@ -135,9 +161,16 @@ def validate_images(root: Path, images: dict[str, Any], platform: str) -> list[d
         sbom = root / record["sbom"]
         if not archive.is_file() or not sbom.is_file():
             raise RuntimeError(f"missing image payload for {record['component']}")
+        image_id, archive_tags = docker_archive_identity(archive)
+        if record["local_tag"] not in archive_tags:
+            raise RuntimeError(f"archive does not contain declared tag for {record['component']}")
+        supplied_image_id = record.get("image_id")
+        if supplied_image_id is not None and supplied_image_id != image_id:
+            raise RuntimeError(f"supplied image ID mismatch for {record['component']}")
         normalized.append(
             {
                 **record,
+                "image_id": image_id,
                 "archive_sha256": sha256_file(archive),
                 "archive_size": archive.stat().st_size,
                 "sbom_sha256": sha256_file(sbom),
@@ -275,6 +308,9 @@ def verify(args: argparse.Namespace) -> None:
         archive = root / image["archive"]
         if sha256_file(archive) != image["archive_sha256"]:
             raise RuntimeError(f"image archive integrity failure: {image['component']}")
+        archive_image_id, archive_tags = docker_archive_identity(archive)
+        if archive_image_id != image["image_id"] or image["local_tag"] not in archive_tags:
+            raise RuntimeError(f"Docker archive identity failure: {image['component']}")
     print(
         "Verified immutable appliance manifest for "
         f"{release.get('version')} {release.get('platform')} at {release.get('git_sha')}"

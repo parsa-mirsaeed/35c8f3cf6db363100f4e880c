@@ -37,10 +37,13 @@ grep -Fq 'docker load' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 grep -Fq 'syft' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'linux/amd64,linux/arm64' "${ROOT_DIR}/.github/workflows/air-gapped-appliance.yml"
-! grep -R --line-number -E '(^|[/:])latest([@:]|$)' \
+if grep -R --line-number --exclude=validate.sh -E '(^|[/:])latest([@:]|$)' \
   "${ROOT_DIR}/Dockerfile.appliance-tools" \
   "${ROOT_DIR}/deploy/appliance" \
-  "${ROOT_DIR}/scripts/appliance"
+  "${ROOT_DIR}/scripts/appliance"; then
+  echo "Air-gapped release definitions contain a forbidden latest tag." >&2
+  exit 1
+fi
 
 fixture="$(mktemp -d)"
 trap 'rm -rf "${fixture}"' EXIT

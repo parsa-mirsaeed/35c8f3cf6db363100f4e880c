@@ -19,19 +19,19 @@ concurrency:
 
 jobs:
   dispatch-and-verify:
-    name: Verify final PR gates then dispatch appliance proof
+    name: Verify and serialize complete exact-head proof
     if: >-
       contains(github.event.pull_request.labels.*.name, 'full-validation') &&
       github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 300
     env:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
-      - name: Resolve exact-head pull-request validation runs
+      - name: Resolve exact-head pull-request gates
         id: pr-runs
         shell: bash
         run: |
@@ -39,7 +39,7 @@ jobs:
 
           find_pr_run() {
             local workflow="$1" attempt run_id
-            for attempt in $(seq 1 120); do
+            for attempt in $(seq 1 180); do
               run_id="$(gh run list \
                 --repo "$REPOSITORY" \
                 --workflow "$workflow" \
@@ -60,112 +60,98 @@ jobs:
 
           ai_run_id="$(find_pr_run 'AI Change Proof')"
           full_run_id="$(find_pr_run 'Full Validation')"
-          package_run_id="$(find_pr_run 'Package')"
           production_run_id="$(find_pr_run 'Production Foundation')"
-          appliance_pr_run_id="$(find_pr_run 'Air-gapped Appliance')"
           {
             echo "ai_run_id=$ai_run_id"
             echo "full_run_id=$full_run_id"
-            echo "package_run_id=$package_run_id"
             echo "production_run_id=$production_run_id"
-            echo "appliance_pr_run_id=$appliance_pr_run_id"
           } >> "$GITHUB_OUTPUT"
+          echo "AI Change Proof run: $ai_run_id"
+          echo "Full Validation run: $full_run_id"
+          echo "Production Foundation run: $production_run_id"
 
       - name: Wait for exact-head pull-request gates
         shell: bash
         run: |
           set -euo pipefail
-          for run_id in \
-            '${{ steps.pr-runs.outputs.ai_run_id }}' \
-            '${{ steps.pr-runs.outputs.full_run_id }}' \
-            '${{ steps.pr-runs.outputs.package_run_id }}' \
-            '${{ steps.pr-runs.outputs.production_run_id }}' \
-            '${{ steps.pr-runs.outputs.appliance_pr_run_id }}'; do
-            gh run watch "$run_id" --repo "$REPOSITORY" --exit-status
-          done
+          gh run watch '${{ steps.pr-runs.outputs.ai_run_id }}' \
+            --repo "$REPOSITORY" --exit-status
+          gh run watch '${{ steps.pr-runs.outputs.full_run_id }}' \
+            --repo "$REPOSITORY" --exit-status
+          gh run watch '${{ steps.pr-runs.outputs.production_run_id }}' \
+            --repo "$REPOSITORY" --exit-status
 
-      - name: Enforce exact-head pull-request gate outcomes
+      - name: Enforce AI, full validation, and production jobs
         shell: bash
         run: |
           set -euo pipefail
           gh run view '${{ steps.pr-runs.outputs.ai_run_id }}' \
             --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > ai-change-run.json
+            --json headSha,event,status,conclusion,jobs,url > ai-run.json
           gh run view '${{ steps.pr-runs.outputs.full_run_id }}' \
             --repo "$REPOSITORY" \
             --json headSha,event,status,conclusion,jobs,url > full-validation-run.json
-          gh run view '${{ steps.pr-runs.outputs.package_run_id }}' \
-            --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > package-pr-run.json
           gh run view '${{ steps.pr-runs.outputs.production_run_id }}' \
             --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > production-pr-run.json
-          gh run view '${{ steps.pr-runs.outputs.appliance_pr_run_id }}' \
-            --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > appliance-pr-run.json
+            --json headSha,event,status,conclusion,jobs,url > production-run.json
 
-          python3 - "$HEAD_SHA" \
-            ai-change-run.json \
-            full-validation-run.json \
-            package-pr-run.json \
-            production-pr-run.json \
-            appliance-pr-run.json <<'PY'
+          python3 - "$HEAD_SHA" ai-run.json full-validation-run.json production-run.json <<'PY'
           import json
           import sys
 
-          expected_sha, *paths = sys.argv[1:]
-          ai, full, package, production, appliance = [
-              json.load(open(path, encoding="utf-8")) for path in paths
-          ]
+          expected_sha, ai_path, full_path, production_path = sys.argv[1:]
+          ai = json.load(open(ai_path, encoding="utf-8"))
+          full = json.load(open(full_path, encoding="utf-8"))
+          production = json.load(open(production_path, encoding="utf-8"))
 
-          def require_run(run, name):
+          def require_pr_run(run, name):
               assert run["headSha"] == expected_sha, (name, run["headSha"], expected_sha)
               assert run["event"] == "pull_request", (name, run["event"])
               assert run["status"] == "completed", (name, run["status"])
               assert run["conclusion"] == "success", (name, run["conclusion"])
 
-          for run, name in (
-              (ai, "AI Change Proof"),
-              (full, "Full Validation"),
-              (package, "Package definitions"),
-              (production, "Production topology"),
-              (appliance, "Air-gapped definitions"),
-          ):
-              require_run(run, name)
+          require_pr_run(ai, "AI Change Proof")
+          require_pr_run(full, "Full Validation")
+          require_pr_run(production, "Production Foundation")
 
           ai_jobs = {job["name"]: job["conclusion"] for job in ai["jobs"]}
           assert ai_jobs.get("AI change gate") == "success", ai_jobs
 
           full_jobs = {job["name"]: job["conclusion"] for job in full["jobs"]}
           for job_name in (
+              "Resolve full-validation mode",
               "Full database validation",
               "Full Rust compile, lint, and tests",
               "Full validation gate",
           ):
               assert full_jobs.get(job_name) == "success", (job_name, full_jobs.get(job_name))
 
-          package_jobs = {job["name"]: job["conclusion"] for job in package["jobs"]}
-          assert package_jobs.get("Validate package definitions") == "success", package_jobs
-          assert package_jobs.get("Docker image and release bundle") == "skipped", package_jobs
-
           production_jobs = {job["name"]: job["conclusion"] for job in production["jobs"]}
-          assert production_jobs.get("Render and verify production topology") == "success", production_jobs
-          assert production_jobs.get("Apply migrations and roles on pinned Supabase PostgreSQL 17") == "skipped", production_jobs
-          assert production_jobs.get("Start complete production stack") == "skipped", production_jobs
-
-          appliance_jobs = {job["name"]: job["conclusion"] for job in appliance["jobs"]}
-          assert appliance_jobs.get("Validate appliance definitions") == "success", appliance_jobs
-          assert appliance_jobs.get("Air-gapped appliance gate") == "success", appliance_jobs
-          assert appliance_jobs.get("Build and verify complete air-gapped appliance") == "skipped", appliance_jobs
-          assert appliance_jobs.get("Build custom images natively for arm64") == "skipped", appliance_jobs
+          for job_name in (
+              "Render and verify production topology",
+              "Apply migrations and roles on pinned Supabase PostgreSQL 17",
+              "Start complete production stack",
+          ):
+              assert production_jobs.get(job_name) == "success", (
+                  job_name,
+                  production_jobs.get(job_name),
+              )
           PY
 
-      - name: Dispatch and verify complete Package proof
+      - name: Dispatch exact-head Package after prerequisite gates
+        id: package
         shell: bash
         run: |
           set -euo pipefail
+          previous="$(gh run list \
+            --repo "$REPOSITORY" \
+            --workflow 'Package' \
+            --branch "$HEAD_REF" \
+            --event workflow_dispatch \
+            --limit 50 \
+            --json databaseId,headSha \
+            --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
           gh workflow run package.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
-          run_id=''
           for attempt in $(seq 1 120); do
             run_id="$(gh run list \
               --repo "$REPOSITORY" \
@@ -174,80 +160,59 @@ jobs:
               --event workflow_dispatch \
               --limit 50 \
               --json databaseId,headSha \
-              --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end")"
-            [[ -n "$run_id" ]] && break
+              --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
+            if (( run_id > previous )); then
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "Package run: $run_id"
+              exit 0
+            fi
             sleep 5
           done
-          [[ -n "$run_id" ]] || { echo "Unable to resolve Package dispatch at $HEAD_SHA" >&2; exit 1; }
-          gh run watch "$run_id" --repo "$REPOSITORY" --exit-status
-          gh run view "$run_id" --repo "$REPOSITORY" \
+          echo "Unable to resolve newly dispatched Package run at $HEAD_SHA" >&2
+          exit 1
+
+      - name: Wait for and inspect complete Package proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run watch '${{ steps.package.outputs.run_id }}' \
+            --repo "$REPOSITORY" --exit-status
+          gh run view '${{ steps.package.outputs.run_id }}' \
+            --repo "$REPOSITORY" \
             --json headSha,event,status,conclusion,jobs,url > package-run.json
           python3 - "$HEAD_SHA" package-run.json <<'PY'
           import json
           import sys
 
-          expected, path = sys.argv[1:]
+          expected_sha, path = sys.argv[1:]
           run = json.load(open(path, encoding="utf-8"))
-          assert run["headSha"] == expected, (run["headSha"], expected)
+          assert run["headSha"] == expected_sha, (run["headSha"], expected_sha)
           assert run["event"] == "workflow_dispatch", run["event"]
           assert run["status"] == "completed", run["status"]
           assert run["conclusion"] == "success", run["conclusion"]
           jobs = {job["name"]: job["conclusion"] for job in run["jobs"]}
-          assert jobs.get("Validate package definitions") == "success", jobs
-          assert jobs.get("Docker image and release bundle") == "success", jobs
-          PY
-
-      - name: Dispatch and verify complete Production Foundation proof
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh workflow run production-foundation.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
-          run_id=''
-          for attempt in $(seq 1 120); do
-            run_id="$(gh run list \
-              --repo "$REPOSITORY" \
-              --workflow 'Production Foundation' \
-              --branch "$HEAD_REF" \
-              --event workflow_dispatch \
-              --limit 50 \
-              --json databaseId,headSha \
-              --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end")"
-            [[ -n "$run_id" ]] && break
-            sleep 5
-          done
-          [[ -n "$run_id" ]] || { echo "Unable to resolve Production dispatch at $HEAD_SHA" >&2; exit 1; }
-          gh run watch "$run_id" --repo "$REPOSITORY" --exit-status
-          gh run view "$run_id" --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > production-run.json
-          python3 - "$HEAD_SHA" production-run.json <<'PY'
-          import json
-          import sys
-
-          expected, path = sys.argv[1:]
-          run = json.load(open(path, encoding="utf-8"))
-          assert run["headSha"] == expected, (run["headSha"], expected)
-          assert run["event"] == "workflow_dispatch", run["event"]
-          assert run["status"] == "completed", run["status"]
-          assert run["conclusion"] == "success", run["conclusion"]
-          jobs = {job["name"]: job["conclusion"] for job in run["jobs"]}
-          for job_name in (
-              "Render and verify production topology",
-              "Apply migrations and roles on pinned Supabase PostgreSQL 17",
-              "Start complete production stack",
-          ):
+          for job_name in ("Validate package definitions", "Docker image and release bundle"):
               assert jobs.get(job_name) == "success", (job_name, jobs.get(job_name))
           PY
 
-      - name: Dispatch and verify complete Air-gapped Appliance proof
+      - name: Dispatch complete exact-head Air-gapped Appliance proof
+        id: appliance
         shell: bash
         run: |
           set -euo pipefail
+          previous="$(gh run list \
+            --repo "$REPOSITORY" \
+            --workflow 'Air-gapped Appliance' \
+            --branch "$HEAD_REF" \
+            --event workflow_dispatch \
+            --limit 50 \
+            --json databaseId,headSha \
+            --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
           gh workflow run air-gapped-appliance.yml \
             --repo "$REPOSITORY" \
             --ref "$HEAD_REF" \
             -f publish=false \
             -f create_archive=false
-          run_id=''
           for attempt in $(seq 1 120); do
             run_id="$(gh run list \
               --repo "$REPOSITORY" \
@@ -256,21 +221,33 @@ jobs:
               --event workflow_dispatch \
               --limit 50 \
               --json databaseId,headSha \
-              --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end")"
-            [[ -n "$run_id" ]] && break
+              --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
+            if (( run_id > previous )); then
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "Air-gapped Appliance run: $run_id"
+              exit 0
+            fi
             sleep 5
           done
-          [[ -n "$run_id" ]] || { echo "Unable to resolve appliance dispatch at $HEAD_SHA" >&2; exit 1; }
-          gh run watch "$run_id" --repo "$REPOSITORY" --exit-status
-          gh run view "$run_id" --repo "$REPOSITORY" \
+          echo "Unable to resolve newly dispatched Air-gapped Appliance run at $HEAD_SHA" >&2
+          exit 1
+
+      - name: Wait for and inspect complete appliance proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run watch '${{ steps.appliance.outputs.run_id }}' \
+            --repo "$REPOSITORY" --exit-status
+          gh run view '${{ steps.appliance.outputs.run_id }}' \
+            --repo "$REPOSITORY" \
             --json headSha,event,status,conclusion,jobs,url > appliance-run.json
           python3 - "$HEAD_SHA" appliance-run.json <<'PY'
           import json
           import sys
 
-          expected, path = sys.argv[1:]
+          expected_sha, path = sys.argv[1:]
           run = json.load(open(path, encoding="utf-8"))
-          assert run["headSha"] == expected, (run["headSha"], expected)
+          assert run["headSha"] == expected_sha, (run["headSha"], expected_sha)
           assert run["event"] == "workflow_dispatch", run["event"]
           assert run["status"] == "completed", run["status"]
           assert run["conclusion"] == "success", run["conclusion"]
@@ -282,28 +259,20 @@ jobs:
               "Air-gapped appliance gate",
           ):
               assert jobs.get(job_name) == "success", (job_name, jobs.get(job_name))
-          for job_name in (
-              "Publish native amd64 GHCR images",
-              "Publish native arm64 GHCR images",
-              "Assemble, sign, and attest multi-architecture GHCR indexes",
-          ):
-              assert jobs.get(job_name) == "skipped", (job_name, jobs.get(job_name))
-          print("Sequential exact-head Package, Production, and Air-gapped Appliance proof verified.")
+          assert jobs.get("Publish native ${{ matrix.arch }} GHCR images") == "skipped", jobs
+          assert jobs.get("Assemble, sign, and attest multi-architecture GHCR indexes") == "skipped", jobs
+          print("Complete serialized exact-head proof verified.")
           PY
 
       - name: Upload exact-head mirror evidence
-        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: mirror-final-proof
           path: |
-            ai-change-run.json
+            ai-run.json
             full-validation-run.json
-            package-pr-run.json
-            production-pr-run.json
-            appliance-pr-run.json
-            package-run.json
             production-run.json
+            package-run.json
             appliance-run.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7

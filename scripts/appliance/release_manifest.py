@@ -105,6 +105,7 @@ def validate_images(root: Path, images: dict[str, Any], platform: str) -> list[d
             "services",
             "source_ref",
             "source_digest",
+            "image_id",
             "local_tag",
             "archive",
             "platform",
@@ -119,6 +120,8 @@ def validate_images(root: Path, images: dict[str, Any], platform: str) -> list[d
             raise RuntimeError(f"image platform mismatch for {record['component']}")
         if not DIGEST.fullmatch(record["source_digest"]):
             raise RuntimeError(f"invalid source digest for {record['component']}")
+        if not DIGEST.fullmatch(record["image_id"]):
+            raise RuntimeError(f"invalid image content ID for {record['component']}")
         if record["local_tag"].endswith(":latest") or "@" in record["local_tag"]:
             raise RuntimeError(f"non-immutable local tag for {record['component']}")
         if record["local_tag"] in local_tags:
@@ -264,6 +267,8 @@ def verify(args: argparse.Namespace) -> None:
     for image in manifest.get("images", []):
         if not DIGEST.fullmatch(image.get("source_digest", "")):
             raise RuntimeError("invalid source image digest in release manifest")
+        if not DIGEST.fullmatch(image.get("image_id", "")):
+            raise RuntimeError("invalid image content ID in release manifest")
         if image["local_tag"] in image_tags:
             raise RuntimeError("duplicate image tag in release manifest")
         image_tags.add(image["local_tag"])

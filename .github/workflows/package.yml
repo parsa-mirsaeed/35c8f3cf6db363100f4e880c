@@ -62,7 +62,22 @@ jobs:
         run: cp .env.example .env
 
       - name: Validate centralized packaging and appliance definitions
-        run: bash edutalent validate
+        shell: bash
+        run: |
+          set +e
+          bash -x edutalent validate > package-definition-validation.log 2>&1
+          status=$?
+          cat package-definition-validation.log
+          exit "${status}"
+
+      - name: Upload package-definition diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-definition-validation
+          path: package-definition-validation.log
+          if-no-files-found: error
+          retention-days: 7
 
   package:
     name: Docker image and release bundle

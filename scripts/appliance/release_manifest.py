@@ -51,8 +51,11 @@ def relative_files(root: Path) -> list[Path]:
         relative = path.relative_to(root)
         if path.is_symlink():
             raise RuntimeError(f"bundle contains a symlink: {relative}")
-        if path.is_file():
-            files.append(path)
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise RuntimeError(f"bundle contains a non-regular entry: {relative}")
+        files.append(path)
     return files
 
 

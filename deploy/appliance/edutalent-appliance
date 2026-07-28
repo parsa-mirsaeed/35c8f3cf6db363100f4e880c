@@ -11,6 +11,7 @@ MANIFEST="${ROOT_DIR}/manifests/release-manifest.json"
 CHECKSUMS="${ROOT_DIR}/SHA256SUMS"
 PRODUCTION_DIR="${ROOT_DIR}/deploy/production"
 MODEL_DIR="${ROOT_DIR}/models/local-bge-v1"
+FUNCTIONS_DIR="${PRODUCTION_DIR}/runtime/supabase/volumes/functions"
 LOCKED_COMPOSE="${ROOT_DIR}/manifests/compose.locked.yaml"
 
 usage() {
@@ -205,6 +206,7 @@ production() {
   shift
   export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
   export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
+  export EDUTALENT_APPLIANCE_FUNCTIONS_DIR="${FUNCTIONS_DIR}"
   exec bash "${PRODUCTION_DIR}/edutalent-production" "${command}" "$@"
 }
 
@@ -266,6 +268,7 @@ case "${command}" in
   checks)
     export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
     export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
+    export EDUTALENT_APPLIANCE_FUNCTIONS_DIR="${FUNCTIONS_DIR}"
     bash "${PRODUCTION_DIR}/edutalent-production" database-check
     bash "${PRODUCTION_DIR}/edutalent-production" gateway-check
     bash "${PRODUCTION_DIR}/edutalent-production" ai-check

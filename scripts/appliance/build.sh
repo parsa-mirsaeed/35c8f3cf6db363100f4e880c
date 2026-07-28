@@ -262,40 +262,10 @@ if [[ -f "${ROOT_DIR}/LICENSE" ]]; then
 fi
 chmod 0755 "${BUNDLE_DIR}/edutalent-appliance" "${BUNDLE_DIR}/deploy/production/edutalent-production"
 
-python3 - "${TEMP_DIR}/service-images.tsv" "${BUNDLE_DIR}/manifests/images.json" "${BUNDLE_DIR}/manifests/compose.locked.yaml" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-service_sources = {}
-for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
-    service, source = line.split("\t", 1)
-    service_sources[service] = source
-records = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["images"]
-source_tags = {record["source_ref"]: record["local_tag"] for record in records}
-lines = ["services:"]
-for service in sorted(service_sources):
-    source = service_sources[service]
-    lines.extend([
-        f"  {service}:",
-        f"    image: {source_tags[source]}",
-        "    pull_policy: never",
-    ])
-    if service == "embedding":
-        lines.extend([
-            "    command:",
-            "      - --model-id",
-            "      - /models/local-bge-v1",
-            "      - --served-model-name",
-            "      - BAAI/bge-small-en-v1.5",
-            "    volumes:",
-            "      - type: bind",
-            "        source: ${EDUTALENT_APPLIANCE_MODEL_DIR:?EDUTALENT_APPLIANCE_MODEL_DIR is required}",
-            "        target: /models/local-bge-v1",
-            "        read_only: true",
-        ])
-Path(sys.argv[3]).write_text("\n".join(lines) + "\n", encoding="utf-8")
-PY
+python3 "${ROOT_DIR}/scripts/appliance/locked_compose.py" \
+  --service-images "${TEMP_DIR}/service-images.tsv" \
+  --images "${BUNDLE_DIR}/manifests/images.json" \
+  --output "${BUNDLE_DIR}/manifests/compose.locked.yaml"
 
 python3 - "${BUNDLE_DIR}/provenance/release-builder.json" "${GIT_SHA}" "${PLATFORM}" \
   "$(docker version --format '{{.Server.Version}}')" \

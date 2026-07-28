@@ -13,7 +13,8 @@ python3 -m py_compile \
   "${ROOT_DIR}/scripts/appliance/fetch_model.py" \
   "${ROOT_DIR}/scripts/appliance/patch_production_command.py" \
   "${ROOT_DIR}/scripts/appliance/release_manifest.py" \
-  "${ROOT_DIR}/scripts/appliance/stage_production.py"
+  "${ROOT_DIR}/scripts/appliance/stage_production.py" \
+  "${ROOT_DIR}/scripts/appliance/locked_compose.py"
 
 python3 - "${ROOT_DIR}/deploy/appliance/model.lock.json" <<'PY'
 import json
@@ -31,9 +32,9 @@ assert "pytorch_model.bin" not in lock["allow_patterns"]
 PY
 
 test "$(cat "${ROOT_DIR}/scripts/appliance/requirements.txt")" = "huggingface_hub==0.34.4"
-grep -Fq 'pull_policy: never' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'pull_policy: never' "${ROOT_DIR}/scripts/appliance/locked_compose.py"
 grep -Fq '/models/local-bge-v1' "${ROOT_DIR}/scripts/appliance/build.sh"
-grep -Fq 'if service == "embedding"' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'locked_compose.py' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'SOURCE_PRODUCTION_DIR=' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'PRODUCTION_DIR="${TEMP_DIR}/production"' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'stage_production.py' "${ROOT_DIR}/scripts/appliance/build.sh"
@@ -57,6 +58,10 @@ grep -Fq 'actual_mode' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 ! grep -Fq 'policy.json' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 grep -Fq 'syft' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'EDUTALENT_APPLIANCE_FUNCTIONS_DIR' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'edutalent-appliance-db-data' "${ROOT_DIR}/scripts/appliance/locked_compose.py"
+grep -Fq 'edutalent-appliance-storage-data' "${ROOT_DIR}/scripts/appliance/locked_compose.py"
+grep -Fq 'edutalent-appliance-studio-snippets' "${ROOT_DIR}/scripts/appliance/locked_compose.py"
 grep -Fxq 'deploy/appliance' "${ROOT_DIR}/.dockerignore"
 grep -Fxq 'scripts/appliance' "${ROOT_DIR}/.dockerignore"
 grep -Fxq 'docs' "${ROOT_DIR}/.dockerignore"
@@ -110,6 +115,46 @@ test ! -e "${fixture}/production-staged/.env.edutalent"
 test ! -e "${fixture}/production-staged/runtime/supabase"
 grep -Fxq 'live app state' "${fixture}/production-source/.env.edutalent"
 grep -Fxq 'live supabase state' "${fixture}/production-source/runtime/supabase/.env"
+
+mkdir -p "${fixture}/locked-compose"
+cat > "${fixture}/locked-compose/services.tsv" <<'TSV'
+app	registry.invalid/runtime:v1
+db	registry.invalid/postgres:v1
+embedding	registry.invalid/tei:v1
+functions	registry.invalid/functions:v1
+imgproxy	registry.invalid/imgproxy:v1
+storage	registry.invalid/storage:v1
+studio	registry.invalid/studio:v1
+TSV
+python3 - "${fixture}/locked-compose/images.json" <<'PYLOCK'
+import json
+import sys
+from pathlib import Path
+sources = (
+    "registry.invalid/runtime:v1", "registry.invalid/postgres:v1",
+    "registry.invalid/tei:v1", "registry.invalid/functions:v1",
+    "registry.invalid/imgproxy:v1", "registry.invalid/storage:v1",
+    "registry.invalid/studio:v1",
+)
+rows = [
+    {"source_ref": source, "local_tag": f"edutalent-offline/component-{index}:fixture"}
+    for index, source in enumerate(sources)
+]
+Path(sys.argv[1]).write_text(json.dumps({"images": rows}), encoding="utf-8")
+PYLOCK
+python3 "${ROOT_DIR}/scripts/appliance/locked_compose.py" \
+  --service-images "${fixture}/locked-compose/services.tsv" \
+  --images "${fixture}/locked-compose/images.json" \
+  --output "${fixture}/locked-compose/compose.yaml"
+for expected in \
+  'pull_policy: never' \
+  'edutalent-appliance-db-data' \
+  'edutalent-appliance-storage-data' \
+  'edutalent-appliance-studio-snippets' \
+  'EDUTALENT_APPLIANCE_FUNCTIONS_DIR' \
+  'read_only: true'; do
+  grep -Fq "${expected}" "${fixture}/locked-compose/compose.yaml"
+done
 
 cp "${ROOT_DIR}/deploy/production/edutalent-production" "${fixture}/edutalent-production"
 python3 "${ROOT_DIR}/scripts/appliance/patch_production_command.py" \
@@ -283,6 +328,14 @@ if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
   exit 1
 fi
 chmod 0644 "${fixture}/bundle/sbom/images/fixture.spdx.json"
+
+mkfifo "${fixture}/bundle/unsigned-pipe"
+if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+  echo "unsigned FIFO was accepted" >&2
+  exit 1
+fi
+rm -f "${fixture}/bundle/unsigned-pipe"
 
 printf 'untracked\n' > "${fixture}/bundle/untracked.txt"
 if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \

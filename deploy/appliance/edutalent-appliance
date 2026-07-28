@@ -8,6 +8,7 @@ else
   ROOT_DIR="${SCRIPT_DIR}"
 fi
 MANIFEST="${ROOT_DIR}/manifests/release-manifest.json"
+CHECKSUMS="${ROOT_DIR}/SHA256SUMS"
 PRODUCTION_DIR="${ROOT_DIR}/deploy/production"
 MODEL_DIR="${ROOT_DIR}/models/local-bge-v1"
 LOCKED_COMPOSE="${ROOT_DIR}/manifests/compose.locked.yaml"
@@ -19,7 +20,7 @@ EduTalent air-gapped appliance
 Usage: edutalent-appliance <command> [arguments]
 
 Commands:
-  verify                 Verify manifest, checksums, signature, and release policy
+  verify                 Verify manifest, checksums, signatures, and release policy
   load                   Load every packaged OCI/Docker image without registry access
   init                   Generate fresh installation secrets using the packaged tools image
   start                  Start the complete appliance with pull policy disabled
@@ -62,45 +63,58 @@ host_platform() {
   esac
 }
 
-verify_signature() {
-  local manifest_signature="${ROOT_DIR}/signatures/release-manifest.sig"
+verify_signatures() {
   local public_key="${ROOT_DIR}/signatures/verification.pub"
-  local sigstore_bundle="${ROOT_DIR}/signatures/release-manifest.sigstore.json"
+  local manifest_signature="${ROOT_DIR}/signatures/release-manifest.sig"
+  local checksums_signature="${ROOT_DIR}/signatures/SHA256SUMS.sig"
+  local manifest_bundle="${ROOT_DIR}/signatures/release-manifest.sigstore.json"
+  local checksums_bundle="${ROOT_DIR}/signatures/SHA256SUMS.sigstore.json"
   local policy="${ROOT_DIR}/signatures/policy.json"
 
-  if [[ -f "${manifest_signature}" && -f "${public_key}" ]]; then
-    require_command cosign
+  require_command cosign
+  if [[ -f "${public_key}" && -f "${manifest_signature}" && -f "${checksums_signature}" ]]; then
     cosign verify-blob \
       --key "${public_key}" \
       --signature "${manifest_signature}" \
       "${MANIFEST}" >/dev/null
-    echo "Verified release manifest with packaged public key."
+    cosign verify-blob \
+      --key "${public_key}" \
+      --signature "${checksums_signature}" \
+      "${CHECKSUMS}" >/dev/null
+    echo "Verified release manifest and checksum set with the packaged public key."
     return 0
   fi
 
-  if [[ -f "${sigstore_bundle}" && -f "${policy}" ]]; then
-    require_command cosign
+  if [[ -f "${manifest_bundle}" && -f "${checksums_bundle}" && -f "${policy}" ]]; then
     local issuer identity
     issuer="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["certificate_oidc_issuer"])' "${policy}")"
     identity="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["certificate_identity_regexp"])' "${policy}")"
     cosign verify-blob \
-      --bundle "${sigstore_bundle}" \
+      --bundle "${manifest_bundle}" \
       --certificate-oidc-issuer "${issuer}" \
       --certificate-identity-regexp "${identity}" \
       "${MANIFEST}" >/dev/null
-    echo "Verified keyless release manifest signature."
+    cosign verify-blob \
+      --bundle "${checksums_bundle}" \
+      --certificate-oidc-issuer "${issuer}" \
+      --certificate-identity-regexp "${identity}" \
+      "${CHECKSUMS}" >/dev/null
+    echo "Verified keyless release manifest and checksum-set signatures."
     return 0
   fi
 
-  echo "Release signature material is missing." >&2
+  echo "Complete release signature material is missing." >&2
   return 1
 }
 
 verify_bundle() {
   require_command python3
-  [[ -f "${MANIFEST}" ]] || { echo "Missing release manifest: ${MANIFEST}" >&2; exit 1; }
+  [[ -f "${MANIFEST}" && -f "${CHECKSUMS}" ]] || {
+    echo "Release manifest or checksum set is missing." >&2
+    exit 1
+  }
   python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify --bundle "${ROOT_DIR}"
-  verify_signature
+  verify_signatures
   local expected actual
   expected="$(manifest_value release.platform)"
   actual="$(host_platform)"
@@ -135,15 +149,32 @@ raise SystemExit("appliance-tools image is missing from the manifest")
 PY
 }
 
+all_images_loaded() {
+  require_command docker
+  while IFS=$'\t' read -r _archive tag; do
+    docker image inspect "${tag}" >/dev/null 2>&1 || return 1
+  done < <(image_rows)
+}
+
 load_images() {
   verify_bundle
   require_command docker
+  require_command gzip
   while IFS=$'\t' read -r archive tag; do
     echo "Loading ${tag}"
     gzip -dc "${ROOT_DIR}/${archive}" | docker load >/dev/null
     docker image inspect "${tag}" >/dev/null
   done < <(image_rows)
   echo "All appliance images loaded without registry access."
+}
+
+ensure_images_loaded() {
+  verify_bundle
+  if all_images_loaded; then
+    echo "All manifest-owned appliance images are already loaded."
+  else
+    load_images
+  fi
 }
 
 production() {
@@ -155,7 +186,7 @@ production() {
 }
 
 init_secrets() {
-  load_images
+  verify_bundle
   [[ -d "${PRODUCTION_DIR}/runtime/supabase" ]] || {
     echo "Packaged Supabase runtime is missing." >&2
     exit 1
@@ -167,6 +198,7 @@ init_secrets() {
     echo "Set domains, administrative CIDRs, and absolute TLS paths, then rerun init."
     return 0
   fi
+  ensure_images_loaded
   local tools
   tools="$(tools_image)"
   docker run --rm --network none \
@@ -197,7 +229,7 @@ case "${command}" in
   load) load_images ;;
   init) init_secrets ;;
   start)
-    load_images
+    ensure_images_loaded
     production up "$@"
     ;;
   stop) production down "$@" ;;

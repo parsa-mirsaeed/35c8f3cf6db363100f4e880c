@@ -32,8 +32,10 @@ PY
 test "$(cat "${ROOT_DIR}/scripts/appliance/requirements.txt")" = "huggingface_hub==0.34.4"
 grep -Fq 'pull_policy: never' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq '/models/local-bge-v1' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'if service == "embedding"' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'EDUTALENT_COMPOSE_OVERRIDE' "${ROOT_DIR}/scripts/appliance/patch_production_command.py"
 grep -Fq 'docker load' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq "'{{.Id}}'" "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 grep -Fq 'syft' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'linux/amd64,linux/arm64' "${ROOT_DIR}/.github/workflows/air-gapped-appliance.yml"
@@ -59,7 +61,43 @@ mkdir -p \
   "${fixture}/bundle/models/test-model" \
   "${fixture}/bundle/sbom/images" \
   "${fixture}/bundle/scripts/appliance"
-printf 'fixture image\n' > "${fixture}/bundle/images/fixture.tar.gz"
+python3 - "${fixture}/bundle/images/fixture.tar.gz" <<'PY'
+import hashlib
+import io
+import json
+import sys
+import tarfile
+from pathlib import Path
+
+config = json.dumps(
+    {
+        "architecture": "amd64",
+        "config": {},
+        "os": "linux",
+        "rootfs": {"diff_ids": [], "type": "layers"},
+    },
+    sort_keys=True,
+    separators=(",", ":"),
+).encode()
+digest = hashlib.sha256(config).hexdigest()
+manifest = json.dumps(
+    [
+        {
+            "Config": f"{digest}.json",
+            "Layers": [],
+            "RepoTags": ["edutalent-offline/fixture:v1-amd64-aaaaaaaaaaaaaaaa"],
+        }
+    ],
+    separators=(",", ":"),
+).encode()
+with tarfile.open(Path(sys.argv[1]), "w:gz") as archive:
+    for name, data in ((f"{digest}.json", config), ("manifest.json", manifest)):
+        info = tarfile.TarInfo(name)
+        info.mode = 0o644
+        info.mtime = 0
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+PY
 printf '{}\n' > "${fixture}/bundle/sbom/images/fixture.spdx.json"
 printf 'fixture weight\n' > "${fixture}/bundle/models/test-model/model.safetensors"
 weight_sha="$(sha256sum "${fixture}/bundle/models/test-model/model.safetensors" | awk '{print $1}')"

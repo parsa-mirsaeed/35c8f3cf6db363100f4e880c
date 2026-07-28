@@ -18,6 +18,10 @@ VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DATABASE_URL = re.compile(rb"postgres(?:ql)?://[^\s:@/]+:[^\s@/]+@", re.IGNORECASE)
 FORBIDDEN_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".pdf", ".dump", ".sql.gz"}
 FORBIDDEN_NAMES = {".env", "id_rsa", "id_ed25519", "credentials.json"}
+PRIVATE_KEY_MARKERS = (
+    b"-----BEGIN " + b"PRIVATE KEY-----",
+    b"-----BEGIN RSA " + b"PRIVATE KEY-----",
+)
 TEXT_LIMIT = 4 * 1024 * 1024
 
 
@@ -59,7 +63,7 @@ def reject_forbidden_file(root: Path, path: Path) -> None:
         raise RuntimeError(f"build output entered release: {relative}")
     if path.stat().st_size <= TEXT_LIMIT:
         data = path.read_bytes()
-        if b"-----BEGIN PRIVATE KEY-----" in data or b"-----BEGIN RSA PRIVATE KEY-----" in data:
+        if any(marker in data for marker in PRIVATE_KEY_MARKERS):
             raise RuntimeError(f"private key material entered release: {relative}")
         for match in DATABASE_URL.finditer(data):
             candidate = match.group(0)

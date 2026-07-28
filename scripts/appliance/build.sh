@@ -38,12 +38,13 @@ done
 docker compose version >/dev/null
 docker buildx version >/dev/null
 
-PRODUCTION_DIR="${ROOT_DIR}/deploy/production"
+SOURCE_PRODUCTION_DIR="${ROOT_DIR}/deploy/production"
+TLS_DIR="$(mktemp -d)"
+TEMP_DIR="$(mktemp -d)"
+PRODUCTION_DIR="${TEMP_DIR}/production"
 SUPABASE_DIR="${PRODUCTION_DIR}/runtime/supabase"
 APP_ENV="${PRODUCTION_DIR}/.env.edutalent"
 SUPABASE_ENV="${SUPABASE_DIR}/.env"
-TLS_DIR="$(mktemp -d)"
-TEMP_DIR="$(mktemp -d)"
 BUNDLE_NAME="edutalent-appliance-${VERSION}-${ARCH}"
 BUNDLE_DIR="${ROOT_DIR}/dist/${BUNDLE_NAME}"
 APP_BUILD_TAG="edutalent-appliance-build/app:${VERSION}-${ARCH}"
@@ -53,7 +54,6 @@ MODEL_OUTPUT="${BUNDLE_DIR}/models/local-bge-v1"
 
 cleanup() {
   rm -rf "${TLS_DIR}" "${TEMP_DIR}"
-  rm -f "${APP_ENV}" "${SUPABASE_ENV}" "${SUPABASE_DIR}/docker-compose.yml.edutalent-backup"
 }
 trap cleanup EXIT
 
@@ -66,7 +66,10 @@ mkdir -p \
   "${BUNDLE_DIR}/signatures" \
   "${BUNDLE_DIR}/provenance"
 
-bash "${ROOT_DIR}/edutalent" production-bootstrap
+python3 "${ROOT_DIR}/scripts/appliance/stage_production.py" \
+  --source "${SOURCE_PRODUCTION_DIR}" \
+  --destination "${PRODUCTION_DIR}"
+bash "${PRODUCTION_DIR}/edutalent-production" bootstrap
 cp "${PRODUCTION_DIR}/.env.edutalent.example" "${APP_ENV}"
 chmod 600 "${APP_ENV}"
 openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
@@ -104,7 +107,7 @@ for key, value in replacements.items():
         lines.append(f"{key}={value}")
 env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
-bash "${ROOT_DIR}/edutalent" production-init
+bash "${PRODUCTION_DIR}/edutalent-production" init
 
 cache_args=()
 if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" && -n "${ACTIONS_CACHE_URL:-}" ]]; then
@@ -333,9 +336,16 @@ python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" generate \
   --version "${VERSION}" \
   --git-sha "${GIT_SHA}" \
   --platform "${PLATFORM}" \
+  --signing-mode "${SIGNING_MODE}" \
   --images "${BUNDLE_DIR}/manifests/images.json" \
   --model-lock "${MODEL_LOCK}"
 bash "${ROOT_DIR}/scripts/appliance/sign_release.sh" "${BUNDLE_DIR}" "${SIGNING_MODE}"
+if [[ "${SIGNING_MODE}" == "keyless" && "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required for CI keyless verification}"
+  : "${GITHUB_REF:?GITHUB_REF is required for CI keyless verification}"
+  export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"
+  export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/air-gapped-appliance\\.yml@${GITHUB_REF}$"
+fi
 bash "${BUNDLE_DIR}/edutalent-appliance" verify
 
 sign_external_payload() {

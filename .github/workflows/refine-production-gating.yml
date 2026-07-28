@@ -1,0 +1,58 @@
+name: Refine production proof gating
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/refine-production-gating.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    name: Apply exact production dispatch gating
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Replace exactly two complete production job conditions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/production-foundation.yml')
+          text = path.read_text(encoding='utf-8')
+          old = (
+              "if: $" +
+              "{{ github.event_name != 'pull_request' || "
+              "contains(github.event.pull_request.labels.*.name, 'full-validation') }}"
+          )
+          new = "if: github.event_name != 'pull_request'"
+          count = text.count(old)
+          if count != 2:
+              raise SystemExit(f'expected two production final-job conditions, found {count}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          rm .github/workflows/refine-production-gating.yml
+          test "$(grep -c "if: github.event_name != 'pull_request'" .github/workflows/production-foundation.yml)" = 2
+          ! grep -Fq "contains(github.event.pull_request.labels.*.name, 'full-validation')" .github/workflows/production-foundation.yml
+          git diff --check
+
+      - name: Commit and push the scoped workflow change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/production-foundation.yml .github/workflows/refine-production-gating.yml
+          git commit -m 'ci(production): defer complete stack proof to orchestrator'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

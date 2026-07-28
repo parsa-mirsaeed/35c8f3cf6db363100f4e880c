@@ -26,18 +26,19 @@ While the PR is ready and the label is present, the final candidate must complet
 - the pull-request validation jobs in Package, Production Foundation, and
   Air-gapped Appliance with their expensive jobs intentionally skipped;
 - `.github/workflows/mirror-final-proof.yml` in the public validation mirror,
-  which verifies the exact-head AI/full/definition gates and then dispatches the
-  complete workflows in this strict order:
-  1. Package image/archive build and repeated packaged migrations;
-  2. Production Foundation migrations, role verification, and full-stack smoke;
+  which verifies the exact-head AI and Full Validation gates and then dispatches
+  the complete workflows in this strict order:
+  1. Production Foundation migrations, role verification, and full-stack smoke;
+  2. Package image/archive build and repeated packaged migrations;
   3. Air-gapped Appliance amd64 bundle/offline startup and native arm64 build;
 - `.github/workflows/air-gapped-appliance.yml` with definition validation, the
   complete amd64 image/model/SBOM/signature appliance build, first startup with
   pulls disabled, a native arm64 custom-image build, and its final gate successful.
 
-The sequential dispatch warms the shared `edutalent-runtime` cache once and avoids
-compiling the same Rust/Dioxus runtime concurrently in Package, Production
-Foundation, and the appliance builder. The final exact-head appliance proof remains
+The sequential dispatch prevents complete Production Foundation, Package, and
+appliance builds from competing or duplicating heavy work at the same time. Package
+runs immediately before the appliance so both use the shared
+`edutalent-runtime` BuildKit cache. The final exact-head appliance proof remains
 mandatory; only its timing is deferred until the cheaper gates have succeeded.
 
 GHCR publication is intentionally skipped on pull requests. It becomes mandatory

@@ -27,7 +27,7 @@ Commands:
   stop                   Stop the appliance without deleting data
   status                 Show appliance service status
   checks                 Run database, gateway, AI outage/recovery, and Qdrant checks
-  install <directory>    Copy the verified appliance to a destination directory
+  install <directory>    Copy the verified appliance to a new empty destination
   help                   Show this help
 USAGE
 }
@@ -220,13 +220,19 @@ install_bundle() {
   local destination="${1:-}"
   [[ -n "${destination}" ]] || { echo "install requires a destination directory" >&2; exit 2; }
   verify_bundle
-  destination="$(mkdir -p "${destination}" && cd "${destination}" && pwd)"
-  [[ "${destination}" != "${ROOT_DIR}" ]] || { echo "destination is the current bundle" >&2; exit 2; }
   require_command tar
+  mkdir -p "${destination}"
+  destination="$(cd "${destination}" && pwd)"
+  [[ "${destination}" != "${ROOT_DIR}" ]] || { echo "destination is the current bundle" >&2; exit 2; }
+  if find "${destination}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+    echo "install destination must be empty: ${destination}" >&2
+    exit 1
+  fi
   (cd "${ROOT_DIR}" && tar --exclude='./deploy/production/.env.edutalent' --exclude='./deploy/production/runtime/supabase/.env' -cf - .) \
     | (cd "${destination}" && tar -xf -)
   chmod 0755 "${destination}/edutalent-appliance"
-  echo "Installed verified appliance at ${destination}"
+  bash "${destination}/edutalent-appliance" verify
+  echo "Installed and verified appliance at ${destination}"
 }
 
 command="${1:-help}"

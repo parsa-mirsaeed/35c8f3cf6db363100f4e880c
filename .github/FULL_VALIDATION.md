@@ -23,22 +23,22 @@ While the PR is ready and the label is present, the final candidate must complet
 
 - `.github/workflows/full-validation.yml` with complete database, Rust, and gate
   jobs successful;
-- `.github/workflows/package.yml` with package definitions, image/archive build,
-  and repeated packaged migrations successful;
-- `.github/workflows/production-foundation.yml` with topology, pinned Supabase
-  PostgreSQL migrations/role verification, and complete production-stack smoke
-  successful;
+- the pull-request validation jobs in Package, Production Foundation, and
+  Air-gapped Appliance with their expensive jobs intentionally skipped;
 - `.github/workflows/mirror-final-proof.yml` in the public validation mirror,
-  which waits for those exact-head PR runs and only then dispatches the complete
-  Air-gapped Appliance proof;
+  which verifies the exact-head AI/full/definition gates and then dispatches the
+  complete workflows in this strict order:
+  1. Package image/archive build and repeated packaged migrations;
+  2. Production Foundation migrations, role verification, and full-stack smoke;
+  3. Air-gapped Appliance amd64 bundle/offline startup and native arm64 build;
 - `.github/workflows/air-gapped-appliance.yml` with definition validation, the
   complete amd64 image/model/SBOM/signature appliance build, first startup with
   pulls disabled, a native arm64 custom-image build, and its final gate successful.
 
-This ordering prevents Package, Production Foundation, the amd64 appliance build,
-and architecture proof from compiling the same Rust runtime concurrently. The
-final exact-head appliance proof remains mandatory; it is merely deferred until
-the cheaper gates have succeeded.
+The sequential dispatch warms the shared `edutalent-runtime` cache once and avoids
+compiling the same Rust/Dioxus runtime concurrently in Package, Production
+Foundation, and the appliance builder. The final exact-head appliance proof remains
+mandatory; only its timing is deferred until the cheaper gates have succeeded.
 
 GHCR publication is intentionally skipped on pull requests. It becomes mandatory
 only for a protected `v*` release tag or an explicitly approved workflow dispatch

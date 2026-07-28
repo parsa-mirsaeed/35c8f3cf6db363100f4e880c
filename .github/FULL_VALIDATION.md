@@ -24,22 +24,31 @@ While the PR is ready and the label is present, the final candidate must complet
 - `.github/workflows/full-validation.yml` with complete database, Rust, and gate
   jobs successful;
 - the pull-request validation jobs in Package, Production Foundation, and
-  Air-gapped Appliance with their expensive jobs intentionally skipped;
+  Air-gapped Appliance with their expensive jobs either successful when selected
+  or intentionally skipped while focused validation is selected;
 - `.github/workflows/mirror-final-proof.yml` in the public validation mirror,
-  which verifies the exact-head AI and Full Validation gates and then dispatches
-  the complete workflows in this strict order:
-  1. Production Foundation migrations, role verification, and full-stack smoke;
-  2. Package image/archive build and repeated packaged migrations;
-  3. Air-gapped Appliance amd64 bundle/offline startup and native arm64 build;
+  which verifies the exact-head AI and Full Validation gates and then enforces
+  this strict order:
+  1. reuse an exact-head complete Production Foundation pull-request run when all
+     three required jobs succeeded; otherwise dispatch exactly one complete
+     Production Foundation fallback when the PR run is focused-only or absent;
+  2. dispatch Package image/archive build and repeated packaged migrations;
+  3. dispatch Air-gapped Appliance amd64 bundle/offline startup and native arm64
+     build;
 - `.github/workflows/air-gapped-appliance.yml` with definition validation, the
   complete amd64 image/model/SBOM/signature appliance build, first startup with
   pulls disabled, a native arm64 custom-image build, and its final gate successful.
 
-The sequential dispatch prevents complete Production Foundation, Package, and
-appliance builds from competing or duplicating heavy work at the same time. Package
-runs immediately before the appliance so both use the shared
-`edutalent-runtime` BuildKit cache. The final exact-head appliance proof remains
-mandatory; only its timing is deferred until the cheaper gates have succeeded.
+A failed Production Foundation required job is never hidden by fallback. Mirror
+uses fallback only for an absent exact-head PR run or the expected focused result
+where topology succeeded and the two complete jobs were skipped. Fresh dispatch
+IDs prevent older canceled runs on the same SHA from being reused.
+
+The sequential proof prevents complete Production Foundation, Package, and
+appliance builds from competing or duplicating heavy work. Package runs immediately
+before the appliance so both use the shared `edutalent-runtime` BuildKit cache.
+The final exact-head appliance proof remains mandatory; only its timing is deferred
+until the cheaper gates have succeeded.
 
 GHCR publication is intentionally skipped on pull requests. It becomes mandatory
 only for a protected `v*` release tag or an explicitly approved workflow dispatch

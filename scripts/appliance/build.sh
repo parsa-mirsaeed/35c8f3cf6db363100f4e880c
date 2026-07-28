@@ -340,12 +340,19 @@ python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" generate \
   --images "${BUNDLE_DIR}/manifests/images.json" \
   --model-lock "${MODEL_LOCK}"
 bash "${ROOT_DIR}/scripts/appliance/sign_release.sh" "${BUNDLE_DIR}" "${SIGNING_MODE}"
-if [[ "${SIGNING_MODE}" == "keyless" && "${GITHUB_ACTIONS:-false}" == "true" ]]; then
-  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required for CI keyless verification}"
-  : "${GITHUB_REF:?GITHUB_REF is required for CI keyless verification}"
-  export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"
-  export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/air-gapped-appliance\\.yml@${GITHUB_REF}$"
-fi
+case "${SIGNING_MODE}" in
+  ephemeral)
+    export EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES=true
+    ;;
+  keyless)
+    if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+      : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required for CI keyless verification}"
+      : "${GITHUB_REF:?GITHUB_REF is required for CI keyless verification}"
+      export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"
+      export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/air-gapped-appliance\\.yml@${GITHUB_REF}$"
+    fi
+    ;;
+esac
 bash "${BUNDLE_DIR}/edutalent-appliance" verify
 
 sign_external_payload() {

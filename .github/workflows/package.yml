@@ -15,6 +15,7 @@ on:
       - labeled
     paths:
       - Dockerfile
+      - Dockerfile.appliance-tools
       - compose.yaml
       - compose.release.yaml
       - edutalent
@@ -22,7 +23,11 @@ on:
       - .dockerignore
       - .env.example
       - docker/**
+      - deploy/appliance/**
+      - deploy/production/**
+      - scripts/appliance/**
       - .github/workflows/package.yml
+      - .github/workflows/air-gapped-appliance.yml
       - Cargo.toml
       - Cargo.lock
       - packages/**
@@ -47,7 +52,7 @@ jobs:
   validate:
     name: Validate package definitions
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,7 +61,7 @@ jobs:
       - name: Prepare non-secret environment template
         run: cp .env.example .env
 
-      - name: Validate centralized packaging
+      - name: Validate centralized packaging and appliance definitions
         run: bash edutalent validate
 
   package:

@@ -36,6 +36,8 @@ grep -Fq 'if service == "embedding"' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'EDUTALENT_COMPOSE_OVERRIDE' "${ROOT_DIR}/scripts/appliance/patch_production_command.py"
 grep -Fq 'docker load' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq "'{{.Id}}'" "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'install destination must be empty' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'bash "${destination}/edutalent-appliance" verify' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 grep -Fq 'syft' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fxq 'deploy/appliance' "${ROOT_DIR}/.dockerignore"
@@ -51,17 +53,18 @@ grep -Fq "if: github.event_name != 'pull_request'" "${air_workflow}"
 grep -Fq "inputs.publish && github.ref == 'refs/heads/main'" "${air_workflow}"
 grep -Fq 'Build custom images natively for arm64' "${air_workflow}"
 grep -Fq "if: github.event_name != 'pull_request'" "${package_workflow}"
-grep -Fq 'Verify final PR gates then dispatch appliance proof' "${mirror_workflow}"
+grep -Fq 'Verify and serialize complete exact-head proof' "${mirror_workflow}"
 grep -Fq "github.event.pull_request.draft == false" "${mirror_workflow}"
 grep -Fq -- "--event pull_request" "${mirror_workflow}"
 grep -Fq "gh workflow run package.yml" "${mirror_workflow}"
-grep -Fq "gh workflow run production-foundation.yml" "${mirror_workflow}"
 grep -Fq "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}"
+if grep -Fq "gh workflow run production-foundation.yml" "${mirror_workflow}"; then
+  echo "Production Foundation must be an exact-head prerequisite, not a duplicate dispatch." >&2
+  exit 1
+fi
 package_line="$(grep -n "gh workflow run package.yml" "${mirror_workflow}" | cut -d: -f1)"
-production_line="$(grep -n "gh workflow run production-foundation.yml" "${mirror_workflow}" | cut -d: -f1)"
 appliance_line="$(grep -n "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}" | cut -d: -f1)"
-test "${package_line}" -lt "${production_line}"
-test "${production_line}" -lt "${appliance_line}"
+test "${package_line}" -lt "${appliance_line}"
 if grep -Fq 'setup-qemu-action' "${air_workflow}"; then
   echo "Air-gapped workflow must use native architecture runners, not QEMU." >&2
   exit 1

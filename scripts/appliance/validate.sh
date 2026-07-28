@@ -12,7 +12,8 @@ done
 python3 -m py_compile \
   "${ROOT_DIR}/scripts/appliance/fetch_model.py" \
   "${ROOT_DIR}/scripts/appliance/patch_production_command.py" \
-  "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+  "${ROOT_DIR}/scripts/appliance/release_manifest.py" \
+  "${ROOT_DIR}/scripts/appliance/stage_production.py"
 
 python3 - "${ROOT_DIR}/deploy/appliance/model.lock.json" <<'PY'
 import json
@@ -33,12 +34,20 @@ test "$(cat "${ROOT_DIR}/scripts/appliance/requirements.txt")" = "huggingface_hu
 grep -Fq 'pull_policy: never' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq '/models/local-bge-v1' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'if service == "embedding"' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'SOURCE_PRODUCTION_DIR=' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'PRODUCTION_DIR="${TEMP_DIR}/production"' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'stage_production.py' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'EDUTALENT_COMPOSE_OVERRIDE' "${ROOT_DIR}/scripts/appliance/patch_production_command.py"
 grep -Fq 'docker load' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq "'{{.Id}}'" "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'install destination must be empty' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'bash "${destination}/edutalent-appliance" verify' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'release.signing_mode' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+! grep -Fq 'signatures/policy.json' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
+! grep -Fq 'policy.json' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 grep -Fq 'syft' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fxq 'deploy/appliance' "${ROOT_DIR}/.dockerignore"
 grep -Fxq 'scripts/appliance' "${ROOT_DIR}/.dockerignore"
@@ -79,6 +88,20 @@ fi
 
 fixture="$(mktemp -d)"
 trap 'rm -rf "${fixture}"' EXIT
+
+mkdir -p "${fixture}/production-source/runtime/supabase" "${fixture}/production-source/runtime/keep"
+printf 'definition\n' > "${fixture}/production-source/keep.txt"
+printf 'live app state\n' > "${fixture}/production-source/.env.edutalent"
+printf 'live supabase state\n' > "${fixture}/production-source/runtime/supabase/.env"
+printf 'other runtime definition\n' > "${fixture}/production-source/runtime/keep/definition.txt"
+python3 "${ROOT_DIR}/scripts/appliance/stage_production.py" \
+  --source "${fixture}/production-source" \
+  --destination "${fixture}/production-staged"
+test -f "${fixture}/production-staged/keep.txt"
+test -f "${fixture}/production-staged/runtime/keep/definition.txt"
+test ! -e "${fixture}/production-staged/.env.edutalent"
+test ! -e "${fixture}/production-staged/runtime/supabase"
+
 cp "${ROOT_DIR}/deploy/production/edutalent-production" "${fixture}/edutalent-production"
 python3 "${ROOT_DIR}/scripts/appliance/patch_production_command.py" \
   "${fixture}/edutalent-production"
@@ -171,10 +194,29 @@ python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" generate \
   --version fixture \
   --git-sha 0123456789abcdef0123456789abcdef01234567 \
   --platform linux/amd64 \
+  --signing-mode ephemeral \
   --images "${fixture}/bundle/manifests/images.json" \
   --model-lock "${fixture}/model.lock.json"
 python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
   --bundle "${fixture}/bundle"
+
+mkdir -p "${fixture}/bundle/deploy/production/runtime/supabase"
+printf 'generated app state\n' > "${fixture}/bundle/deploy/production/.env.edutalent"
+printf 'generated supabase state\n' > "${fixture}/bundle/deploy/production/runtime/supabase/.env"
+chmod 0600 \
+  "${fixture}/bundle/deploy/production/.env.edutalent" \
+  "${fixture}/bundle/deploy/production/runtime/supabase/.env"
+python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle"
+
+chmod 0755 "${fixture}/bundle/sbom/images/fixture.spdx.json"
+if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+  echo "signed file mode change was accepted" >&2
+  exit 1
+fi
+chmod 0644 "${fixture}/bundle/sbom/images/fixture.spdx.json"
+
 printf 'untracked\n' > "${fixture}/bundle/untracked.txt"
 if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
   --bundle "${fixture}/bundle" >/dev/null 2>&1; then

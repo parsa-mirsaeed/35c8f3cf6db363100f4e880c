@@ -72,7 +72,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           show-progress: false
 
@@ -97,7 +97,7 @@ jobs:
       - name: Export verified schema
         run: pg_dump --format=custom --no-owner --no-acl --file=edutalent-full-schema.dump "$DATABASE_URL"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: full-validation-database
@@ -132,7 +132,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           show-progress: false
 
@@ -145,7 +145,7 @@ jobs:
           shared-key: full-validation-rust
           cache-on-failure: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: full-validation-database
 
@@ -170,7 +170,7 @@ jobs:
 
       - name: Upload full Rust diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: full-validation-rust-diagnostics
           path: full-rust-validation.log
@@ -210,7 +210,7 @@ jobs:
           }
           EOF
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: full-validation-evidence
           path: full-validation-evidence.json

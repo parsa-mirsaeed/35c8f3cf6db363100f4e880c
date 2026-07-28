@@ -75,6 +75,10 @@ verify_signatures() {
   require_command cosign
   case "${signing_mode}" in
     ephemeral)
+      [[ "${EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES:-false}" == "true" ]] || {
+        echo "Ephemeral signatures are validation-only and require explicit EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES=true." >&2
+        return 1
+      }
       [[ -f "${public_key}" && -f "${manifest_signature}" && -f "${checksums_signature}" ]] || {
         echo "Complete ephemeral release signature material is missing." >&2
         return 1
@@ -87,7 +91,7 @@ verify_signatures() {
         --key "${public_key}" \
         --signature "${checksums_signature}" \
         "${CHECKSUMS}" >/dev/null
-      echo "Verified ephemeral validation signatures with the packaged public key."
+      echo "Verified explicitly enabled ephemeral validation signatures with the packaged public key."
       ;;
     keyless)
       [[ -f "${manifest_bundle}" && -f "${checksums_bundle}" ]] || {

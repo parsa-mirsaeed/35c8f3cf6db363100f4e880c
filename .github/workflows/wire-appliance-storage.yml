@@ -121,6 +121,11 @@ jobs:
           if text.count(old) != 1:
               raise SystemExit("py_compile list changed unexpectedly")
           text = text.replace(old, new, 1)
+          old = 'grep -Fq \'if service == "embedding"\' "${ROOT_DIR}/scripts/appliance/build.sh"\n'
+          new = 'grep -Fq \'locked_compose.py\' "${ROOT_DIR}/scripts/appliance/build.sh"\n'
+          if text.count(old) != 1:
+              raise SystemExit("inline generator assertion changed unexpectedly")
+          text = text.replace(old, new, 1)
           insertion = '''grep -Fq 'EDUTALENT_APPLIANCE_FUNCTIONS_DIR' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
           grep -Fq 'edutalent-appliance-db-data' "${ROOT_DIR}/scripts/appliance/locked_compose.py"
           grep -Fq 'edutalent-appliance-storage-data' "${ROOT_DIR}/scripts/appliance/locked_compose.py"

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import stat
 import sys
@@ -15,6 +14,8 @@ from typing import Any
 
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+DATABASE_URL = re.compile(rb"postgres(?:ql)?://[^\s:@/]+:[^\s@/]+@", re.IGNORECASE)
 FORBIDDEN_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".pdf", ".dump", ".sql.gz"}
 FORBIDDEN_NAMES = {".env", "id_rsa", "id_ed25519", "credentials.json"}
 TEXT_LIMIT = 4 * 1024 * 1024
@@ -60,8 +61,10 @@ def reject_forbidden_file(root: Path, path: Path) -> None:
         data = path.read_bytes()
         if b"-----BEGIN PRIVATE KEY-----" in data or b"-----BEGIN RSA PRIVATE KEY-----" in data:
             raise RuntimeError(f"private key material entered release: {relative}")
-        if re.search(rb"postgres(?:ql)?://[^\s:@/]+:[^\s@/]+@", data, re.IGNORECASE):
-            raise RuntimeError(f"credentialed database URL entered release: {relative}")
+        for match in DATABASE_URL.finditer(data):
+            candidate = match.group(0)
+            if b"${" not in candidate and b"{{" not in candidate:
+                raise RuntimeError(f"credentialed database URL entered release: {relative}")
 
 
 def file_inventory(root: Path) -> list[dict[str, Any]]:
@@ -90,6 +93,7 @@ def validate_images(root: Path, images: dict[str, Any], platform: str) -> list[d
         raise RuntimeError("image inventory is empty")
     local_tags: set[str] = set()
     archives: set[str] = set()
+    components: set[str] = set()
     normalized: list[dict[str, Any]] = []
     for record in records:
         required = {
@@ -105,6 +109,8 @@ def validate_images(root: Path, images: dict[str, Any], platform: str) -> list[d
         missing = required.difference(record)
         if missing:
             raise RuntimeError(f"image record missing fields: {sorted(missing)}")
+        if record["component"] in components:
+            raise RuntimeError(f"duplicate image component: {record['component']}")
         if record["platform"] != platform:
             raise RuntimeError(f"image platform mismatch for {record['component']}")
         if not DIGEST.fullmatch(record["source_digest"]):
@@ -115,6 +121,7 @@ def validate_images(root: Path, images: dict[str, Any], platform: str) -> list[d
             raise RuntimeError(f"duplicate local tag: {record['local_tag']}")
         if record["archive"] in archives:
             raise RuntimeError(f"duplicate image archive: {record['archive']}")
+        components.add(record["component"])
         local_tags.add(record["local_tag"])
         archives.add(record["archive"])
         archive = root / record["archive"]
@@ -177,6 +184,8 @@ def generate(args: argparse.Namespace) -> None:
     root = args.bundle.resolve()
     if not root.is_dir():
         raise RuntimeError("bundle root does not exist")
+    if not VERSION.fullmatch(args.version):
+        raise RuntimeError("version must be a safe tag and path component")
     if not HEX_40.fullmatch(args.git_sha):
         raise RuntimeError("git SHA must be a full lowercase commit SHA")
     if args.platform not in {"linux/amd64", "linux/arm64"}:
@@ -211,6 +220,8 @@ def verify(args: argparse.Namespace) -> None:
     if manifest.get("schema_version") != 1:
         raise RuntimeError("unsupported release manifest schema")
     release = manifest.get("release", {})
+    if not VERSION.fullmatch(release.get("version", "")):
+        raise RuntimeError("release manifest version is invalid")
     if not HEX_40.fullmatch(release.get("git_sha", "")):
         raise RuntimeError("release manifest git SHA is invalid")
     if release.get("platform") not in {"linux/amd64", "linux/arm64"}:
@@ -218,17 +229,29 @@ def verify(args: argparse.Namespace) -> None:
     expected_files = {row["path"]: row for row in manifest.get("files", [])}
     if not expected_files:
         raise RuntimeError("release file inventory is empty")
+    actual_inputs = {
+        path.relative_to(root).as_posix()
+        for path in relative_files(root)
+        if is_manifest_input(path.relative_to(root))
+    }
+    if actual_inputs != set(expected_files):
+        extra = sorted(actual_inputs.difference(expected_files))
+        missing = sorted(set(expected_files).difference(actual_inputs))
+        raise RuntimeError(f"release inventory mismatch; extra={extra}, missing={missing}")
     for relative, row in expected_files.items():
         path = root / relative
-        if not path.is_file():
-            raise RuntimeError(f"release file is missing: {relative}")
         reject_forbidden_file(root, path)
         if sha256_file(path) != row["sha256"] or path.stat().st_size != row["size"]:
             raise RuntimeError(f"release file integrity failure: {relative}")
     sums: dict[str, str] = {}
     for line in sums_path.read_text(encoding="utf-8").splitlines():
         digest, relative = line.split("  ", 1)
+        if relative in sums:
+            raise RuntimeError(f"duplicate checksum entry: {relative}")
         sums[relative] = digest
+    expected_sums = set(expected_files) | {"manifests/release-manifest.json"}
+    if set(sums) != expected_sums:
+        raise RuntimeError("SHA256SUMS does not exactly cover the release inventory")
     for relative, digest in sums.items():
         path = root / relative
         if not path.is_file() or sha256_file(path) != digest:
@@ -243,7 +266,6 @@ def verify(args: argparse.Namespace) -> None:
         archive = root / image["archive"]
         if sha256_file(archive) != image["archive_sha256"]:
             raise RuntimeError(f"image archive integrity failure: {image['component']}")
-    relative_files(root)
     print(
         "Verified immutable appliance manifest for "
         f"{release.get('version')} {release.get('platform')} at {release.get('git_sha')}"

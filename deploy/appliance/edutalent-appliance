@@ -131,7 +131,7 @@ import sys
 
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
 for image in manifest["images"]:
-    print(f"{image['archive']}\t{image['local_tag']}")
+    print(f"{image['archive']}\t{image['local_tag']}\t{image['image_id']}")
 PY
 }
 
@@ -151,8 +151,10 @@ PY
 
 all_images_loaded() {
   require_command docker
-  while IFS=$'\t' read -r _archive tag; do
-    docker image inspect "${tag}" >/dev/null 2>&1 || return 1
+  local observed
+  while IFS=$'\t' read -r _archive tag expected_id; do
+    observed="$(docker image inspect --format '{{.Id}}' "${tag}" 2>/dev/null || true)"
+    [[ "${observed}" == "${expected_id}" ]] || return 1
   done < <(image_rows)
 }
 
@@ -160,10 +162,15 @@ load_images() {
   verify_bundle
   require_command docker
   require_command gzip
-  while IFS=$'\t' read -r archive tag; do
+  local observed
+  while IFS=$'\t' read -r archive tag expected_id; do
     echo "Loading ${tag}"
     gzip -dc "${ROOT_DIR}/${archive}" | docker load >/dev/null
-    docker image inspect "${tag}" >/dev/null
+    observed="$(docker image inspect --format '{{.Id}}' "${tag}")"
+    [[ "${observed}" == "${expected_id}" ]] || {
+      echo "Loaded image identity mismatch for ${tag}: ${observed}" >&2
+      exit 1
+    }
   done < <(image_rows)
   echo "All appliance images loaded without registry access."
 }

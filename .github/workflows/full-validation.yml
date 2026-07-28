@@ -39,94 +39,66 @@ jobs:
           ref: feature/air-gapped-packaging-ghcr
           fetch-depth: 2
 
-      - name: Apply exact fail-closed corrections
+      - name: Apply and test fail-closed corrections
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{path}: expected one match, found {count}")
-              target.write_text(text.replace(old, new), encoding="utf-8")
-
           air = Path('.github/workflows/air-gapped-appliance.yml')
           text = air.read_text(encoding='utf-8')
-          old_permissions = '''permissions:
-            contents: read
-            packages: write
-            id-token: write
-            attestations: write
-          '''
+          old_permissions = (
+              "permissions:\n"
+              "  contents: read\n"
+              "  packages: write\n"
+              "  id-token: write\n"
+              "  attestations: write\n"
+          )
+          new_permissions = "permissions:\n  contents: read\n"
           if text.count(old_permissions) != 1:
               raise SystemExit('unexpected workflow-wide permission block')
-          text = text.replace(old_permissions, '''permissions:
-            contents: read
-          ''')
-          text = text.replace(
-              '''  build-offline:
-              name: Build and verify complete air-gapped appliance
-          ''',
-              '''  build-offline:
-              permissions:
-                contents: read
-                id-token: write
-              name: Build and verify complete air-gapped appliance
-          ''',
-              1,
-          )
-          text = text.replace(
-              '''  publish-platforms:
-              name: Publish native ${{ matrix.arch }} GHCR images
-          ''',
-              '''  publish-platforms:
-              permissions:
-                contents: read
-                packages: write
-              name: Publish native ${{ matrix.arch }} GHCR images
-          ''',
-              1,
-          )
-          text = text.replace(
-              '''  publish-indexes:
-              name: Assemble, sign, and attest multi-architecture GHCR indexes
-          ''',
-              '''  publish-indexes:
-              permissions:
-                contents: read
-                packages: write
-                id-token: write
-                attestations: write
-              name: Assemble, sign, and attest multi-architecture GHCR indexes
-          ''',
-              1,
-          )
-          for marker in (
-              'build-offline:\n    permissions:\n      contents: read\n      id-token: write',
-              'publish-platforms:\n    permissions:\n      contents: read\n      packages: write',
-              'publish-indexes:\n    permissions:\n      contents: read\n      packages: write\n      id-token: write\n      attestations: write',
-          ):
-              if marker not in text:
-                  raise SystemExit(f'missing scoped permission marker: {marker}')
+          text = text.replace(old_permissions, new_permissions, 1)
+
+          job_permissions = {
+              'build-offline': ('contents: read', 'id-token: write'),
+              'publish-platforms': ('contents: read', 'packages: write'),
+              'publish-indexes': (
+                  'contents: read',
+                  'packages: write',
+                  'id-token: write',
+                  'attestations: write',
+              ),
+          }
+          for job, permissions in job_permissions.items():
+              marker = f"  {job}:\n"
+              if text.count(marker) != 1:
+                  raise SystemExit(f'unexpected job marker: {job}')
+              block = marker + "    permissions:\n" + "".join(
+                  f"      {permission}\n" for permission in permissions
+              )
+              text = text.replace(marker, block, 1)
+
+          lines = text.splitlines()
+          jobs_index = lines.index('jobs:')
+          top = lines[:jobs_index]
+          for forbidden in ('  packages: write', '  id-token: write', '  attestations: write'):
+              if forbidden in top:
+                  raise SystemExit(f'workflow-wide release permission remains: {forbidden}')
+          for job, permissions in job_permissions.items():
+              index = lines.index(f'  {job}:')
+              expected = ['    permissions:', *[f'      {value}' for value in permissions]]
+              if lines[index + 1:index + 1 + len(expected)] != expected:
+                  raise SystemExit(f'invalid scoped permissions for {job}')
           air.write_text(text, encoding='utf-8')
 
           manifest = Path('scripts/appliance/release_manifest.py')
           text = manifest.read_text(encoding='utf-8')
-          old = '''def relative_files(root: Path) -> list[Path]:
-              files: list[Path] = []
-              for path in sorted(root.rglob("*")):
-                  relative = path.relative_to(root)
-                  if path.is_symlink():
-                      raise RuntimeError(f"bundle contains a symlink: {relative}")
-                  if path.is_file():
-                      files.append(path)
-              return files
-          '''
-          new = '''def relative_files(root: Path) -> list[Path]:
+          start = text.find('def relative_files(root: Path) -> list[Path]:')
+          end = text.find('\n\ndef is_manifest_input', start)
+          if start < 0 or end < 0:
+              raise SystemExit('release manifest traversal changed unexpectedly')
+          function = '''def relative_files(root: Path) -> list[Path]:
               files: list[Path] = []
               for path in sorted(root.rglob("*")):
                   relative = path.relative_to(root)
@@ -140,9 +112,7 @@ jobs:
                   files.append(path)
               return files
           '''
-          if text.count(old) != 1:
-              raise SystemExit('release manifest traversal changed unexpectedly')
-          manifest.write_text(text.replace(old, new), encoding='utf-8')
+          manifest.write_text(text[:start] + function + text[end:], encoding='utf-8')
 
           build = Path('scripts/appliance/build.sh')
           text = build.read_text(encoding='utf-8')
@@ -152,90 +122,132 @@ jobs:
           end = text.find(end_marker, start)
           if start < 0 or end < 0:
               raise SystemExit('locked-compose heredoc changed unexpectedly')
-          replacement = '''python3 "${ROOT_DIR}/scripts/appliance/locked_compose.py" \\
-            --service-images "${TEMP_DIR}/service-images.tsv" \\
-            --images "${BUNDLE_DIR}/manifests/images.json" \\
-            --output "${BUNDLE_DIR}/manifests/compose.locked.yaml"'''
-          build.write_text(text[:start] + replacement + text[end + len('\nPY'):], encoding='utf-8')
-
-          validate = Path('scripts/appliance/validate.sh')
-          text = validate.read_text(encoding='utf-8')
-          text = text.replace(
-              '  "${ROOT_DIR}/scripts/appliance/release_manifest.py" \\\n  "${ROOT_DIR}/scripts/appliance/stage_production.py"',
-              '  "${ROOT_DIR}/scripts/appliance/release_manifest.py" \\\n  "${ROOT_DIR}/scripts/appliance/stage_production.py" \\\n  "${ROOT_DIR}/scripts/appliance/locked_compose.py"',
-              1,
+          replacement = (
+              'python3 "${ROOT_DIR}/scripts/appliance/locked_compose.py" \\\n'
+              '  --service-images "${TEMP_DIR}/service-images.tsv" \\\n'
+              '  --images "${BUNDLE_DIR}/manifests/images.json" \\\n'
+              '  --output "${BUNDLE_DIR}/manifests/compose.locked.yaml"'
           )
-          static_marker = '''grep -Fq 'stage_production.py' "${ROOT_DIR}/scripts/appliance/build.sh"
-          '''
-          static_insert = '''grep -Fq 'stage_production.py' "${ROOT_DIR}/scripts/appliance/build.sh"
-          grep -Fq 'locked_compose.py' "${ROOT_DIR}/scripts/appliance/build.sh"
-          grep -Fq 'edutalent-appliance-db-data' "${ROOT_DIR}/scripts/appliance/locked_compose.py"
-          grep -Fq 'non-regular entry' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
-          '''
-          if text.count(static_marker) != 1:
-              raise SystemExit('validate static marker changed unexpectedly')
-          text = text.replace(static_marker, static_insert)
-          images_marker = '''cat > "${fixture}/bundle/manifests/images.json" <<'JSON'
-          '''
-          if text.count(images_marker) != 1:
-              raise SystemExit('validate image fixture marker changed unexpectedly')
-          locked_test = '''cat > "${fixture}/service-images.tsv" <<'TSV'
+          build.write_text(
+              text[:start] + replacement + text[end + len('\nPY'):],
+              encoding='utf-8',
+          )
+
+          hardening = Path('scripts/appliance/validate_state_hardening.sh')
+          hardening.write_text('''#!/usr/bin/env bash
+          set -euo pipefail
+
+          ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+          fixture="$(mktemp -d)"
+          trap 'rm -rf "${fixture}"' EXIT
+
+          python3 - "${ROOT_DIR}/scripts/appliance/release_manifest.py" "${fixture}" <<'PY'
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          module_path = Path(sys.argv[1])
+          fixture = Path(sys.argv[2])
+          spec = importlib.util.spec_from_file_location("release_manifest", module_path)
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(module)
+          (fixture / "regular.txt").write_text("regular\n", encoding="utf-8")
+          fifo = fixture / "unsigned.fifo"
+          os.mkfifo(fifo)
+          try:
+              module.relative_files(fixture)
+          except RuntimeError as error:
+              assert "non-regular entry" in str(error), error
+          else:
+              raise SystemExit("unsigned FIFO was accepted")
+          PY
+
+          cat > "${fixture}/service-images.tsv" <<'TSV'
           db\tregistry.invalid/fixture:v1
           storage\tregistry.invalid/fixture:v1
           studio\tregistry.invalid/fixture:v1
           functions\tregistry.invalid/fixture:v1
           embedding\tregistry.invalid/fixture:v1
           TSV
-          '''
-          text = text.replace(images_marker, locked_test + images_marker, 1)
-          after_images = '''JSON
-          cp "${ROOT_DIR}/scripts/appliance/release_manifest.py" \\
-          '''
-          locked_assertions = '''JSON
-          python3 "${ROOT_DIR}/scripts/appliance/locked_compose.py" \\
-            --service-images "${fixture}/service-images.tsv" \\
-            --images "${fixture}/bundle/manifests/images.json" \\
+          cat > "${fixture}/images.json" <<'JSON'
+          {
+            "schema_version": 1,
+            "images": [{
+              "component": "fixture",
+              "services": ["db", "storage", "studio", "functions", "embedding"],
+              "source_ref": "registry.invalid/fixture:v1",
+              "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "local_tag": "edutalent-offline/fixture:v1-amd64-aaaaaaaaaaaaaaaa",
+              "archive": "images/fixture.tar.gz",
+              "platform": "linux/amd64",
+              "sbom": "sbom/images/fixture.spdx.json"
+            }]
+          }
+          JSON
+          python3 "${ROOT_DIR}/scripts/appliance/locked_compose.py" \
+            --service-images "${fixture}/service-images.tsv" \
+            --images "${fixture}/images.json" \
             --output "${fixture}/compose.locked.yaml"
           grep -Fq 'edutalent-appliance-db-data' "${fixture}/compose.locked.yaml"
           grep -Fq 'edutalent-appliance-storage-data' "${fixture}/compose.locked.yaml"
           grep -Fq 'edutalent-appliance-studio-snippets' "${fixture}/compose.locked.yaml"
-          grep -Fq 'pull_policy: never' "${fixture}/compose.locked.yaml"
-          cp "${ROOT_DIR}/scripts/appliance/release_manifest.py" \\
-          '''
-          if text.count(after_images) != 1:
-              raise SystemExit('validate post-image marker changed unexpectedly')
-          text = text.replace(after_images, locked_assertions, 1)
-          final_marker = '''printf 'untracked\n' > "${fixture}/bundle/untracked.txt"
-          '''
-          fifo_test = '''mkfifo "${fixture}/bundle/unsigned.fifo"
-          if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \\
-            --bundle "${fixture}/bundle" >/dev/null 2>&1; then
-            echo "unsigned FIFO was accepted" >&2
-            exit 1
-          fi
-          rm -f "${fixture}/bundle/unsigned.fifo"
+          grep -Fq 'source: ${EDUTALENT_APPLIANCE_MODEL_DIR' "${fixture}/compose.locked.yaml"
+          test "$(grep -c 'pull_policy: never' "${fixture}/compose.locked.yaml")" -eq 5
 
-          printf 'untracked\n' > "${fixture}/bundle/untracked.txt"
-          '''
-          if text.count(final_marker) != 1:
-              raise SystemExit('validate final marker changed unexpectedly')
-          validate.write_text(text.replace(final_marker, fifo_test, 1), encoding='utf-8')
+          python3 - "${ROOT_DIR}/.github/workflows/air-gapped-appliance.yml" <<'PY'
+          import sys
+          from pathlib import Path
+
+          lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+          jobs_index = lines.index("jobs:")
+          top = lines[:jobs_index]
+          for forbidden in ("  packages: write", "  id-token: write", "  attestations: write"):
+              assert forbidden not in top, forbidden
+          expected = {
+              "build-offline": ("contents: read", "id-token: write"),
+              "publish-platforms": ("contents: read", "packages: write"),
+              "publish-indexes": (
+                  "contents: read",
+                  "packages: write",
+                  "id-token: write",
+                  "attestations: write",
+              ),
+          }
+          for job, permissions in expected.items():
+              index = lines.index(f"  {job}:")
+              block = lines[index + 1:index + 2 + len(permissions)]
+              assert block[0] == "    permissions:", (job, block)
+              assert tuple(line.strip() for line in block[1:]) == permissions, (job, block)
+          PY
+
+          echo "Appliance state, filesystem-entry, and release-permission hardening passed."
+          ''', encoding='utf-8')
+          hardening.chmod(0o755)
+
+          validate = Path('scripts/appliance/validate.sh')
+          text = validate.read_text(encoding='utf-8')
+          marker = 'python3 -m py_compile \\\n'
+          if marker not in text:
+              raise SystemExit('validate Python marker changed unexpectedly')
+          call = 'bash "${ROOT_DIR}/scripts/appliance/validate_state_hardening.sh"\n\n'
+          if call not in text:
+              anchor = 'test "$(cat "${ROOT_DIR}/scripts/appliance/requirements.txt")" = "huggingface_hub==0.34.4"\n'
+              if text.count(anchor) != 1:
+                  raise SystemExit('validate hardening anchor changed unexpectedly')
+              text = text.replace(anchor, anchor + call, 1)
+          validate.write_text(text, encoding='utf-8')
           PY
 
           bash -n scripts/appliance/build.sh
           bash -n scripts/appliance/validate.sh
+          bash -n scripts/appliance/validate_state_hardening.sh
           python3 -m py_compile \
             scripts/appliance/locked_compose.py \
             scripts/appliance/release_manifest.py
+          bash scripts/appliance/validate_state_hardening.sh
           bash scripts/appliance/validate.sh
-          python3 - <<'PY'
-          from pathlib import Path
-          text = Path('.github/workflows/air-gapped-appliance.yml').read_text(encoding='utf-8')
-          head = text.split('jobs:', 1)[0]
-          for forbidden in ('packages: write', 'id-token: write', 'attestations: write'):
-              if forbidden in head:
-                  raise SystemExit(f'workflow-wide release permission remains: {forbidden}')
-          PY
 
           git show HEAD^:.github/workflows/full-validation.yml > .github/workflows/full-validation.yml
           git diff --check
@@ -251,7 +263,8 @@ jobs:
             .github/workflows/full-validation.yml \
             scripts/appliance/build.sh \
             scripts/appliance/release_manifest.py \
-            scripts/appliance/validate.sh
+            scripts/appliance/validate.sh \
+            scripts/appliance/validate_state_hardening.sh
           git commit -m 'fix(appliance): isolate mutable state and release permissions'
           git push origin HEAD:feature/air-gapped-packaging-ghcr
 

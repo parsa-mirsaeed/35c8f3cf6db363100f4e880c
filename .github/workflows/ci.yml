@@ -71,7 +71,7 @@ jobs:
 
           # A validation-rule change can alter which proof is required for every
           # file in the pull request. Escalate it to the complete PR impact set.
-          if [[ "$EVENT_NAME" == "pull_request" ]] && grep -Eq '^\.github/workflows/(ci|full-validation)\.yml$' changed-files.txt; then
+          if [[ "$EVENT_NAME" == "pull_request" ]] && grep -Eq '^\.github/workflows/(ci|full-validation|package|production-foundation|air-gapped-appliance|mirror-final-proof)\.yml$' changed-files.txt; then
             git diff --name-only "$BASE_SHA"..."$HEAD_SHA" > changed-files.txt
             sort -u changed-files.txt -o changed-files.txt
             comparison=pull-request-validation
@@ -116,11 +116,11 @@ jobs:
             database=true
           fi
 
-          if grep -Eq '^(Dockerfile|compose(\.release)?\.yaml|edutalent|Makefile|\.dockerignore|\.env\.example|docker/|scripts/ci/apply_migrations\.sh|\.github/workflows/package\.yml)' changed-files.txt; then
+          if grep -Eq '^(Dockerfile(\.appliance-tools)?|compose(\.release)?\.yaml|edutalent|Makefile|\.dockerignore|\.env\.example|docker/|deploy/appliance/|scripts/appliance/|scripts/ci/apply_migrations\.sh|\.github/workflows/(package|air-gapped-appliance|mirror-final-proof)\.yml)' changed-files.txt; then
             packaging=true
           fi
 
-          if grep -Eq '^(deploy/production/|docs/(adr|security)/|packages/api/src/services/supabase_auth\.rs|scripts/ci/(apply_migrations|configure_database_role)\.sh|docker/entrypoint\.sh|Dockerfile|edutalent|Makefile|\.github/workflows/production-foundation\.yml)' changed-files.txt; then
+          if grep -Eq '^(deploy/(production|appliance)/|scripts/appliance/|docs/(adr|security)/|packages/api/src/services/supabase_auth\.rs|scripts/ci/(apply_migrations|configure_database_role)\.sh|docker/entrypoint\.sh|Dockerfile(\.appliance-tools)?|edutalent|Makefile|\.github/workflows/(production-foundation|air-gapped-appliance|mirror-final-proof)\.yml)' changed-files.txt; then
             production=true
           fi
 

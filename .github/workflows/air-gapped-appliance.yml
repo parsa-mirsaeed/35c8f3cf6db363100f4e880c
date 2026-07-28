@@ -35,7 +35,7 @@ on:
         default: false
         type: boolean
       create_archive:
-        description: Create split offline release archive parts
+        description: Create and retain the signed offline release archive
         required: false
         default: false
         type: boolean
@@ -56,6 +56,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: never
   APP_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-app
+  AI_GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-ai-gateway
+  MIGRATION_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-migration
   TOOLS_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-appliance-tools
 
 jobs:
@@ -127,8 +129,8 @@ jobs:
         shell: bash
         env:
           EDUTALENT_APPLIANCE_PLATFORM: linux/amd64
-          EDUTALENT_APPLIANCE_SIGNING_MODE: ephemeral
-          EDUTALENT_APPLIANCE_CREATE_ARCHIVE: ${{ inputs.create_archive || false }}
+          EDUTALENT_APPLIANCE_SIGNING_MODE: ${{ startsWith(github.ref, 'refs/tags/v') && 'keyless' || 'ephemeral' }}
+          EDUTALENT_APPLIANCE_CREATE_ARCHIVE: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.create_archive || false }}
           EDUTALENT_BUILD_CACHE_SCOPE: air-gapped-appliance-amd64
         run: |
           set -o pipefail
@@ -189,10 +191,24 @@ jobs:
             ${{ steps.version.outputs.bundle_dir }}/sbom/**
             ${{ steps.version.outputs.bundle_dir }}/models/local-bge-v1/MODEL_METADATA.json
             ${{ steps.version.outputs.bundle_dir }}/models/local-bge-v1/MODEL_SHA256SUMS
-            dist/edutalent-appliance-*.parts.SHA256SUMS
-            dist/edutalent-appliance-*.tar.gz.SHA256SUMS
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Upload signed offline archive deliverables
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.create_archive)
+        uses: actions/upload-artifact@v4
+        with:
+          name: edutalent-appliance-${{ steps.version.outputs.version }}-amd64
+          path: |
+            dist/edutalent-appliance-*.tar.gz
+            dist/edutalent-appliance-*.tar.gz.*
+            dist/edutalent-appliance-*.parts.SHA256SUMS
+            dist/edutalent-appliance-*.parts.SHA256SUMS.*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
 
       - name: Stop and remove appliance smoke data
         if: always()
@@ -290,8 +306,8 @@ jobs:
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
-      - id: app
-        name: Publish EduTalent runtime image with SBOM and provenance
+      - id: runtime
+        name: Publish app, AI Gateway, and migration role images
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -301,10 +317,14 @@ jobs:
           tags: |
             ${{ env.APP_IMAGE }}:${{ steps.version.outputs.version }}
             ${{ env.APP_IMAGE }}:sha-${{ github.sha }}
+            ${{ env.AI_GATEWAY_IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.AI_GATEWAY_IMAGE }}:sha-${{ github.sha }}
+            ${{ env.MIGRATION_IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.MIGRATION_IMAGE }}:sha-${{ github.sha }}
           sbom: true
           provenance: mode=max
-          cache-from: type=gha,scope=airgap-publish-app
-          cache-to: type=gha,mode=max,scope=airgap-publish-app
+          cache-from: type=gha,scope=airgap-publish-runtime
+          cache-to: type=gha,mode=max,scope=airgap-publish-runtime
 
       - id: tools
         name: Publish appliance tools image with SBOM and provenance
@@ -322,20 +342,36 @@ jobs:
           cache-from: type=gha,scope=airgap-publish-tools
           cache-to: type=gha,mode=max,scope=airgap-publish-tools
 
-      - name: Sign both published image indexes with GitHub OIDC
+      - name: Sign every published image index with GitHub OIDC
         env:
-          APP_DIGEST: ${{ steps.app.outputs.digest }}
+          RUNTIME_DIGEST: ${{ steps.runtime.outputs.digest }}
           TOOLS_DIGEST: ${{ steps.tools.outputs.digest }}
         run: |
           set -euo pipefail
-          cosign sign --yes "${APP_IMAGE}@${APP_DIGEST}"
+          for image in "${APP_IMAGE}" "${AI_GATEWAY_IMAGE}" "${MIGRATION_IMAGE}"; do
+            cosign sign --yes "${image}@${RUNTIME_DIGEST}"
+          done
           cosign sign --yes "${TOOLS_IMAGE}@${TOOLS_DIGEST}"
 
-      - name: Attest runtime image build provenance
+      - name: Attest app image build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.APP_IMAGE }}
-          subject-digest: ${{ steps.app.outputs.digest }}
+          subject-digest: ${{ steps.runtime.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest AI Gateway image build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.AI_GATEWAY_IMAGE }}
+          subject-digest: ${{ steps.runtime.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest migration image build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.MIGRATION_IMAGE }}
+          subject-digest: ${{ steps.runtime.outputs.digest }}
           push-to-registry: true
 
       - name: Attest tools image build provenance
@@ -348,7 +384,7 @@ jobs:
       - name: Write publication evidence
         shell: bash
         env:
-          APP_DIGEST: ${{ steps.app.outputs.digest }}
+          RUNTIME_DIGEST: ${{ steps.runtime.outputs.digest }}
           TOOLS_DIGEST: ${{ steps.tools.outputs.digest }}
         run: |
           cat > ghcr-publication-evidence.json <<EOF
@@ -356,7 +392,9 @@ jobs:
             "head_sha": "${GITHUB_SHA}",
             "version": "${{ steps.version.outputs.version }}",
             "platforms": ["linux/amd64", "linux/arm64"],
-            "app": "${APP_IMAGE}@${APP_DIGEST}",
+            "app": "${APP_IMAGE}@${RUNTIME_DIGEST}",
+            "ai_gateway": "${AI_GATEWAY_IMAGE}@${RUNTIME_DIGEST}",
+            "migration": "${MIGRATION_IMAGE}@${RUNTIME_DIGEST}",
             "tools": "${TOOLS_IMAGE}@${TOOLS_DIGEST}",
             "signed": true,
             "sbom": true,

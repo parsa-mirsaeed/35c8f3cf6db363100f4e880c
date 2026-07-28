@@ -50,6 +50,7 @@ grep -Fq 'bash "${destination}/edutalent-appliance" verify' "${ROOT_DIR}/deploy/
 grep -Fq 'release.signing_mode' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 ! grep -Fq 'signatures/policy.json' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'MUTABLE_INSTALLATION_FILES' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
 grep -Fq 'actual_mode' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
@@ -241,6 +242,31 @@ if grep -Fq 'attacker.invalid' "${fixture}/cosign.log"; then
   echo "bundle-controlled trust policy reached cosign" >&2
   exit 1
 fi
+
+rm -f "${fixture}/bundle/signatures/"*
+python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" generate \
+  --bundle "${fixture}/bundle" \
+  --version fixture \
+  --git-sha 0123456789abcdef0123456789abcdef01234567 \
+  --platform linux/amd64 \
+  --signing-mode ephemeral \
+  --images "${fixture}/bundle/manifests/images.json" \
+  --model-lock "${fixture}/model.lock.json"
+touch \
+  "${fixture}/bundle/signatures/verification.pub" \
+  "${fixture}/bundle/signatures/release-manifest.sig" \
+  "${fixture}/bundle/signatures/SHA256SUMS.sig"
+: > "${fixture}/cosign.log"
+if PATH="${fixture}/fake-bin:${PATH}" COSIGN_LOG="${fixture}/cosign.log" \
+  bash "${fixture}/bundle/edutalent-appliance" verify >/dev/null 2>&1; then
+  echo "ephemeral appliance verified without explicit external opt-in" >&2
+  exit 1
+fi
+PATH="${fixture}/fake-bin:${PATH}" \
+  COSIGN_LOG="${fixture}/cosign.log" \
+  EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES=true \
+  bash "${fixture}/bundle/edutalent-appliance" verify >/dev/null
+grep -Fq -- '--key' "${fixture}/cosign.log"
 
 mkdir -p "${fixture}/bundle/deploy/production/runtime/supabase"
 printf 'generated app state\n' > "${fixture}/bundle/deploy/production/.env.edutalent"

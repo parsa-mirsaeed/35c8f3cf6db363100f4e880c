@@ -17,10 +17,16 @@ TLS private keys, provider credentials, database dumps, PDFs, or personal data.
 
 Required tools on the release runner:
 
-- Docker Engine, Compose v2, Buildx, and QEMU for cross-platform builds;
+- Docker Engine, Compose v2, and Buildx;
+- a native Linux runner for each released architecture;
 - Python 3 and `huggingface_hub`;
 - `jq`, `openssl`, `syft`, and `cosign`;
 - Node.js 16 or newer for the pinned official Supabase key generators.
+
+QEMU is not used for release architecture proof. The public validation workflow
+builds amd64 on `ubuntu-24.04` and arm64 on GitHub's native
+`ubuntu-24.04-arm` runner. This avoids emulating the Rust/Dioxus build and keeps
+architecture failures separate from emulation performance.
 
 ```bash
 EDUTALENT_APPLIANCE_PLATFORM=linux/amd64 \
@@ -31,6 +37,24 @@ EDUTALENT_APPLIANCE_SIGNING_MODE=ephemeral \
 Tagged protected releases use keyless Sigstore signing and publish custom
 multi-architecture images to GHCR. Pull-request validation uses an ephemeral key
 only to prove the sign/verify mechanism; that key is not a production trust root.
+
+## Staged validation
+
+Draft pull-request commits run only the fast definition, syntax, lock-file,
+integrity-fixture, package, and production-topology gates. They do not rebuild the
+complete appliance.
+
+When the implementation is stable, apply `full-validation` and mark the pull
+request ready. The mirror proof then enforces one exact-head sequence:
+
+1. AI Change Proof, Full Validation, and complete Production Foundation;
+2. complete Package image/archive and repeated migrations;
+3. complete amd64 offline appliance plus native arm64 custom-image proof.
+
+Package runs before the appliance so the amd64 runtime build can reuse the same
+GitHub Actions BuildKit cache. GHCR publication is not performed on pull requests;
+it is restricted to protected `v*` tags or an explicitly approved dispatch from
+`main`.
 
 ## Bundle layout
 
@@ -57,8 +81,10 @@ service reads the model only from the packaged read-only directory.
 
 ## Offline installation
 
-Copy the complete bundle directory or every split archive part to the target host.
-Reassemble split archives in lexical order when needed, then:
+The target host requires Docker Engine with Compose v2, Python 3, GNU tar/gzip,
+and a trusted `cosign` installation for signature verification. Copy the complete
+bundle directory or every split archive part to the target host. Reassemble split
+archives in lexical order when needed, then:
 
 ```bash
 ./edutalent-appliance verify
@@ -80,6 +106,10 @@ Startup uses `pull_policy: never`. A missing archive or image fails before a
 registry request can be attempted. The optional local model is already present;
 TEI receives a local filesystem path rather than a Hugging Face repository name.
 
+`install <directory>` accepts only a new or empty destination and verifies the
+copied installation before reporting success. This prevents stale files from a
+previous release remaining outside the signed manifest.
+
 ## Updates and rollback
 
 Each version installs beside the previous version. Stop the current appliance,
@@ -100,4 +130,6 @@ A release is acceptable only when its exact commit passes:
 - Air-gapped Appliance definition validation, complete image export, SBOM and
   signature verification, local model verification, and first startup with pulls
   disabled;
-- multi-architecture GHCR publication and provenance for a protected release tag.
+- native amd64 and arm64 custom-image proof;
+- multi-architecture GHCR publication, signatures, SBOMs, and provenance for a
+  protected release tag.

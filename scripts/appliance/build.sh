@@ -97,14 +97,21 @@ env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 bash "${ROOT_DIR}/edutalent" production-init
 
-CACHE_SCOPE="${EDUTALENT_BUILD_CACHE_SCOPE:-edutalent-appliance-${ARCH}}"
+cache_args=()
+if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" && -n "${ACTIONS_CACHE_URL:-}" ]]; then
+  cache_scope="${EDUTALENT_BUILD_CACHE_SCOPE:-edutalent-appliance-${ARCH}}"
+  cache_args=(
+    --cache-from "type=gha,scope=${cache_scope}"
+    --cache-to "type=gha,mode=max,scope=${cache_scope}"
+  )
+fi
+
 docker buildx build \
   --load \
   --platform "${PLATFORM}" \
   --progress=plain \
   --target runtime \
-  --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-  --cache-to "type=gha,mode=max,scope=${CACHE_SCOPE}" \
+  "${cache_args[@]}" \
   --tag "${APP_BUILD_TAG}" \
   "${ROOT_DIR}"
 docker buildx build \
@@ -229,12 +236,18 @@ rm -f \
   "${BUNDLE_DIR}/deploy/production/runtime/supabase/.env" \
   "${BUNDLE_DIR}/deploy/production/runtime/supabase/docker-compose.yml.edutalent-backup"
 rm -rf "${BUNDLE_DIR}/deploy/production/runtime/supabase/.git"
+python3 "${ROOT_DIR}/scripts/appliance/patch_production_command.py" \
+  "${BUNDLE_DIR}/deploy/production/edutalent-production"
 mkdir -p "${BUNDLE_DIR}/scripts/appliance"
 cp "${ROOT_DIR}/scripts/appliance/release_manifest.py" "${BUNDLE_DIR}/scripts/appliance/release_manifest.py"
+cp "${ROOT_DIR}/scripts/appliance/patch_production_command.py" "${BUNDLE_DIR}/scripts/appliance/patch_production_command.py"
 cp "${ROOT_DIR}/deploy/appliance/edutalent-appliance" "${BUNDLE_DIR}/edutalent-appliance"
 cp "${ROOT_DIR}/deploy/appliance/README.md" "${BUNDLE_DIR}/README.md"
 cp "${ROOT_DIR}/deploy/appliance/THIRD_PARTY_NOTICES.md" "${BUNDLE_DIR}/THIRD_PARTY_NOTICES.md"
 cp "${MODEL_LOCK}" "${BUNDLE_DIR}/models/model.lock.json"
+if [[ -f "${ROOT_DIR}/LICENSE" ]]; then
+  cp "${ROOT_DIR}/LICENSE" "${BUNDLE_DIR}/LICENSE"
+fi
 chmod 0755 "${BUNDLE_DIR}/edutalent-appliance" "${BUNDLE_DIR}/deploy/production/edutalent-production"
 
 python3 - "${TEMP_DIR}/service-images.tsv" "${BUNDLE_DIR}/manifests/images.json" "${BUNDLE_DIR}/manifests/compose.locked.yaml" <<'PY'

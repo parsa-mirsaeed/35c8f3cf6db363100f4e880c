@@ -1,3 +1,4 @@
+# Trigger after the helper exists on the pull-request branch.
 name: Split Air Release Workflow
 
 on:

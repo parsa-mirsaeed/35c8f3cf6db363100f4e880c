@@ -28,13 +28,8 @@ PRIVATE_KEY_MARKERS = (
     b"-----BEGIN ENCRYPTED " + b"PRIVATE KEY-----",
     b"-----BEGIN PGP " + b"PRIVATE KEY BLOCK-----",
 )
-TEXT_LIMIT = 4 * 1024 * 1024
-MUTABLE_INSTALLATION_FILES = frozenset(
-    {
-        "deploy/production/.env.edutalent",
-        "deploy/production/runtime/supabase/.env",
-    }
-)
+SCAN_CHUNK_SIZE = 1024 * 1024
+SCAN_OVERLAP = 64 * 1024
 
 
 def sha256_file(path: Path) -> str:
@@ -67,27 +62,30 @@ def is_manifest_input(relative: Path) -> bool:
     } and not value.startswith("signatures/")
 
 
-def is_mutable_installation_file(relative: Path) -> bool:
-    return relative.as_posix() in MUTABLE_INSTALLATION_FILES
+def scan_forbidden_content(path: Path) -> None:
+    overlap = b""
+    with path.open("rb") as handle:
+        while chunk := handle.read(SCAN_CHUNK_SIZE):
+            data = overlap + chunk
+            if any(marker in data for marker in PRIVATE_KEY_MARKERS):
+                raise RuntimeError(f"private key material entered release: {path}")
+            for match in DATABASE_URL.finditer(data):
+                candidate = match.group(0)
+                if b"${" not in candidate and b"{{" not in candidate:
+                    raise RuntimeError(f"credentialed database URL entered release: {path}")
+            overlap = data[-SCAN_OVERLAP:]
 
 
 def reject_forbidden_file(root: Path, path: Path) -> None:
     relative = path.relative_to(root)
     name = path.name.lower()
     value = relative.as_posix().lower()
-    if name in FORBIDDEN_NAMES or any(value.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES):
-        if not value.endswith(".env.example"):
-            raise RuntimeError(f"forbidden release file: {relative}")
+    dotenv = name == ".env" or (name.startswith(".env.") and name != ".env.example")
+    if dotenv or name in FORBIDDEN_NAMES or any(value.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES):
+        raise RuntimeError(f"forbidden release file: {relative}")
     if "target/" in f"/{value}" or "node_modules/" in f"/{value}":
         raise RuntimeError(f"build output entered release: {relative}")
-    if path.stat().st_size <= TEXT_LIMIT:
-        data = path.read_bytes()
-        if any(marker in data for marker in PRIVATE_KEY_MARKERS):
-            raise RuntimeError(f"private key material entered release: {relative}")
-        for match in DATABASE_URL.finditer(data):
-            candidate = match.group(0)
-            if b"${" not in candidate and b"{{" not in candidate:
-                raise RuntimeError(f"credentialed database URL entered release: {relative}")
+    scan_forbidden_content(path)
 
 
 def docker_archive_identity(path: Path) -> tuple[str, set[str]]:
@@ -294,7 +292,6 @@ def verify(args: argparse.Namespace) -> None:
         path.relative_to(root).as_posix()
         for path in relative_files(root)
         if is_manifest_input(path.relative_to(root))
-        and not is_mutable_installation_file(path.relative_to(root))
     }
     if actual_inputs != set(expected_files):
         extra = sorted(actual_inputs.difference(expected_files))

@@ -9,9 +9,14 @@ else
 fi
 MANIFEST="${ROOT_DIR}/manifests/release-manifest.json"
 CHECKSUMS="${ROOT_DIR}/SHA256SUMS"
-PRODUCTION_DIR="${ROOT_DIR}/deploy/production"
+PRODUCTION_SOURCE_DIR="${ROOT_DIR}/deploy/production"
+STATE_DIR="${EDUTALENT_APPLIANCE_STATE_DIR:-${ROOT_DIR}.state}"
+STATE_CONFIG_DIR="${STATE_DIR}/config"
+RUNTIME_PRODUCTION_DIR="${STATE_DIR}/runtime/production"
+APP_ENV="${STATE_CONFIG_DIR}/.env.edutalent"
+SUPABASE_ENV="${STATE_CONFIG_DIR}/supabase.env"
 MODEL_DIR="${ROOT_DIR}/models/local-bge-v1"
-FUNCTIONS_DIR="${PRODUCTION_DIR}/runtime/supabase/volumes/functions"
+FUNCTIONS_DIR="${RUNTIME_PRODUCTION_DIR}/runtime/supabase/volumes/functions"
 LOCKED_COMPOSE="${ROOT_DIR}/manifests/compose.locked.yaml"
 
 usage() {
@@ -201,37 +206,84 @@ ensure_images_loaded() {
   fi
 }
 
+initialize_state_dirs() {
+    [[ "${STATE_DIR}" == /* ]] || {
+        echo "EDUTALENT_APPLIANCE_STATE_DIR must be an absolute path: ${STATE_DIR}" >&2
+        exit 1
+    }
+    case "${STATE_DIR}" in
+      "${ROOT_DIR}"|"${ROOT_DIR}/"*)
+        echo "Appliance state must remain outside the immutable release: ${STATE_DIR}" >&2
+        exit 1
+        ;;
+    esac
+    mkdir -p "${STATE_CONFIG_DIR}" "${STATE_DIR}/runtime"
+    chmod 0700 "${STATE_DIR}" "${STATE_CONFIG_DIR}" "${STATE_DIR}/runtime"
+}
+
+prepare_runtime_production() {
+    verify_bundle
+    initialize_state_dirs
+    rm -rf "${RUNTIME_PRODUCTION_DIR}"
+    mkdir -p "${RUNTIME_PRODUCTION_DIR}"
+    cp -a "${PRODUCTION_SOURCE_DIR}/." "${RUNTIME_PRODUCTION_DIR}/"
+    if [[ -f "${APP_ENV}" ]]; then
+        cp "${APP_ENV}" "${RUNTIME_PRODUCTION_DIR}/.env.edutalent"
+        chmod 0600 "${RUNTIME_PRODUCTION_DIR}/.env.edutalent"
+    fi
+    if [[ -f "${SUPABASE_ENV}" ]]; then
+        mkdir -p "${RUNTIME_PRODUCTION_DIR}/runtime/supabase"
+        cp "${SUPABASE_ENV}" "${RUNTIME_PRODUCTION_DIR}/runtime/supabase/.env"
+        chmod 0600 "${RUNTIME_PRODUCTION_DIR}/runtime/supabase/.env"
+    fi
+}
+
+persist_runtime_environments() {
+    [[ -f "${RUNTIME_PRODUCTION_DIR}/.env.edutalent" ]] || {
+        echo "Runtime application environment was not generated." >&2
+        exit 1
+    }
+    [[ -f "${RUNTIME_PRODUCTION_DIR}/runtime/supabase/.env" ]] || {
+        echo "Runtime Supabase environment was not generated." >&2
+        exit 1
+    }
+    cp "${RUNTIME_PRODUCTION_DIR}/.env.edutalent" "${APP_ENV}"
+    cp "${RUNTIME_PRODUCTION_DIR}/runtime/supabase/.env" "${SUPABASE_ENV}"
+    chmod 0600 "${APP_ENV}" "${SUPABASE_ENV}"
+}
+
 production() {
-  local command="$1"
-  shift
-  export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
-  export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
-  export EDUTALENT_APPLIANCE_FUNCTIONS_DIR="${FUNCTIONS_DIR}"
-  exec bash "${PRODUCTION_DIR}/edutalent-production" "${command}" "$@"
+    local command="$1"
+    shift
+    prepare_runtime_production
+    export EDUTALENT_APP_ENV="${APP_ENV}"
+    export EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}"
+    export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
+    export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
+    export EDUTALENT_APPLIANCE_FUNCTIONS_DIR="${FUNCTIONS_DIR}"
+    exec bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" "${command}" "$@"
 }
 
 init_secrets() {
-  verify_bundle
-  [[ -d "${PRODUCTION_DIR}/runtime/supabase" ]] || {
-    echo "Packaged Supabase runtime is missing." >&2
-    exit 1
-  }
-  if [[ ! -f "${PRODUCTION_DIR}/.env.edutalent" ]]; then
-    cp "${PRODUCTION_DIR}/.env.edutalent.example" "${PRODUCTION_DIR}/.env.edutalent"
-    chmod 600 "${PRODUCTION_DIR}/.env.edutalent"
-    echo "Created ${PRODUCTION_DIR}/.env.edutalent."
-    echo "Set domains, administrative CIDRs, and absolute TLS paths, then rerun init."
-    return 0
-  fi
-  ensure_images_loaded
-  local tools
-  tools="$(tools_image)"
-  docker run --rm --network none \
-    --user "$(id -u):$(id -g)" \
-    -e HOME=/tmp \
-    -v "${ROOT_DIR}:/appliance" \
-    -w /appliance/deploy/production \
-    "${tools}" ./generate-secrets.sh
+    verify_bundle
+    [[ -d "${PRODUCTION_SOURCE_DIR}/runtime/supabase" ]] || {
+        echo "Packaged Supabase runtime is missing." >&2
+        exit 1
+    }
+    initialize_state_dirs
+    if [[ ! -f "${APP_ENV}" ]]; then
+        cp "${PRODUCTION_SOURCE_DIR}/.env.edutalent.example" "${APP_ENV}"
+        chmod 0600 "${APP_ENV}"
+        echo "Created external application environment at ${APP_ENV}."
+        echo "Set domains, administrative CIDRs, and absolute TLS paths, then rerun init."
+        return 0
+    fi
+    ensure_images_loaded
+    prepare_runtime_production
+    local tools
+    tools="$(tools_image)"
+    docker run --rm --network none       --user "$(id -u):$(id -g)"       -e HOME=/tmp       -v "${RUNTIME_PRODUCTION_DIR}:/production"       -w /production       "${tools}" ./generate-secrets.sh
+    persist_runtime_environments
 }
 
 install_bundle() {
@@ -246,8 +298,7 @@ install_bundle() {
     echo "install destination must be empty: ${destination}" >&2
     exit 1
   fi
-  (cd "${ROOT_DIR}" && tar --exclude='./deploy/production/.env.edutalent' --exclude='./deploy/production/runtime/supabase/.env' -cf - .) \
-    | (cd "${destination}" && tar -xf -)
+  (cd "${ROOT_DIR}" && tar -cf - .) | (cd "${destination}" && tar -xf -)
   chmod 0755 "${destination}/edutalent-appliance"
   bash "${destination}/edutalent-appliance" verify
   echo "Installed and verified appliance at ${destination}"
@@ -266,15 +317,17 @@ case "${command}" in
   stop) production down "$@" ;;
   status) production ps "$@" ;;
   checks)
+    prepare_runtime_production
+    export EDUTALENT_APP_ENV="${APP_ENV}"
+    export EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}"
     export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
     export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
     export EDUTALENT_APPLIANCE_FUNCTIONS_DIR="${FUNCTIONS_DIR}"
-    bash "${PRODUCTION_DIR}/edutalent-production" database-check
-    bash "${PRODUCTION_DIR}/edutalent-production" gateway-check
-    bash "${PRODUCTION_DIR}/edutalent-production" ai-check
-    bash "${PRODUCTION_DIR}/edutalent-production" qdrant-check
+    bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" database-check
+    bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" gateway-check
+    bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" ai-check
+    bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" qdrant-check
     ;;
-  install) install_bundle "$@" ;;
   help|-h|--help) usage ;;
   *) echo "Unknown command: ${command}" >&2; usage >&2; exit 2 ;;
 esac

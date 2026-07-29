@@ -7,8 +7,10 @@ bundle="${1:-}"
 bundle="$(cd "${bundle}" && pwd)"
 appliance="${bundle}/edutalent-appliance"
 production_dir="${bundle}/deploy/production"
-app_env="${production_dir}/.env.edutalent"
-supabase_env="${production_dir}/runtime/supabase/.env"
+state_dir="$(mktemp -d)"
+export EDUTALENT_APPLIANCE_STATE_DIR="${state_dir}"
+app_env="${state_dir}/config/.env.edutalent"
+supabase_env="${state_dir}/config/supabase.env"
 tls_dir="$(mktemp -d)"
 started=false
 
@@ -16,8 +18,7 @@ cleanup() {
   if [[ "${started}" == true ]]; then
     "${appliance}" stop >/dev/null 2>&1 || true
   fi
-  rm -rf "${tls_dir}"
-  rm -f "${app_env}" "${supabase_env}" "${production_dir}/runtime/supabase/docker-compose.yml.edutalent-backup"
+  rm -rf "${tls_dir}" "${state_dir}"
 }
 trap cleanup EXIT
 
@@ -71,6 +72,7 @@ openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
   -keyout "${tls_dir}/privkey.pem" \
   -out "${tls_dir}/fullchain.pem" >/dev/null 2>&1
 chmod 600 "${tls_dir}/privkey.pem"
+mkdir -p "$(dirname "${app_env}")"
 cp "${production_dir}/.env.edutalent.example" "${app_env}"
 chmod 600 "${app_env}"
 python3 - "${app_env}" "${tls_dir}" <<'PY'
@@ -105,6 +107,11 @@ env.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 rm -f "${supabase_env}"
 "${appliance}" init
+test -f "${app_env}"
+test -f "${supabase_env}"
+test ! -e "${production_dir}/.env.edutalent"
+test ! -e "${production_dir}/runtime/supabase/.env"
+"${appliance}" verify
 
 started_at="$(date --iso-8601=seconds)"
 "${appliance}" start

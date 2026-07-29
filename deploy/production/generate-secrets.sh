@@ -4,10 +4,10 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUPABASE_DIR="${SCRIPT_DIR}/runtime/supabase"
-SUPABASE_ENV="${SUPABASE_DIR}/.env"
+SUPABASE_ENV="${EDUTALENT_SUPABASE_ENV:-${SUPABASE_DIR}/.env}"
 SUPABASE_COMPOSE="${SUPABASE_DIR}/docker-compose.yml"
 SUPABASE_COMPOSE_BACKUP="${SUPABASE_DIR}/docker-compose.yml.edutalent-backup"
-APP_ENV="${SCRIPT_DIR}/.env.edutalent"
+APP_ENV="${EDUTALENT_APP_ENV:-${SCRIPT_DIR}/.env.edutalent}"
 APP_TEMPLATE="${SCRIPT_DIR}/.env.edutalent.example"
 
 usage() {

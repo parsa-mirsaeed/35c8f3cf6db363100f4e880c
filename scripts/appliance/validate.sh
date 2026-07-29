@@ -53,8 +53,12 @@ grep -Fq 'EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER' "${ROOT_DIR}/deploy/appliance
 grep -Fq 'EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 ! grep -Fq 'signatures/policy.json' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
-grep -Fq 'MUTABLE_INSTALLATION_FILES' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+! grep -Fq 'MUTABLE_INSTALLATION_FILES' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+grep -Fq 'SCAN_CHUNK_SIZE' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
 grep -Fq 'actual_mode' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+grep -Fq 'EDUTALENT_APPLIANCE_STATE_DIR' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'EDUTALENT_APP_ENV' "${ROOT_DIR}/deploy/production/edutalent-production"
+grep -Fq 'EDUTALENT_SUPABASE_ENV' "${ROOT_DIR}/deploy/production/generate-secrets.sh"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 ! grep -Fq 'policy.json' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
 grep -Fq 'syft' "${ROOT_DIR}/scripts/appliance/build.sh"
@@ -338,14 +342,21 @@ PATH="${fixture}/fake-bin:${PATH}" \
 grep -Fq -- '--key' "${fixture}/cosign.log"
 
 mkdir -p "${fixture}/bundle/deploy/production/runtime/supabase"
-printf 'generated app state\n' > "${fixture}/bundle/deploy/production/.env.edutalent"
-printf 'generated supabase state\n' > "${fixture}/bundle/deploy/production/runtime/supabase/.env"
-chmod 0600 \
-  "${fixture}/bundle/deploy/production/.env.edutalent" \
-  "${fixture}/bundle/deploy/production/runtime/supabase/.env"
-python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
-  --bundle "${fixture}/bundle"
-
+printf 'attacker app state
+' > "${fixture}/bundle/deploy/production/.env.edutalent"
+if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify   --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+  echo "unsigned application environment was accepted" >&2
+  exit 1
+fi
+rm -f "${fixture}/bundle/deploy/production/.env.edutalent"
+printf 'attacker supabase state
+' > "${fixture}/bundle/deploy/production/runtime/supabase/.env"
+if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify   --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+  echo "unsigned Supabase environment was accepted" >&2
+  exit 1
+fi
+rm -f "${fixture}/bundle/deploy/production/runtime/supabase/.env"
+python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify   --bundle "${fixture}/bundle"
 chmod 0755 "${fixture}/bundle/sbom/images/fixture.spdx.json"
 if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
   --bundle "${fixture}/bundle" >/dev/null 2>&1; then
@@ -406,6 +417,50 @@ for marker in markers:
         continue
     raise AssertionError(f"private-key marker was accepted: {marker!r}")
 PYTEST
+
+python3 - "${ROOT_DIR}/scripts/appliance/release_manifest.py" "${fixture}/scanner-tests" <<'PYSCAN'
+import importlib.util
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+root = Path(sys.argv[2])
+root.mkdir(parents=True, exist_ok=True)
+spec = importlib.util.spec_from_file_location("appliance_release_scanner", source)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+for name in (".env.local", ".env.production", ".env.test.secret"):
+    candidate = root / name
+    candidate.write_text("TOKEN=fixture\n", encoding="utf-8")
+    try:
+        module.reject_forbidden_file(root, candidate)
+    except RuntimeError:
+        continue
+    raise AssertionError(f"dotenv variant was accepted: {name}")
+
+example = root / ".env.example"
+example.write_text("TOKEN=\n", encoding="utf-8")
+module.reject_forbidden_file(root, example)
+
+large = root / "large-release-note.txt"
+large.write_bytes(b"x" * (5 * 1024 * 1024) + b"-----BEGIN OPENSSH PRIVATE KEY-----\n")
+try:
+    module.reject_forbidden_file(root, large)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("private key marker beyond 4 MiB was accepted")
+
+large.write_bytes(b"x" * (5 * 1024 * 1024) + b"postgresql://user:password@db.internal/app\n")
+try:
+    module.reject_forbidden_file(root, large)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("credentialed database URL beyond 4 MiB was accepted")
+PYSCAN
 
 portable_checksums="${fixture}/portable-checksums"
 mkdir -p "${portable_checksums}/source" "${portable_checksums}/moved"

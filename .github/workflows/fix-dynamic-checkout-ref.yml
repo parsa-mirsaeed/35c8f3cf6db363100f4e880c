@@ -1,0 +1,17 @@
+name: Fix dynamic checkout ref
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/fix-dynamic-checkout-ref.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo staging

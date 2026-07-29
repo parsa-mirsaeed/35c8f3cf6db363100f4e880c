@@ -1,4 +1,5 @@
 name: Fix reusable permission ceiling
+# Trigger after workflow creation.
 
 on:
   pull_request:

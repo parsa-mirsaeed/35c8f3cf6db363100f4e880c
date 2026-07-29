@@ -220,7 +220,7 @@ digest = hashlib.sha256(config).hexdigest()
 manifest = json.dumps(
     [
         {
-            "Config": f"{digest}.json",
+            "Config": f"blobs/sha256/{digest}",
             "Layers": [],
             "RepoTags": ["edutalent-offline/fixture:v1-amd64-aaaaaaaaaaaaaaaa"],
         }
@@ -228,13 +228,84 @@ manifest = json.dumps(
     separators=(",", ":"),
 ).encode()
 with tarfile.open(Path(sys.argv[1]), "w:gz") as archive:
-    for name, data in ((f"{digest}.json", config), ("manifest.json", manifest)):
+    for name, data in ((f"blobs/sha256/{digest}", config), ("manifest.json", manifest)):
         info = tarfile.TarInfo(name)
         info.mode = 0o644
         info.mtime = 0
         info.size = len(data)
         archive.addfile(info, io.BytesIO(data))
 PY
+python3 - "${ROOT_DIR}/scripts/appliance/release_manifest.py" "${fixture}/docker-archive-layouts" <<'PYARCHIVE'
+import hashlib
+import importlib.util
+import io
+import json
+import sys
+import tarfile
+from pathlib import Path
+
+source = Path(sys.argv[1])
+root = Path(sys.argv[2])
+root.mkdir(parents=True, exist_ok=True)
+spec = importlib.util.spec_from_file_location("appliance_release_archive", source)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+config = json.dumps(
+    {
+        "architecture": "amd64",
+        "config": {},
+        "os": "linux",
+        "rootfs": {"diff_ids": [], "type": "layers"},
+    },
+    sort_keys=True,
+    separators=(",", ":"),
+).encode()
+digest = hashlib.sha256(config).hexdigest()
+tag = "edutalent-offline/archive-layout:v1-amd64-aaaaaaaaaaaaaaaa"
+
+def write_archive(path: Path, config_name: str, payload: bytes = config) -> None:
+    manifest = json.dumps(
+        [{"Config": config_name, "Layers": [], "RepoTags": [tag]}],
+        separators=(",", ":"),
+    ).encode()
+    with tarfile.open(path, "w:gz") as archive:
+        for name, data in ((config_name, payload), ("manifest.json", manifest)):
+            info = tarfile.TarInfo(name)
+            info.mode = 0o644
+            info.mtime = 0
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+
+for label, config_name in (
+    ("legacy", f"{digest}.json"),
+    ("containerd", f"blobs/sha256/{digest}"),
+):
+    archive_path = root / f"{label}.tar.gz"
+    write_archive(archive_path, config_name)
+    image_id, tags = module.docker_archive_identity(archive_path)
+    assert image_id == f"sha256:{digest}", (label, image_id)
+    assert tags == {tag}, (label, tags)
+
+mismatch = root / "digest-mismatch.tar.gz"
+write_archive(mismatch, "blobs/sha256/" + "0" * 64)
+try:
+    module.docker_archive_identity(mismatch)
+except RuntimeError as error:
+    assert "content digest" in str(error)
+else:
+    raise AssertionError("Docker archive config digest mismatch was accepted")
+
+unsupported = root / "unsupported-config-path.tar.gz"
+write_archive(unsupported, f"../{digest}.json")
+try:
+    module.docker_archive_identity(unsupported)
+except RuntimeError as error:
+    assert "config is invalid" in str(error)
+else:
+    raise AssertionError("unsafe Docker archive config path was accepted")
+PYARCHIVE
 printf '{}\n' > "${fixture}/bundle/sbom/images/fixture.spdx.json"
 printf 'fixture weight\n' > "${fixture}/bundle/models/test-model/model.safetensors"
 weight_sha="$(sha256sum "${fixture}/bundle/models/test-model/model.safetensors" | awk '{print $1}')"

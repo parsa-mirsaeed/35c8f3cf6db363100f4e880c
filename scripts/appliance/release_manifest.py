@@ -91,7 +91,10 @@ def reject_forbidden_file(root: Path, path: Path) -> None:
 def docker_archive_identity(path: Path) -> tuple[str, set[str]]:
     try:
         with tarfile.open(path, mode="r:gz") as archive:
-            manifest_handle = archive.extractfile("manifest.json")
+            try:
+                manifest_handle = archive.extractfile("manifest.json")
+            except KeyError:
+                manifest_handle = None
             if manifest_handle is None:
                 raise RuntimeError("Docker archive manifest.json is missing")
             entries = json.loads(manifest_handle.read())
@@ -99,14 +102,23 @@ def docker_archive_identity(path: Path) -> tuple[str, set[str]]:
                 raise RuntimeError("each appliance archive must contain exactly one image")
             entry = entries[0]
             config_name = entry.get("Config", "")
-            if not isinstance(config_name, str) or not config_name.endswith(".json"):
+            if not isinstance(config_name, str):
                 raise RuntimeError("Docker archive image config is invalid")
-            config_handle = archive.extractfile(config_name)
+            legacy = re.fullmatch(r"([0-9a-f]{64})\.json", config_name)
+            content_store = re.fullmatch(r"blobs/sha256/([0-9a-f]{64})", config_name)
+            match = legacy or content_store
+            if match is None:
+                raise RuntimeError("Docker archive image config is invalid")
+            declared_digest = match.group(1)
+            try:
+                config_handle = archive.extractfile(config_name)
+            except KeyError:
+                config_handle = None
             if config_handle is None:
                 raise RuntimeError("Docker archive image config is missing")
             config = config_handle.read()
             digest = hashlib.sha256(config).hexdigest()
-            if Path(config_name).name != f"{digest}.json":
+            if declared_digest != digest:
                 raise RuntimeError("Docker archive config name does not match its content digest")
             tags = entry.get("RepoTags") or []
             if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
@@ -114,7 +126,6 @@ def docker_archive_identity(path: Path) -> tuple[str, set[str]]:
             return f"sha256:{digest}", set(tags)
     except (tarfile.TarError, json.JSONDecodeError) as error:
         raise RuntimeError(f"invalid Docker image archive: {path.name}") from error
-
 
 def file_inventory(root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []

@@ -1,0 +1,64 @@
+name: Apply final review fixes
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/apply-final-review-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Apply reusable proof and stable state corrections
+        run: python3 .github/apply-final-review-fixes.py
+
+      - name: Validate scripts, workflows, and appliance regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n \
+            deploy/appliance/edutalent-appliance \
+            scripts/appliance/build.sh \
+            scripts/appliance/offline_smoke.sh \
+            scripts/appliance/validate.sh
+          python3 -m py_compile scripts/appliance/release_manifest.py
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path) }' \
+            .github/workflows/air-gapped-appliance.yml \
+            .github/workflows/mirror-final-proof.yml
+          bash scripts/appliance/validate.sh
+          git diff --check
+
+      - name: Commit reviewed source and workflow corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/apply-final-review-fixes.py \
+            .github/workflows/apply-final-review-fixes.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            .github/apply-final-review-fixes.py \
+            .github/workflows/apply-final-review-fixes.yml \
+            .github/workflows/air-gapped-appliance.yml \
+            .github/workflows/mirror-final-proof.yml \
+            deploy/appliance/README.md \
+            deploy/appliance/edutalent-appliance \
+            scripts/appliance/build.sh \
+            scripts/appliance/validate.sh
+          git commit -m 'fix(appliance): reuse final proof and installation state'
+          echo "FINAL_COMMIT=$(git rev-parse HEAD)"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

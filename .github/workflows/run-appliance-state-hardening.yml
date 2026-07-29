@@ -26,7 +26,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import re
           from pathlib import Path
 
           workflow_lines = Path(".github/workflows/apply-appliance-state-hardening.yml").read_text(encoding="utf-8").splitlines()
@@ -39,28 +38,29 @@ jobs:
           script_lines = workflow_lines[run_line + 1:next_step]
           script = "\n".join(line[10:] if line.startswith("          ") else line for line in script_lines) + "\n"
 
-          def literal(name: str, next_name: str) -> str:
-              match = re.search(
-                  rf"{name} = '''(.*?)'''\n{next_name}",
-                  script,
-                  flags=re.DOTALL,
-              )
-              if match is None:
-                  raise SystemExit(f"unable to extract {name}")
-              return match.group(1).rstrip("\n")
-
-          expected_production = literal("old_production", "new_production")
-          expected_init = literal("old_init", "new_init")
-
-          launcher = Path("deploy/appliance/edutalent-appliance")
-          text = launcher.read_text(encoding="utf-8")
-          production_start = text.index("production() {")
+          old_production_guard = '''if text.count(old_production) != 1:
+              raise SystemExit("appliance production function changed unexpectedly")
+          text = text.replace(old_production, new_production, 1)
+          '''
+          new_production_guard = '''production_start = text.index("production() {")
           init_start = text.index("init_secrets() {", production_start)
-          text = text[:production_start] + expected_production + "\n\n" + text[init_start:]
-          init_start = text.index("init_secrets() {", production_start)
+          text = text[:production_start] + new_production.rstrip("\\n") + "\\n\\n" + text[init_start:]
+          '''
+          if script.count(old_production_guard) != 1:
+              raise SystemExit("unable to replace production guard")
+          script = script.replace(old_production_guard, new_production_guard, 1)
+
+          old_init_guard = '''if text.count(old_init) != 1:
+              raise SystemExit("appliance init function changed unexpectedly")
+          text = text.replace(old_init, new_init, 1)
+          '''
+          new_init_guard = '''init_start = text.index("init_secrets() {", production_start)
           install_start = text.index("install_bundle() {", init_start)
-          text = text[:init_start] + expected_init + "\n\n" + text[install_start:]
-          launcher.write_text(text, encoding="utf-8")
+          text = text[:init_start] + new_init.rstrip("\\n") + "\\n\\n" + text[install_start:]
+          '''
+          if script.count(old_init_guard) != 1:
+              raise SystemExit("unable to replace init guard")
+          script = script.replace(old_init_guard, new_init_guard, 1)
 
           Path("/tmp/apply-state-hardening.sh").write_text(script, encoding="utf-8")
           PY

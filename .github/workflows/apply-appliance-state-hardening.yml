@@ -36,15 +36,26 @@ jobs:
                   raise SystemExit(f"{path}: expected one match, found {count}")
               target.write_text(text.replace(old, new, 1), encoding="utf-8")
 
-          for path in (
+          replace_once(
               "deploy/production/edutalent-production",
+              'SUPABASE_ENV="${SUPABASE_DIR}/.env"',
+              'SUPABASE_ENV="${EDUTALENT_SUPABASE_ENV:-${SUPABASE_DIR}/.env}"',
+          )
+          replace_once(
+              "deploy/production/edutalent-production",
+              'APP_ENV="${SCRIPT_DIR}/.env.edutalent"',
+              'APP_ENV="${EDUTALENT_APP_ENV:-${SCRIPT_DIR}/.env.edutalent}"',
+          )
+          replace_once(
               "deploy/production/generate-secrets.sh",
-          ):
-              replace_once(
-                  path,
-                  'SUPABASE_ENV="${SUPABASE_DIR}/.env"\nAPP_ENV="${SCRIPT_DIR}/.env.edutalent"',
-                  'SUPABASE_ENV="${EDUTALENT_SUPABASE_ENV:-${SUPABASE_DIR}/.env}"\nAPP_ENV="${EDUTALENT_APP_ENV:-${SCRIPT_DIR}/.env.edutalent}"',
-              )
+              'SUPABASE_ENV="${SUPABASE_DIR}/.env"',
+              'SUPABASE_ENV="${EDUTALENT_SUPABASE_ENV:-${SUPABASE_DIR}/.env}"',
+          )
+          replace_once(
+              "deploy/production/generate-secrets.sh",
+              'APP_ENV="${SCRIPT_DIR}/.env.edutalent"',
+              'APP_ENV="${EDUTALENT_APP_ENV:-${SCRIPT_DIR}/.env.edutalent}"',
+          )
 
           manifest = Path("scripts/appliance/release_manifest.py")
           text = manifest.read_text(encoding="utf-8")

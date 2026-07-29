@@ -1,0 +1,490 @@
+name: Apply appliance state hardening
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/apply-appliance-state-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Apply external-state and scanner corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          for path in (
+              "deploy/production/edutalent-production",
+              "deploy/production/generate-secrets.sh",
+          ):
+              replace_once(
+                  path,
+                  'SUPABASE_ENV="${SUPABASE_DIR}/.env"\nAPP_ENV="${SCRIPT_DIR}/.env.edutalent"',
+                  'SUPABASE_ENV="${EDUTALENT_SUPABASE_ENV:-${SUPABASE_DIR}/.env}"\nAPP_ENV="${EDUTALENT_APP_ENV:-${SCRIPT_DIR}/.env.edutalent}"',
+              )
+
+          manifest = Path("scripts/appliance/release_manifest.py")
+          text = manifest.read_text(encoding="utf-8")
+          old_constants = '''TEXT_LIMIT = 4 * 1024 * 1024
+          MUTABLE_INSTALLATION_FILES = frozenset(
+              {
+                  "deploy/production/.env.edutalent",
+                  "deploy/production/runtime/supabase/.env",
+              }
+          )
+          '''
+          new_constants = '''SCAN_CHUNK_SIZE = 1024 * 1024
+          SCAN_OVERLAP = 64 * 1024
+          '''
+          if text.count(old_constants) != 1:
+              raise SystemExit("release scanner constants changed unexpectedly")
+          text = text.replace(old_constants, new_constants, 1)
+
+          old_mutable = '''def is_mutable_installation_file(relative: Path) -> bool:
+              return relative.as_posix() in MUTABLE_INSTALLATION_FILES
+
+
+          '''
+          scan_function = '''def scan_forbidden_content(path: Path) -> None:
+              overlap = b""
+              with path.open("rb") as handle:
+                  while chunk := handle.read(SCAN_CHUNK_SIZE):
+                      data = overlap + chunk
+                      if any(marker in data for marker in PRIVATE_KEY_MARKERS):
+                          raise RuntimeError(f"private key material entered release: {path}")
+                      for match in DATABASE_URL.finditer(data):
+                          candidate = match.group(0)
+                          if b"${" not in candidate and b"{{" not in candidate:
+                              raise RuntimeError(f"credentialed database URL entered release: {path}")
+                      overlap = data[-SCAN_OVERLAP:]
+
+
+          '''
+          if text.count(old_mutable) != 1:
+              raise SystemExit("mutable installation helper changed unexpectedly")
+          text = text.replace(old_mutable, scan_function, 1)
+
+          old_reject = '''    if name in FORBIDDEN_NAMES or any(value.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES):
+                  if not value.endswith(".env.example"):
+                      raise RuntimeError(f"forbidden release file: {relative}")
+              if "target/" in f"/{value}" or "node_modules/" in f"/{value}":
+                  raise RuntimeError(f"build output entered release: {relative}")
+              if path.stat().st_size <= TEXT_LIMIT:
+                  data = path.read_bytes()
+                  if any(marker in data for marker in PRIVATE_KEY_MARKERS):
+                      raise RuntimeError(f"private key material entered release: {relative}")
+                  for match in DATABASE_URL.finditer(data):
+                      candidate = match.group(0)
+                      if b"${" not in candidate and b"{{" not in candidate:
+                          raise RuntimeError(f"credentialed database URL entered release: {relative}")
+          '''
+          new_reject = '''    dotenv = name == ".env" or (name.startswith(".env.") and name != ".env.example")
+              if dotenv or name in FORBIDDEN_NAMES or any(value.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES):
+                  raise RuntimeError(f"forbidden release file: {relative}")
+              if "target/" in f"/{value}" or "node_modules/" in f"/{value}":
+                  raise RuntimeError(f"build output entered release: {relative}")
+              scan_forbidden_content(path)
+          '''
+          if text.count(old_reject) != 1:
+              raise SystemExit("release file rejection block changed unexpectedly")
+          text = text.replace(old_reject, new_reject, 1)
+          old_filter = '''        if is_manifest_input(path.relative_to(root))
+                  and not is_mutable_installation_file(path.relative_to(root))
+              }
+          '''
+          new_filter = '''        if is_manifest_input(path.relative_to(root))
+              }
+          '''
+          if text.count(old_filter) != 1:
+              raise SystemExit("release inventory filter changed unexpectedly")
+          manifest.write_text(text.replace(old_filter, new_filter, 1), encoding="utf-8")
+
+          launcher = Path("deploy/appliance/edutalent-appliance")
+          text = launcher.read_text(encoding="utf-8")
+          old_paths = '''PRODUCTION_DIR="${ROOT_DIR}/deploy/production"
+          MODEL_DIR="${ROOT_DIR}/models/local-bge-v1"
+          FUNCTIONS_DIR="${PRODUCTION_DIR}/runtime/supabase/volumes/functions"
+          LOCKED_COMPOSE="${ROOT_DIR}/manifests/compose.locked.yaml"
+          '''
+          new_paths = '''PRODUCTION_SOURCE_DIR="${ROOT_DIR}/deploy/production"
+          STATE_DIR="${EDUTALENT_APPLIANCE_STATE_DIR:-${ROOT_DIR}.state}"
+          STATE_CONFIG_DIR="${STATE_DIR}/config"
+          RUNTIME_PRODUCTION_DIR="${STATE_DIR}/runtime/production"
+          APP_ENV="${STATE_CONFIG_DIR}/.env.edutalent"
+          SUPABASE_ENV="${STATE_CONFIG_DIR}/supabase.env"
+          MODEL_DIR="${ROOT_DIR}/models/local-bge-v1"
+          FUNCTIONS_DIR="${RUNTIME_PRODUCTION_DIR}/runtime/supabase/volumes/functions"
+          LOCKED_COMPOSE="${ROOT_DIR}/manifests/compose.locked.yaml"
+          '''
+          if text.count(old_paths) != 1:
+              raise SystemExit("appliance path block changed unexpectedly")
+          text = text.replace(old_paths, new_paths, 1)
+
+          old_production = '''production() {
+              local command="$1"
+              shift
+              export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
+              export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
+              export EDUTALENT_APPLIANCE_FUNCTIONS_DIR="${FUNCTIONS_DIR}"
+              exec bash "${PRODUCTION_DIR}/edutalent-production" "${command}" "$@"
+          }
+
+          '''
+          new_production = '''initialize_state_dirs() {
+              [[ "${STATE_DIR}" == /* ]] || {
+                  echo "EDUTALENT_APPLIANCE_STATE_DIR must be an absolute path: ${STATE_DIR}" >&2
+                  exit 1
+              }
+              case "${STATE_DIR}" in
+                "${ROOT_DIR}"|"${ROOT_DIR}/"*)
+                  echo "Appliance state must remain outside the immutable release: ${STATE_DIR}" >&2
+                  exit 1
+                  ;;
+              esac
+              mkdir -p "${STATE_CONFIG_DIR}" "${STATE_DIR}/runtime"
+              chmod 0700 "${STATE_DIR}" "${STATE_CONFIG_DIR}" "${STATE_DIR}/runtime"
+          }
+
+          prepare_runtime_production() {
+              verify_bundle
+              initialize_state_dirs
+              rm -rf "${RUNTIME_PRODUCTION_DIR}"
+              mkdir -p "${RUNTIME_PRODUCTION_DIR}"
+              cp -a "${PRODUCTION_SOURCE_DIR}/." "${RUNTIME_PRODUCTION_DIR}/"
+              if [[ -f "${APP_ENV}" ]]; then
+                  cp "${APP_ENV}" "${RUNTIME_PRODUCTION_DIR}/.env.edutalent"
+                  chmod 0600 "${RUNTIME_PRODUCTION_DIR}/.env.edutalent"
+              fi
+              if [[ -f "${SUPABASE_ENV}" ]]; then
+                  mkdir -p "${RUNTIME_PRODUCTION_DIR}/runtime/supabase"
+                  cp "${SUPABASE_ENV}" "${RUNTIME_PRODUCTION_DIR}/runtime/supabase/.env"
+                  chmod 0600 "${RUNTIME_PRODUCTION_DIR}/runtime/supabase/.env"
+              fi
+          }
+
+          persist_runtime_environments() {
+              [[ -f "${RUNTIME_PRODUCTION_DIR}/.env.edutalent" ]] || {
+                  echo "Runtime application environment was not generated." >&2
+                  exit 1
+              }
+              [[ -f "${RUNTIME_PRODUCTION_DIR}/runtime/supabase/.env" ]] || {
+                  echo "Runtime Supabase environment was not generated." >&2
+                  exit 1
+              }
+              cp "${RUNTIME_PRODUCTION_DIR}/.env.edutalent" "${APP_ENV}"
+              cp "${RUNTIME_PRODUCTION_DIR}/runtime/supabase/.env" "${SUPABASE_ENV}"
+              chmod 0600 "${APP_ENV}" "${SUPABASE_ENV}"
+          }
+
+          production() {
+              local command="$1"
+              shift
+              prepare_runtime_production
+              export EDUTALENT_APP_ENV="${APP_ENV}"
+              export EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}"
+              export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
+              export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
+              export EDUTALENT_APPLIANCE_FUNCTIONS_DIR="${FUNCTIONS_DIR}"
+              exec bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" "${command}" "$@"
+          }
+
+          '''
+          if text.count(old_production) != 1:
+              raise SystemExit("appliance production function changed unexpectedly")
+          text = text.replace(old_production, new_production, 1)
+
+          old_init = '''init_secrets() {
+              verify_bundle
+              [[ -d "${PRODUCTION_DIR}/runtime/supabase" ]] || {
+                  echo "Packaged Supabase runtime is missing." >&2
+                  exit 1
+              }
+              if [[ ! -f "${PRODUCTION_DIR}/.env.edutalent" ]]; then
+                  cp "${PRODUCTION_DIR}/.env.edutalent.example" "${PRODUCTION_DIR}/.env.edutalent"
+                  chmod 600 "${PRODUCTION_DIR}/.env.edutalent"
+                  echo "Created ${PRODUCTION_DIR}/.env.edutalent."
+                  echo "Set domains, administrative CIDRs, and absolute TLS paths, then rerun init."
+                  return 0
+              fi
+              ensure_images_loaded
+              local tools
+              tools="$(tools_image)"
+              docker run --rm --network none \
+                --user "$(id -u):$(id -g)" \
+                -e HOME=/tmp \
+                -v "${ROOT_DIR}:/appliance" \
+                -w /appliance/deploy/production \
+                "${tools}" ./generate-secrets.sh
+          }
+          '''
+          new_init = '''init_secrets() {
+              verify_bundle
+              [[ -d "${PRODUCTION_SOURCE_DIR}/runtime/supabase" ]] || {
+                  echo "Packaged Supabase runtime is missing." >&2
+                  exit 1
+              }
+              initialize_state_dirs
+              if [[ ! -f "${APP_ENV}" ]]; then
+                  cp "${PRODUCTION_SOURCE_DIR}/.env.edutalent.example" "${APP_ENV}"
+                  chmod 0600 "${APP_ENV}"
+                  echo "Created external application environment at ${APP_ENV}."
+                  echo "Set domains, administrative CIDRs, and absolute TLS paths, then rerun init."
+                  return 0
+              fi
+              ensure_images_loaded
+              prepare_runtime_production
+              local tools
+              tools="$(tools_image)"
+              docker run --rm --network none \
+                --user "$(id -u):$(id -g)" \
+                -e HOME=/tmp \
+                -v "${RUNTIME_PRODUCTION_DIR}:/production" \
+                -w /production \
+                "${tools}" ./generate-secrets.sh
+              persist_runtime_environments
+          }
+          '''
+          if text.count(old_init) != 1:
+              raise SystemExit("appliance init function changed unexpectedly")
+          text = text.replace(old_init, new_init, 1)
+
+          old_install = '''  (cd "${ROOT_DIR}" && tar --exclude='./deploy/production/.env.edutalent' --exclude='./deploy/production/runtime/supabase/.env' -cf - .) \
+                | (cd "${destination}" && tar -xf -)
+          '''
+          new_install = '''  (cd "${ROOT_DIR}" && tar -cf - .) | (cd "${destination}" && tar -xf -)
+          '''
+          if text.count(old_install) != 1:
+              raise SystemExit("appliance install copy changed unexpectedly")
+          text = text.replace(old_install, new_install, 1)
+
+          old_checks = '''  checks)
+              export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
+              export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
+              export EDUTALENT_APPLIANCE_FUNCTIONS_DIR="${FUNCTIONS_DIR}"
+              bash "${PRODUCTION_DIR}/edutalent-production" database-check
+              bash "${PRODUCTION_DIR}/edutalent-production" gateway-check
+              bash "${PRODUCTION_DIR}/edutalent-production" ai-check
+              bash "${PRODUCTION_DIR}/edutalent-production" qdrant-check
+              ;;
+          '''
+          new_checks = '''  checks)
+              prepare_runtime_production
+              export EDUTALENT_APP_ENV="${APP_ENV}"
+              export EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}"
+              export EDUTALENT_COMPOSE_OVERRIDE="${LOCKED_COMPOSE}"
+              export EDUTALENT_APPLIANCE_MODEL_DIR="${MODEL_DIR}"
+              export EDUTALENT_APPLIANCE_FUNCTIONS_DIR="${FUNCTIONS_DIR}"
+              bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" database-check
+              bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" gateway-check
+              bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" ai-check
+              bash "${RUNTIME_PRODUCTION_DIR}/edutalent-production" qdrant-check
+              ;;
+          '''
+          if text.count(old_checks) != 1:
+              raise SystemExit("appliance checks block changed unexpectedly")
+          launcher.write_text(text.replace(old_checks, new_checks, 1), encoding="utf-8")
+
+          smoke = Path("scripts/appliance/offline_smoke.sh")
+          text = smoke.read_text(encoding="utf-8")
+          old_smoke_paths = '''production_dir="${bundle}/deploy/production"
+          app_env="${production_dir}/.env.edutalent"
+          supabase_env="${production_dir}/runtime/supabase/.env"
+          tls_dir="$(mktemp -d)"
+          '''
+          new_smoke_paths = '''production_dir="${bundle}/deploy/production"
+          state_dir="$(mktemp -d)"
+          export EDUTALENT_APPLIANCE_STATE_DIR="${state_dir}"
+          app_env="${state_dir}/config/.env.edutalent"
+          supabase_env="${state_dir}/config/supabase.env"
+          tls_dir="$(mktemp -d)"
+          '''
+          if text.count(old_smoke_paths) != 1:
+              raise SystemExit("offline smoke path block changed unexpectedly")
+          text = text.replace(old_smoke_paths, new_smoke_paths, 1)
+          old_cleanup = '''  rm -rf "${tls_dir}"
+              rm -f "${app_env}" "${supabase_env}" "${production_dir}/runtime/supabase/docker-compose.yml.edutalent-backup"
+          '''
+          new_cleanup = '''  rm -rf "${tls_dir}" "${state_dir}"
+          '''
+          if text.count(old_cleanup) != 1:
+              raise SystemExit("offline smoke cleanup changed unexpectedly")
+          text = text.replace(old_cleanup, new_cleanup, 1)
+          old_copy = '''cp "${production_dir}/.env.edutalent.example" "${app_env}"
+          chmod 600 "${app_env}"
+          '''
+          new_copy = '''mkdir -p "$(dirname "${app_env}")"
+          cp "${production_dir}/.env.edutalent.example" "${app_env}"
+          chmod 600 "${app_env}"
+          '''
+          if text.count(old_copy) != 1:
+              raise SystemExit("offline smoke environment setup changed unexpectedly")
+          text = text.replace(old_copy, new_copy, 1)
+          old_rm = '''rm -f "${supabase_env}"
+          "${appliance}" init
+          '''
+          new_rm = '''rm -f "${supabase_env}"
+          "${appliance}" init
+          test -f "${app_env}"
+          test -f "${supabase_env}"
+          test ! -e "${production_dir}/.env.edutalent"
+          test ! -e "${production_dir}/runtime/supabase/.env"
+          "${appliance}" verify
+          '''
+          if text.count(old_rm) != 1:
+              raise SystemExit("offline smoke init block changed unexpectedly")
+          smoke.write_text(text.replace(old_rm, new_rm, 1), encoding="utf-8")
+
+          validate = Path("scripts/appliance/validate.sh")
+          text = validate.read_text(encoding="utf-8")
+          old_static = '''grep -Fq 'MUTABLE_INSTALLATION_FILES' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+          grep -Fq 'actual_mode' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+          '''
+          new_static = '''! grep -Fq 'MUTABLE_INSTALLATION_FILES' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+          grep -Fq 'SCAN_CHUNK_SIZE' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+          grep -Fq 'actual_mode' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
+          grep -Fq 'EDUTALENT_APPLIANCE_STATE_DIR' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+          grep -Fq 'EDUTALENT_APP_ENV' "${ROOT_DIR}/deploy/production/edutalent-production"
+          grep -Fq 'EDUTALENT_SUPABASE_ENV' "${ROOT_DIR}/deploy/production/generate-secrets.sh"
+          '''
+          if text.count(old_static) != 1:
+              raise SystemExit("appliance static state assertions changed unexpectedly")
+          text = text.replace(old_static, new_static, 1)
+
+          old_mutable_fixture = '''mkdir -p "${fixture}/bundle/deploy/production/runtime/supabase"
+          printf 'generated app state\n' > "${fixture}/bundle/deploy/production/.env.edutalent"
+          printf 'generated supabase state\n' > "${fixture}/bundle/deploy/production/runtime/supabase/.env"
+          chmod 0600 \
+            "${fixture}/bundle/deploy/production/.env.edutalent" \
+            "${fixture}/bundle/deploy/production/runtime/supabase/.env"
+          python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+            --bundle "${fixture}/bundle"
+
+          '''
+          new_mutable_fixture = '''mkdir -p "${fixture}/bundle/deploy/production/runtime/supabase"
+          printf 'attacker app state\n' > "${fixture}/bundle/deploy/production/.env.edutalent"
+          if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+            --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+            echo "unsigned application environment was accepted" >&2
+            exit 1
+          fi
+          rm -f "${fixture}/bundle/deploy/production/.env.edutalent"
+          printf 'attacker supabase state\n' > "${fixture}/bundle/deploy/production/runtime/supabase/.env"
+          if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+            --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+            echo "unsigned Supabase environment was accepted" >&2
+            exit 1
+          fi
+          rm -f "${fixture}/bundle/deploy/production/runtime/supabase/.env"
+          python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+            --bundle "${fixture}/bundle"
+
+          '''
+          if text.count(old_mutable_fixture) != 1:
+              raise SystemExit("mutable environment fixture changed unexpectedly")
+          text = text.replace(old_mutable_fixture, new_mutable_fixture, 1)
+
+          marker = '''portable_checksums="${fixture}/portable-checksums"
+          '''
+          scanner_tests = '''python3 - "${ROOT_DIR}/scripts/appliance/release_manifest.py" "${fixture}/scanner-tests" <<'PYSCAN'
+          import importlib.util
+          import sys
+          from pathlib import Path
+
+          source = Path(sys.argv[1])
+          root = Path(sys.argv[2])
+          root.mkdir(parents=True, exist_ok=True)
+          spec = importlib.util.spec_from_file_location("appliance_release_scanner", source)
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(module)
+
+          for name in (".env.local", ".env.production", ".env.test.secret"):
+              candidate = root / name
+              candidate.write_text("TOKEN=fixture\n", encoding="utf-8")
+              try:
+                  module.reject_forbidden_file(root, candidate)
+              except RuntimeError:
+                  continue
+              raise AssertionError(f"dotenv variant was accepted: {name}")
+
+          example = root / ".env.example"
+          example.write_text("TOKEN=\n", encoding="utf-8")
+          module.reject_forbidden_file(root, example)
+
+          large = root / "large-release-note.txt"
+          large.write_bytes(b"x" * (5 * 1024 * 1024) + b"-----BEGIN OPENSSH PRIVATE KEY-----\n")
+          try:
+              module.reject_forbidden_file(root, large)
+          except RuntimeError:
+              pass
+          else:
+              raise AssertionError("private key marker beyond 4 MiB was accepted")
+
+          large.write_bytes(b"x" * (5 * 1024 * 1024) + b"postgresql://user:password@db.internal/app\n")
+          try:
+              module.reject_forbidden_file(root, large)
+          except RuntimeError:
+              pass
+          else:
+              raise AssertionError("credentialed database URL beyond 4 MiB was accepted")
+          PYSCAN
+
+          portable_checksums="${fixture}/portable-checksums"
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit("scanner test insertion marker changed unexpectedly")
+          validate.write_text(text.replace(marker, scanner_tests, 1), encoding="utf-8")
+          PY
+
+      - name: Run focused and complete appliance validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n \
+            deploy/appliance/edutalent-appliance \
+            deploy/production/edutalent-production \
+            deploy/production/generate-secrets.sh \
+            scripts/appliance/offline_smoke.sh \
+            scripts/appliance/validate.sh
+          python3 -m py_compile scripts/appliance/release_manifest.py
+          bash scripts/appliance/validate.sh
+          git diff --check
+
+      - name: Commit source-only corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            deploy/appliance/edutalent-appliance \
+            deploy/production/edutalent-production \
+            deploy/production/generate-secrets.sh \
+            scripts/appliance/offline_smoke.sh \
+            scripts/appliance/release_manifest.py \
+            scripts/appliance/validate.sh
+          git commit -m 'fix(appliance): externalize runtime state and scan all payloads'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

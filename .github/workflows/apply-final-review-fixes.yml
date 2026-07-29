@@ -1,4 +1,5 @@
 name: Apply final review fixes
+# Trigger after workflow creation.
 
 on:
   pull_request:

@@ -1,4 +1,3 @@
-# Trigger after the helper exists on the pull-request branch.
 name: Fix Mirror Air Inputs
 
 on:
@@ -43,7 +42,7 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/ci/mirror-air-input-staging
+          git add -f scripts/ci/mirror-air-input-staging
           git commit -m 'ci: stage tested mirror input correction'
           echo "STAGING_COMMIT=$(git rev-parse HEAD)"
           git push origin HEAD:feature/air-gapped-packaging-ghcr

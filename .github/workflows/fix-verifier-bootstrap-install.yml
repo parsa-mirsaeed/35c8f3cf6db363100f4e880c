@@ -1,0 +1,17 @@
+name: Fix verifier bootstrap and install
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/fix-verifier-bootstrap-install.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo staging

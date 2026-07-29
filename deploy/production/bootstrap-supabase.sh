@@ -81,7 +81,6 @@ if [[ -e "${RUNTIME_DIR}" ]]; then
   if [[ -f "${RUNTIME_DIR}/UPSTREAM_COMMIT" && -f "${RUNTIME_DIR}/docker-compose.yml" ]]; then
     actual="$(awk 'NF { print $1; exit }' "${RUNTIME_DIR}/UPSTREAM_COMMIT")"
     if [[ "${actual}" == "${commit}" ]]; then
-      bash "${PERMISSIONS_HELPER}" "${RUNTIME_DIR}"
       configure_ci_database_volume
       echo "Official Supabase runtime is already prepared at ${RUNTIME_DIR}"
       echo "Pinned upstream commit: ${commit}"
@@ -114,9 +113,12 @@ actual="$(git -C "${temporary}" rev-parse HEAD)"
   exit 1
 }
 
+# A strict caller umask may make checked-out definitions unreadable to the
+# non-root database container. Normalize only this fresh immutable checkout,
+# before any generated environment or mutable installation state can exist.
+bash "${PERMISSIONS_HELPER}" "${temporary}/docker"
 cp -a "${temporary}/docker" "${RUNTIME_DIR}"
 printf '%s\n' "${commit}" > "${RUNTIME_DIR}/UPSTREAM_COMMIT"
-bash "${PERMISSIONS_HELPER}" "${RUNTIME_DIR}"
 configure_ci_database_volume
 
 echo "Prepared official Supabase Docker runtime at ${RUNTIME_DIR}"

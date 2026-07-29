@@ -14,4 +14,70 @@ jobs:
   patch:
     runs-on: ubuntu-24.04
     steps:
-      - run: echo staging
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/air-gapped-packaging-ghcr
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Restore the unevaluated exact-head checkout expression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          expression = "$" + "{{ github.event.pull_request.head.sha || github.sha }}"
+          air_path = Path('.github/workflows/air-gapped-appliance.yml')
+          air = air_path.read_text(encoding='utf-8')
+          pattern = r'(?m)^          ref: [0-9a-f]{40}$'
+          matches = re.findall(pattern, air)
+          if len(matches) != 5:
+              raise SystemExit(f'expected five hard-coded checkout refs, found {len(matches)}')
+          air = re.sub(pattern, f'          ref: {expression}', air)
+          air_path.write_text(air, encoding='utf-8')
+
+          validate_path = Path('scripts/appliance/validate.sh')
+          validate = validate_path.read_text(encoding='utf-8')
+          pattern = r'''(?m)^test "\$\(grep -Fc 'ref: [0-9a-f]{40}' "\$\{air_workflow\}"\)" -eq 5$'''
+          replacement = (
+              f'''test "$(grep -Fc 'ref: {expression}' "${{air_workflow}}")" -eq 5\n'''
+              '''if grep -Eq '^[[:space:]]+ref: [0-9a-f]{40}$' "${air_workflow}"; then\n'''
+              '''  echo "Air-gapped workflow contains a hard-coded checkout SHA." >&2\n'''
+              '''  exit 1\n'''
+              '''fi'''
+          )
+          validate, count = re.subn(pattern, replacement, validate)
+          if count != 1:
+              raise SystemExit(f'expected one hard-coded checkout regression, found {count}')
+          validate_path.write_text(validate, encoding='utf-8')
+          PY
+
+      - name: Validate dynamic exact-head binding and appliance regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/appliance/validate.sh
+          bash scripts/appliance/validate.sh
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          expression = "$" + "{{ github.event.pull_request.head.sha || github.sha }}"
+          text = Path('.github/workflows/air-gapped-appliance.yml').read_text(encoding='utf-8')
+          assert text.count(f'ref: {expression}') == 5
+          assert not re.search(r'(?m)^\s+ref: [0-9a-f]{40}$', text)
+          PY
+          git diff --check
+
+      - name: Commit corrected dynamic binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/air-gapped-appliance.yml scripts/appliance/validate.sh
+          git rm .github/workflows/fix-dynamic-checkout-ref.yml
+          git commit -m 'fix(ci): preserve dynamic PR-head checkout'
+          echo "FINAL_COMMIT=$(git rev-parse HEAD)"
+          git push origin HEAD:feature/air-gapped-packaging-ghcr

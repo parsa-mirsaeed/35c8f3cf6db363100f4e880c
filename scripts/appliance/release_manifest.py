@@ -31,6 +31,21 @@ PRIVATE_KEY_MARKERS = (
 )
 SCAN_CHUNK_SIZE = 1024 * 1024
 SCAN_OVERLAP = 64 * 1024
+SIGNATURE_FILES = {
+    "ephemeral": frozenset(
+        {
+            "verification.pub",
+            "release-manifest.sig",
+            "SHA256SUMS.sig",
+        }
+    ),
+    "keyless": frozenset(
+        {
+            "release-manifest.sigstore.json",
+            "SHA256SUMS.sigstore.json",
+        }
+    ),
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -61,6 +76,30 @@ def is_manifest_input(relative: Path) -> bool:
         "SHA256SUMS",
         "manifests/release-manifest.json",
     } and not value.startswith("signatures/")
+
+
+def validate_signature_inventory(root: Path, signing_mode: str) -> None:
+    signatures = root / "signatures"
+    if signatures.is_symlink() or not signatures.is_dir():
+        raise RuntimeError("release signatures directory is missing or invalid")
+    expected = SIGNATURE_FILES[signing_mode]
+    actual: set[str] = set()
+    for entry in sorted(signatures.iterdir()):
+        if entry.is_symlink() or not entry.is_file():
+            raise RuntimeError(
+                f"release signatures contain a non-file entry: {entry.name}"
+            )
+        actual.add(entry.name)
+        if stat.S_IMODE(entry.stat().st_mode) != 0o644:
+            raise RuntimeError(
+                f"release signature file mode is invalid: {entry.name}"
+            )
+    if actual != expected:
+        extra = sorted(actual.difference(expected))
+        missing = sorted(expected.difference(actual))
+        raise RuntimeError(
+            f"release signature inventory mismatch; extra={extra}, missing={missing}"
+        )
 
 
 def scan_forbidden_content(path: Path) -> None:
@@ -299,8 +338,10 @@ def verify(args: argparse.Namespace) -> None:
         raise RuntimeError("release manifest git SHA is invalid")
     if release.get("platform") not in {"linux/amd64", "linux/arm64"}:
         raise RuntimeError("release manifest platform is invalid")
-    if release.get("signing_mode") not in {"ephemeral", "keyless"}:
+    signing_mode = release.get("signing_mode")
+    if signing_mode not in {"ephemeral", "keyless"}:
         raise RuntimeError("release manifest signing mode is invalid")
+    validate_signature_inventory(root, signing_mode)
     expected_files = {row["path"]: row for row in manifest.get("files", [])}
     if not expected_files:
         raise RuntimeError("release file inventory is empty")

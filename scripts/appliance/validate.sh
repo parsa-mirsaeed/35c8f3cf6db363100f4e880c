@@ -502,15 +502,22 @@ python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" generate \
   --signing-mode keyless \
   --images "${fixture}/bundle/manifests/images.json" \
   --model-lock "${fixture}/model.lock.json"
-python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
-  --bundle "${fixture}/bundle"
-
 touch \
   "${fixture}/bundle/signatures/release-manifest.sigstore.json" \
   "${fixture}/bundle/signatures/SHA256SUMS.sigstore.json"
+python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle"
 cat > "${fixture}/bundle/signatures/policy.json" <<'JSON'
 {"certificate_oidc_issuer":"https://attacker.invalid","certificate_identity_regexp":".*"}
 JSON
+if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+  echo "Keyless release accepted an unsigned extra signature file." >&2
+  exit 1
+fi
+rm -f "${fixture}/bundle/signatures/policy.json"
+python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle"
 mkdir -p "${fixture}/fake-bin"
 cat > "${fixture}/fake-bin/cosign" <<'SH'
 #!/usr/bin/env bash
@@ -547,6 +554,22 @@ touch \
   "${fixture}/bundle/signatures/verification.pub" \
   "${fixture}/bundle/signatures/release-manifest.sig" \
   "${fixture}/bundle/signatures/SHA256SUMS.sig"
+printf 'unsigned payload\n' > "${fixture}/bundle/signatures/extra.bin"
+if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+  echo "Ephemeral release accepted an unsigned extra signature file." >&2
+  exit 1
+fi
+rm -f "${fixture}/bundle/signatures/extra.bin"
+mkdir "${fixture}/bundle/signatures/nested"
+if python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle" >/dev/null 2>&1; then
+  echo "Release signature inventory accepted an unexpected directory." >&2
+  exit 1
+fi
+rmdir "${fixture}/bundle/signatures/nested"
+python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify \
+  --bundle "${fixture}/bundle"
 : > "${fixture}/cosign.log"
 if PATH="${fixture}/fake-bin:${PATH}" COSIGN_LOG="${fixture}/cosign.log" \
   bash "${fixture}/bundle/edutalent-appliance" verify >/dev/null 2>&1; then

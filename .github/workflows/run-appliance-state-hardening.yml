@@ -38,29 +38,57 @@ jobs:
           script_lines = workflow_lines[run_line + 1:next_step]
           script = "\n".join(line[10:] if line.startswith("          ") else line for line in script_lines) + "\n"
 
-          old_production_guard = '''if text.count(old_production) != 1:
+          replacements = (
+              (
+                  '''if text.count(old_production) != 1:
               raise SystemExit("appliance production function changed unexpectedly")
           text = text.replace(old_production, new_production, 1)
-          '''
-          new_production_guard = '''production_start = text.index("production() {")
+          ''',
+                  '''production_start = text.index("production() {")
           init_start = text.index("init_secrets() {", production_start)
           text = text[:production_start] + new_production.rstrip("\\n") + "\\n\\n" + text[init_start:]
-          '''
-          if script.count(old_production_guard) != 1:
-              raise SystemExit("unable to replace production guard")
-          script = script.replace(old_production_guard, new_production_guard, 1)
-
-          old_init_guard = '''if text.count(old_init) != 1:
+          ''',
+                  "production guard",
+              ),
+              (
+                  '''if text.count(old_init) != 1:
               raise SystemExit("appliance init function changed unexpectedly")
           text = text.replace(old_init, new_init, 1)
-          '''
-          new_init_guard = '''init_start = text.index("init_secrets() {", production_start)
+          ''',
+                  '''init_start = text.index("init_secrets() {", production_start)
           install_start = text.index("install_bundle() {", init_start)
           text = text[:init_start] + new_init.rstrip("\\n") + "\\n\\n" + text[install_start:]
-          '''
-          if script.count(old_init_guard) != 1:
-              raise SystemExit("unable to replace init guard")
-          script = script.replace(old_init_guard, new_init_guard, 1)
+          ''',
+                  "init guard",
+              ),
+              (
+                  '''if text.count(old_install) != 1:
+              raise SystemExit("appliance install copy changed unexpectedly")
+          text = text.replace(old_install, new_install, 1)
+          ''',
+                  '''copy_start = text.index('  (cd "${ROOT_DIR}" && tar ', install_start)
+          chmod_start = text.index('  chmod 0755 "${destination}/edutalent-appliance"', copy_start)
+          text = text[:copy_start] + new_install.rstrip("\\n") + "\\n" + text[chmod_start:]
+          ''',
+                  "install guard",
+              ),
+              (
+                  '''if text.count(old_checks) != 1:
+              raise SystemExit("appliance checks block changed unexpectedly")
+          launcher.write_text(text.replace(old_checks, new_checks, 1), encoding="utf-8")
+          ''',
+                  '''checks_start = text.index("  checks)")
+          help_start = text.index("  help|-h|--help)", checks_start)
+          text = text[:checks_start] + new_checks.rstrip("\\n") + "\\n" + text[help_start:]
+          launcher.write_text(text, encoding="utf-8")
+          ''',
+                  "checks guard",
+              ),
+          )
+          for old, new, label in replacements:
+              if script.count(old) != 1:
+                  raise SystemExit(f"unable to replace {label}")
+              script = script.replace(old, new, 1)
 
           Path("/tmp/apply-state-hardening.sh").write_text(script, encoding="utf-8")
           PY

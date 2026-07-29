@@ -1,5 +1,5 @@
 name: Fix reusable permission ceiling
-# Trigger after workflow creation.
+# Trigger line-safe reusable permission editing.
 
 on:
   pull_request:
@@ -31,33 +31,26 @@ jobs:
           from pathlib import Path
 
           mirror_path = Path('.github/workflows/mirror-final-proof.yml')
-          mirror = mirror_path.read_text(encoding='utf-8')
-          old = '''  complete-appliance:
-            name: Complete exact-head Air-gapped Appliance proof
-            needs: dispatch-and-verify
-            permissions:
-              contents: read
-              id-token: write
-            uses: ./.github/workflows/air-gapped-appliance.yml
-          '''
-          new = '''  complete-appliance:
-            name: Complete exact-head Air-gapped Appliance proof
-            needs: dispatch-and-verify
-            permissions:
-              contents: read
-              packages: write
-              id-token: write
-              attestations: write
-            uses: ./.github/workflows/air-gapped-appliance.yml
-          '''
-          if mirror.count(old) != 1:
-              raise SystemExit('reusable caller permission block changed unexpectedly')
-          mirror_path.write_text(mirror.replace(old, new, 1), encoding='utf-8')
+          lines = mirror_path.read_text(encoding='utf-8').splitlines()
+          job = lines.index('  complete-appliance:')
+          permissions = lines.index('    permissions:', job)
+          expected = [
+              '      contents: read',
+              '      id-token: write',
+          ]
+          if lines[permissions + 1:permissions + 3] != expected:
+              raise SystemExit(f'reusable caller permissions changed unexpectedly: {lines[permissions + 1:permissions + 6]}')
+          lines[permissions + 1:permissions + 3] = [
+              '      contents: read',
+              '      packages: write',
+              '      id-token: write',
+              '      attestations: write',
+          ]
+          mirror_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
           validate_path = Path('scripts/appliance/validate.sh')
           validate = validate_path.read_text(encoding='utf-8')
-          old = '''    "complete-appliance": ("contents: read", "id-token: write"),
-          '''
+          old = '    "complete-appliance": ("contents: read", "id-token: write"),\n'
           new = '''    "complete-appliance": (
               "contents: read",
               "packages: write",

@@ -1,4 +1,3 @@
-# Trigger after the workflow exists on the pull-request branch.
 name: Fix PR OIDC isolation
 
 on:
@@ -21,204 +20,15 @@ jobs:
           fetch-depth: 0
           show-progress: false
 
-      - name: Separate PR smoke signing from protected keyless release build
-        shell: bash
+      - name: Apply credential-boundary transformation
+        run: python3 scripts/ci/apply_oidc_fix.py
+
+      - name: Remove temporary patch machinery
         run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          air_path = Path('.github/workflows/air-gapped-appliance.yml')
-          air = air_path.read_text(encoding='utf-8')
-          start = air.index('  build-offline:\n')
-          end = air.index('  native-arm64:\n', start)
-          original = air[start:end]
-
-          pr_block = original
-          pr_block = pr_block.replace(
-              '  build-offline:\n    permissions:\n      contents: read\n      id-token: write\n',
-              '  build-offline:\n    permissions:\n      contents: read\n',
-              1,
-          )
-          pr_block = pr_block.replace(
-              "    if: github.event_name != 'pull_request' || inputs.complete\n",
-              "    if: github.event_name == 'pull_request' && inputs.complete\n",
-              1,
-          )
-          pr_block = pr_block.replace(
-              "          EDUTALENT_APPLIANCE_SIGNING_MODE: ${{ startsWith(github.ref, 'refs/tags/v') && 'keyless' || 'ephemeral' }}\n",
-              '          EDUTALENT_APPLIANCE_SIGNING_MODE: ephemeral\n',
-              1,
-          )
-          if 'id-token: write' in pr_block:
-              raise SystemExit('PR appliance block still has OIDC permission')
-
-          release_block = original
-          release_block = release_block.replace('  build-offline:\n', '  build-release:\n', 1)
-          release_block = release_block.replace(
-              '    name: Build and verify complete air-gapped appliance\n',
-              '    name: Build and sign protected release appliance\n',
-              1,
-          )
-          release_block = release_block.replace(
-              "    if: github.event_name != 'pull_request' || inputs.complete\n",
-              "    if: github.event_name != 'pull_request'\n",
-              1,
-          )
-          release_block = release_block.replace(
-              "          EDUTALENT_APPLIANCE_SIGNING_MODE: ${{ startsWith(github.ref, 'refs/tags/v') && 'keyless' || 'ephemeral' }}\n",
-              '          EDUTALENT_APPLIANCE_SIGNING_MODE: keyless\n',
-              1,
-          )
-          if release_block.count('id-token: write') != 1:
-              raise SystemExit('protected release block must own exactly one OIDC grant')
-
-          air = air[:start] + pr_block + release_block + air[end:]
-          air = air.replace(
-              '    needs:\n      - build-offline\n      - native-arm64\n    strategy:\n',
-              '    needs:\n      - build-release\n      - native-arm64\n    strategy:\n',
-              1,
-          )
-          air = air.replace(
-              '      - validate\n      - build-offline\n      - native-arm64\n',
-              '      - validate\n      - build-offline\n      - build-release\n      - native-arm64\n',
-              1,
-          )
-          air = air.replace(
-              '          OFFLINE_RESULT: ${{ needs.build-offline.result }}\n          ARM64_RESULT:',
-              '          OFFLINE_RESULT: ${{ needs.build-offline.result }}\n          RELEASE_RESULT: ${{ needs.build-release.result }}\n          ARM64_RESULT:',
-              1,
-          )
-          old_logic = '''          if [[ "${COMPLETE_REQUESTED}" == true ]]; then
-            test "${OFFLINE_RESULT}" = success
-            test "${ARM64_RESULT}" = success
-          else
-            test "${OFFLINE_RESULT}" = skipped
-            test "${ARM64_RESULT}" = skipped
-          fi
-'''
-          new_logic = '''          if [[ "${COMPLETE_REQUESTED}" == true ]]; then
-            test "${ARM64_RESULT}" = success
-            if [[ "${EVENT_NAME}" == pull_request ]]; then
-              test "${OFFLINE_RESULT}" = success
-              test "${RELEASE_RESULT}" = skipped
-              appliance_result="${OFFLINE_RESULT}"
-            else
-              test "${OFFLINE_RESULT}" = skipped
-              test "${RELEASE_RESULT}" = success
-              appliance_result="${RELEASE_RESULT}"
-            fi
-          else
-            test "${OFFLINE_RESULT}" = skipped
-            test "${RELEASE_RESULT}" = skipped
-            test "${ARM64_RESULT}" = skipped
-            appliance_result="${OFFLINE_RESULT}"
-          fi
-'''
-          if air.count(old_logic) != 1:
-              raise SystemExit('expected gate build-result logic exactly once')
-          air = air.replace(old_logic, new_logic)
-          air = air.replace(
-              '            "offline_appliance": "${OFFLINE_RESULT}",\n            "native_arm64":',
-              '            "offline_appliance": "${appliance_result}",\n            "pr_offline_appliance": "${OFFLINE_RESULT}",\n            "protected_release_appliance": "${RELEASE_RESULT}",\n            "native_arm64":',
-              1,
-          )
-          air_path.write_text(air, encoding='utf-8')
-
-          mirror_path = Path('.github/workflows/mirror-final-proof.yml')
-          mirror = mirror_path.read_text(encoding='utf-8')
-          old_mirror_permissions = '''    permissions:
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-    uses: ./.github/workflows/air-gapped-appliance.yml
-'''
-          new_mirror_permissions = '''    permissions:
-      contents: read
-    uses: ./.github/workflows/air-gapped-appliance.yml
-'''
-          if mirror.count(old_mirror_permissions) != 1:
-              raise SystemExit('expected mirror appliance permission block exactly once')
-          mirror_path.write_text(
-              mirror.replace(old_mirror_permissions, new_mirror_permissions),
-              encoding='utf-8',
-          )
-
-          validate_path = Path('scripts/appliance/validate.sh')
-          validate = validate_path.read_text(encoding='utf-8')
-          validate = validate.replace(
-              '''test "$(grep -Fc "if: github.event_name != 'pull_request' || inputs.complete" "${air_workflow}")" -eq 2
-test "$(grep -Fc 'ref: ${{ github.event.pull_request.head.sha || github.sha }}' "${air_workflow}")" -eq 5
-''',
-              '''grep -Fq "if: github.event_name == 'pull_request' && inputs.complete" "${air_workflow}"
-test "$(grep -Fc "if: github.event_name != 'pull_request' || inputs.complete" "${air_workflow}")" -eq 1
-grep -Fq "if: github.event_name != 'pull_request'" "${air_workflow}"
-test "$(grep -Fc 'ref: ${{ github.event.pull_request.head.sha || github.sha }}' "${air_workflow}")" -eq 6
-''',
-              1,
-          )
-          validate = validate.replace(
-              '    "build-offline": ("contents: read", "id-token: write"),\n',
-              '    "build-offline": ("contents: read",),\n    "build-release": ("contents: read", "id-token: write"),\n',
-              1,
-          )
-          validate = validate.replace(
-              '''    "complete-appliance": (
-    "contents: read",
-    "packages: write",
-    "id-token: write",
-    "attestations: write",
-),
-''',
-              '''    "complete-appliance": ("contents: read",),
-''',
-              1,
-          )
-          structural_anchor = '''for job, permissions in expected_air.items():
-    index = air_lines.index(f"  {job}:")
-    block = air_lines[index + 1:index + 2 + len(permissions)]
-    assert block[0] == "    permissions:", (job, block)
-    assert tuple(line.strip() for line in block[1:]) == permissions, (job, block)
-
-mirror_lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
-'''
-          structural_replacement = '''def job_block(lines, job):
-    index = lines.index(f"  {job}:")
-    end = next(
-        (candidate for candidate in range(index + 1, len(lines))
-         if lines[candidate].startswith("  ")
-         and not lines[candidate].startswith("    ")
-         and lines[candidate].endswith(":")),
-        len(lines),
-    )
-    return lines[index + 1:end]
-
-for job, permissions in expected_air.items():
-    block = job_block(air_lines, job)
-    assert block[0] == "    permissions:", (job, block[:5])
-    assert tuple(line.strip() for line in block[1:1 + len(permissions)]) == permissions, (job, block[:5])
-
-pr_build = job_block(air_lines, "build-offline")
-release_build = job_block(air_lines, "build-release")
-assert "      id-token: write" not in pr_build, pr_build[:10]
-assert "    if: github.event_name == 'pull_request' && inputs.complete" in pr_build
-assert "          EDUTALENT_APPLIANCE_SIGNING_MODE: ephemeral" in pr_build
-assert "      id-token: write" in release_build
-assert "    if: github.event_name != 'pull_request'" in release_build
-assert "          EDUTALENT_APPLIANCE_SIGNING_MODE: keyless" in release_build
-
-mirror_lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
-'''
-          if validate.count(structural_anchor) != 1:
-              raise SystemExit('expected workflow validation anchor exactly once')
-          validate = validate.replace(structural_anchor, structural_replacement)
-          validate_path.write_text(validate, encoding='utf-8')
-          PY
           rm .github/workflows/fix-pr-oidc-isolation.yml
+          rm scripts/ci/apply_oidc_fix.py
 
       - name: Run focused security regressions
-        shell: bash
         run: |
           set -euo pipefail
           bash -n scripts/appliance/validate.sh
@@ -226,7 +36,6 @@ mirror_lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
           git diff --check
 
       - name: Commit credential boundary correction
-        shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
@@ -234,7 +43,8 @@ mirror_lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
           git add .github/workflows/air-gapped-appliance.yml \
             .github/workflows/mirror-final-proof.yml \
             scripts/appliance/validate.sh \
-            .github/workflows/fix-pr-oidc-isolation.yml
+            .github/workflows/fix-pr-oidc-isolation.yml \
+            scripts/ci/apply_oidc_fix.py
           git commit -m 'fix(ci): isolate OIDC from PR appliance proof'
           echo "FINAL_COMMIT=$(git rev-parse HEAD)"
           git push origin HEAD:feature/air-gapped-packaging-ghcr

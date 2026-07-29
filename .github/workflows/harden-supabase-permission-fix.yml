@@ -1,10 +1,9 @@
-# Trigger after the workflow exists on the pull-request branch.
 name: Harden Supabase permission fix
 
 on:
-  pull_request:
-    types:
-      - synchronize
+  push:
+    branches:
+      - feature/air-gapped-packaging-ghcr
     paths:
       - .github/workflows/harden-supabase-permission-fix.yml
 

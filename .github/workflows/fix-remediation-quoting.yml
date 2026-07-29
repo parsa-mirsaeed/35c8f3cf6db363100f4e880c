@@ -30,37 +30,16 @@ jobs:
 
           air = Path('.github/workflows/air-gapped-appliance.yml')
           text = air.read_text(encoding='utf-8')
-          old_permissions = """permissions:
-            contents: read
-            packages: write
-            id-token: write
-            attestations: write
-          """
-          new_permissions = """permissions:
-            contents: read
-          """
+          old_permissions = "permissions:\n  contents: read\n  packages: write\n  id-token: write\n  attestations: write\n"
+          new_permissions = "permissions:\n  contents: read\n"
           if text.count(old_permissions) != 1:
               raise SystemExit('unexpected workflow-wide permission block')
           text = text.replace(old_permissions, new_permissions, 1)
 
           insertions = {
-              '  build-offline:\n': """  build-offline:
-            permissions:
-              contents: read
-              id-token: write
-          """,
-              '  publish-platforms:\n': """  publish-platforms:
-            permissions:
-              contents: read
-              packages: write
-          """,
-              '  publish-indexes:\n': """  publish-indexes:
-            permissions:
-              contents: read
-              packages: write
-              id-token: write
-              attestations: write
-          """,
+              '  build-offline:\n': '  build-offline:\n    permissions:\n      contents: read\n      id-token: write\n',
+              '  publish-platforms:\n': '  publish-platforms:\n    permissions:\n      contents: read\n      packages: write\n',
+              '  publish-indexes:\n': '  publish-indexes:\n    permissions:\n      contents: read\n      packages: write\n      id-token: write\n      attestations: write\n',
           }
           for marker, replacement in insertions.items():
               if text.count(marker) != 1:

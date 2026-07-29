@@ -30,15 +30,23 @@ jobs:
 
           launcher = Path("deploy/appliance/edutalent-appliance")
           text = launcher.read_text(encoding="utf-8")
-          for start_marker, end_marker in (
-              ("production() {\n", "\n}\n\ninit_secrets() {"),
-              ("init_secrets() {\n", "\n}\n\ninstall_bundle() {"),
-          ):
-              start = text.index(start_marker) + len(start_marker)
-              end = text.index(end_marker, start)
-              body = text[start:end]
-              body = "\n".join(("  " + line if line else line) for line in body.splitlines())
-              text = text[:start] + body + text[end:]
+
+          start = text.index("production() {\n") + len("production() {\n")
+          end = text.index("\n}\n\ninit_secrets() {", start)
+          body = text[start:end]
+          body = "\n".join(("  " + line if line else line) for line in body.splitlines())
+          text = text[:start] + body + text[end:]
+
+          start = text.index("init_secrets() {\n") + len("init_secrets() {\n")
+          end = text.index("\n}\n\ninstall_bundle() {", start)
+          normalized = []
+          for line in text[start:end].splitlines():
+              if not line:
+                  normalized.append(line)
+                  continue
+              leading = len(line) - len(line.lstrip(" "))
+              normalized.append(" " * (leading * 2) + line.lstrip(" "))
+          text = text[:start] + "\n".join(normalized) + text[end:]
           launcher.write_text(text, encoding="utf-8")
 
           workflow = Path(".github/workflows/apply-appliance-state-hardening.yml").read_text(encoding="utf-8").splitlines()

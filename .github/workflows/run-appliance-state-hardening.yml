@@ -84,6 +84,52 @@ jobs:
           ''',
                   "checks guard",
               ),
+              (
+                  '''if text.count(old_smoke_paths) != 1:
+              raise SystemExit("offline smoke path block changed unexpectedly")
+          text = text.replace(old_smoke_paths, new_smoke_paths, 1)
+          ''',
+                  '''paths_start = text.index('production_dir="${bundle}/deploy/production"')
+          started_start = text.index("started=false", paths_start)
+          text = text[:paths_start] + new_smoke_paths.rstrip("\\n") + "\\n" + text[started_start:]
+          ''',
+                  "smoke paths guard",
+              ),
+              (
+                  '''if text.count(old_cleanup) != 1:
+              raise SystemExit("offline smoke cleanup changed unexpectedly")
+          text = text.replace(old_cleanup, new_cleanup, 1)
+          ''',
+                  '''cleanup_start = text.index("cleanup() {")
+          cleanup_rm_start = text.index('  rm -rf "${tls_dir}"', cleanup_start)
+          cleanup_end = text.index("\\n}", cleanup_rm_start)
+          text = text[:cleanup_rm_start] + new_cleanup.rstrip("\\n") + text[cleanup_end:]
+          ''',
+                  "smoke cleanup guard",
+              ),
+              (
+                  '''if text.count(old_copy) != 1:
+              raise SystemExit("offline smoke environment setup changed unexpectedly")
+          text = text.replace(old_copy, new_copy, 1)
+          ''',
+                  '''copy_start = text.index('cp "${production_dir}/.env.edutalent.example"')
+          python_start = text.index('python3 - "${app_env}"', copy_start)
+          text = text[:copy_start] + new_copy.rstrip("\\n") + "\\n" + text[python_start:]
+          ''',
+                  "smoke environment guard",
+              ),
+              (
+                  '''if text.count(old_rm) != 1:
+              raise SystemExit("offline smoke init block changed unexpectedly")
+          smoke.write_text(text.replace(old_rm, new_rm, 1), encoding="utf-8")
+          ''',
+                  '''init_start = text.index('rm -f "${supabase_env}"')
+          started_at = text.index('started_at="$(date --iso-8601=seconds)"', init_start)
+          text = text[:init_start] + new_rm.rstrip("\\n") + "\\n\\n" + text[started_at:]
+          smoke.write_text(text, encoding="utf-8")
+          ''',
+                  "smoke init guard",
+              ),
           )
           for old, new, label in replacements:
               if script.count(old) != 1:

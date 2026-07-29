@@ -6,6 +6,8 @@ runtime_dir="${1:-}"
   echo "Usage: normalize-supabase-runtime-permissions.sh <fresh-upstream-directory>" >&2
   exit 2
 }
+# Never run this over a prepared installation: generated secrets and mutable
+# state intentionally keep restrictive permissions outside this normalization.
 [[ ! -e "${runtime_dir}/.env" ]] || {
   echo "Refusing to normalize an initialized Supabase runtime containing .env." >&2
   exit 1

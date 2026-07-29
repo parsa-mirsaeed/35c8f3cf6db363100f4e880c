@@ -147,6 +147,29 @@ jobs:
                   raise SystemExit(f"unable to replace {label}")
               script = script.replace(old, new, 1)
 
+          escaped_fixture_literals = (
+              (
+                  r'candidate.write_text("TOKEN=fixture\n", encoding="utf-8")',
+                  r'candidate.write_text("TOKEN=fixture\\n", encoding="utf-8")',
+              ),
+              (
+                  r'example.write_text("TOKEN=\n", encoding="utf-8")',
+                  r'example.write_text("TOKEN=\\n", encoding="utf-8")',
+              ),
+              (
+                  r'b"-----BEGIN OPENSSH PRIVATE KEY-----\n")',
+                  r'b"-----BEGIN OPENSSH PRIVATE KEY-----\\n")',
+              ),
+              (
+                  r'b"postgresql://user:password@db.internal/app\n")',
+                  r'b"postgresql://user:password@db.internal/app\\n")',
+              ),
+          )
+          for old, new in escaped_fixture_literals:
+              if script.count(old) != 1:
+                  raise SystemExit(f"unable to escape scanner fixture literal: {old}")
+              script = script.replace(old, new, 1)
+
           Path("/tmp/apply-state-hardening.sh").write_text(script, encoding="utf-8")
           PY
           bash /tmp/apply-state-hardening.sh

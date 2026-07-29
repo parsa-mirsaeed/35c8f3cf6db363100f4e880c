@@ -11,6 +11,19 @@ elif [[ -f "${SCRIPT_DIR}/../../scripts/appliance/release_manifest.py" ]]; then
 else
   ROOT_DIR="${SCRIPT_DIR}"
 fi
+canonical_path() {
+  command -v python3 >/dev/null 2>&1 || {
+    echo "Required command not found: python3" >&2
+    exit 1
+  }
+  python3 - "$1" <<'PYTHON_PATH'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).expanduser().resolve(strict=False))
+PYTHON_PATH
+}
+
+ROOT_DIR="$(canonical_path "${ROOT_DIR}")"
 MANIFEST="${ROOT_DIR}/manifests/release-manifest.json"
 CHECKSUMS="${ROOT_DIR}/SHA256SUMS"
 PRODUCTION_SOURCE_DIR="${ROOT_DIR}/deploy/production"
@@ -20,6 +33,7 @@ else
   : "${HOME:?HOME is required when EDUTALENT_APPLIANCE_STATE_DIR is unset}"
   STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/edutalent-appliance"
 fi
+STATE_DIR="$(canonical_path "${STATE_DIR}")"
 STATE_CONFIG_DIR="${STATE_DIR}/config"
 RUNTIME_PRODUCTION_DIR="${STATE_DIR}/runtime/production"
 APP_ENV="${STATE_CONFIG_DIR}/.env.edutalent"
@@ -246,8 +260,8 @@ validate_state_dir() {
         echo "EDUTALENT_APPLIANCE_STATE_DIR and XDG_STATE_HOME must resolve to an absolute path: ${STATE_DIR}" >&2
         exit 1
     }
-    case "${STATE_DIR}" in
-      "${ROOT_DIR}"|"${ROOT_DIR}/"*)
+    case "${STATE_DIR}/" in
+      "${ROOT_DIR%/}/"*)
         echo "Appliance state must remain outside the immutable release: ${STATE_DIR}" >&2
         exit 1
         ;;
@@ -255,6 +269,14 @@ validate_state_dir() {
 }
 
 initialize_state_dirs() {
+    local resolved_state
+    validate_state_dir
+    mkdir -p "${STATE_DIR}"
+    resolved_state="$(canonical_path "${STATE_DIR}")"
+    [[ "${resolved_state}" == "${STATE_DIR}" ]] || {
+        echo "Appliance state path changed during initialization: ${STATE_DIR} -> ${resolved_state}" >&2
+        exit 1
+    }
     validate_state_dir
     mkdir -p "${STATE_CONFIG_DIR}" "${STATE_DIR}/runtime"
     chmod 0700 "${STATE_DIR}" "${STATE_CONFIG_DIR}" "${STATE_DIR}/runtime"

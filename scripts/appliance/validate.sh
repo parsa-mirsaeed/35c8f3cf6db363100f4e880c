@@ -239,6 +239,21 @@ if HOME="${fixture}/home" EDUTALENT_APPLIANCE_STATE_DIR="${fixture}/upgrades/v1/
   echo "Appliance accepted mutable state inside the immutable release." >&2
   exit 1
 fi
+if HOME="${fixture}/home" \
+  EDUTALENT_APPLIANCE_STATE_DIR="${fixture}/outside/../upgrades/v1/traversal-state" \
+  "${fixture}/upgrades/v1/edutalent-appliance" state-dir >/dev/null 2>&1; then
+  echo "Appliance accepted a traversal-resolved state path inside the release." >&2
+  exit 1
+fi
+ln -s "${fixture}/upgrades/v1" "${fixture}/state-link"
+if HOME="${fixture}/home" \
+  EDUTALENT_APPLIANCE_STATE_DIR="${fixture}/state-link/symlink-state" \
+  "${fixture}/upgrades/v1/edutalent-appliance" state-dir >/dev/null 2>&1; then
+  echo "Appliance accepted a symlink-resolved state path inside the release." >&2
+  exit 1
+fi
+test ! -e "${fixture}/upgrades/v1/traversal-state"
+test ! -e "${fixture}/upgrades/v1/symlink-state"
 
 mkdir -p "${fixture}/production-source/runtime/supabase" "${fixture}/production-source/runtime/keep"
 printf 'definition\n' > "${fixture}/production-source/keep.txt"

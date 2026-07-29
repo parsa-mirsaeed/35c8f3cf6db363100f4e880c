@@ -1,9 +1,9 @@
 name: Finalize appliance hardening
 
 on:
-  push:
-    branches:
-      - feature/air-gapped-packaging-ghcr
+  pull_request:
+    types:
+      - synchronize
     paths:
       - .github/workflows/fix-remediation-quoting.yml
 
@@ -12,12 +12,13 @@ permissions:
 
 jobs:
   patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: feature/air-gapped-packaging-ghcr
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
       - name: Apply and verify final hardening
@@ -129,4 +130,4 @@ jobs:
             .github/workflows/wire-appliance-storage-v2.yml \
             scripts/appliance/validate.sh
           git commit -m 'fix(appliance): finalize release isolation hardening'
-          git push origin HEAD:feature/air-gapped-packaging-ghcr
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

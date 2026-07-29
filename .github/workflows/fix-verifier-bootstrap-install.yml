@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          python3 - <<'PYTHON_PATCH'
           from pathlib import Path
 
           launcher_path = Path("deploy/appliance/edutalent-appliance")
@@ -218,7 +218,7 @@ jobs:
           if validate.count(anchor) != 1:
               raise SystemExit("expected appliance security regression anchor exactly once")
           validate_path.write_text(validate.replace(anchor, regression), encoding="utf-8")
-          PY
+          PYTHON_PATCH
 
       - name: Run verifier bootstrap and full appliance regressions
         shell: bash

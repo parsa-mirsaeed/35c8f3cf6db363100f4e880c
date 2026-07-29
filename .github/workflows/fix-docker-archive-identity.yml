@@ -1,4 +1,5 @@
 name: Fix Docker archive identity
+# Trigger after workflow creation.
 
 on:
   pull_request:

@@ -14,4 +14,58 @@ jobs:
   patch:
     runs-on: ubuntu-24.04
     steps:
-      - run: echo staging
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/air-gapped-packaging-ghcr
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Narrowly allow the signed production environment template
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest_path = Path('scripts/appliance/release_manifest.py')
+          manifest = manifest_path.read_text(encoding='utf-8')
+          old = '''FORBIDDEN_NAMES = {".env", "id_rsa", "id_ed25519", "credentials.json"}\nPRIVATE_KEY_MARKERS = (\n'''
+          new = '''FORBIDDEN_NAMES = {".env", "id_rsa", "id_ed25519", "credentials.json"}\nALLOWED_DOTENV_PATHS = {"deploy/production/.env.edutalent.example"}\nPRIVATE_KEY_MARKERS = (\n'''
+          if manifest.count(old) != 1:
+              raise SystemExit('dotenv allowlist insertion point changed unexpectedly')
+          manifest = manifest.replace(old, new, 1)
+          old = '''    dotenv = name == ".env" or (name.startswith(".env.") and name != ".env.example")\n'''
+          new = '''    dotenv = name == ".env" or (\n        name.startswith(".env.")\n        and name != ".env.example"\n        and value not in ALLOWED_DOTENV_PATHS\n    )\n'''
+          if manifest.count(old) != 1:
+              raise SystemExit('dotenv predicate changed unexpectedly')
+          manifest_path.write_text(manifest.replace(old, new, 1), encoding='utf-8')
+
+          validate_path = Path('scripts/appliance/validate.sh')
+          validate = validate_path.read_text(encoding='utf-8')
+          old = '''example = root / ".env.example"\nexample.write_text("TOKEN=\\n", encoding="utf-8")\nmodule.reject_forbidden_file(root, example)\n\nlarge = root / "large-release-note.txt"\n'''
+          new = '''example = root / ".env.example"\nexample.write_text("TOKEN=\\n", encoding="utf-8")\nmodule.reject_forbidden_file(root, example)\n\nproduction_template = root / "deploy/production/.env.edutalent.example"\nproduction_template.parent.mkdir(parents=True, exist_ok=True)\nproduction_template.write_text("APP_PUBLIC_BASE_URL=\\n", encoding="utf-8")\nmodule.reject_forbidden_file(root, production_template)\n\nfor relative in (\n    "deploy/production/.env.edutalent",\n    "deploy/production/.env.edutalent.example.local",\n    "other/.env.edutalent.example",\n):\n    candidate = root / relative\n    candidate.parent.mkdir(parents=True, exist_ok=True)\n    candidate.write_text("TOKEN=fixture\\n", encoding="utf-8")\n    try:\n        module.reject_forbidden_file(root, candidate)\n    except RuntimeError:\n        continue\n    raise AssertionError(f"non-allowlisted dotenv path was accepted: {relative}")\n\nlarge = root / "large-release-note.txt"\n'''
+          if validate.count(old) != 1:
+              raise SystemExit('dotenv regression insertion point changed unexpectedly')
+          validate_path.write_text(validate.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Validate scanner and complete appliance regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/appliance/release_manifest.py
+          bash -n scripts/appliance/validate.sh
+          bash scripts/appliance/validate.sh
+          git diff --check
+
+      - name: Commit clean source correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/appliance/release_manifest.py scripts/appliance/validate.sh
+          git rm .github/workflows/fix-production-env-template.yml
+          git commit -m 'fix(appliance): allow signed production env template'
+          echo "FINAL_COMMIT=$(git rev-parse HEAD)"
+          git push origin HEAD:feature/air-gapped-packaging-ghcr

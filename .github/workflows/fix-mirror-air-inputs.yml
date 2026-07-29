@@ -1,0 +1,48 @@
+name: Fix Mirror Air Inputs
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/fix-mirror-air-inputs.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/air-gapped-packaging-ghcr
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Remove stale reusable input
+        run: python3 scripts/ci/fix_mirror_air_inputs.py
+
+      - name: Run focused workflow and appliance regressions
+        run: |
+          set -euo pipefail
+          bash -n scripts/appliance/validate.sh
+          bash scripts/appliance/validate.sh
+          git diff --check
+
+      - name: Stage tested files outside workflow paths
+        run: |
+          set -euo pipefail
+          mkdir -p scripts/ci/mirror-air-input-staging
+          cp .github/workflows/mirror-final-proof.yml scripts/ci/mirror-air-input-staging/mirror-final-proof.yml
+          cp scripts/appliance/validate.sh scripts/ci/mirror-air-input-staging/validate.sh
+
+      - name: Push only non-workflow staging blobs
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/ci/mirror-air-input-staging
+          git commit -m 'ci: stage tested mirror input correction'
+          echo "STAGING_COMMIT=$(git rev-parse HEAD)"
+          git push origin HEAD:feature/air-gapped-packaging-ghcr

@@ -41,5 +41,6 @@ jobs:
         with:
           name: oidc-isolation-transformed-files
           path: transformed/**
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1

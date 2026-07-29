@@ -179,6 +179,10 @@ grep -Fq "gh workflow run production-foundation.yml" "${mirror_workflow}"
 grep -Fq "gh workflow run package.yml" "${mirror_workflow}"
 grep -Fq 'uses: ./.github/workflows/air-gapped-appliance.yml' "${mirror_workflow}"
 grep -Fq 'complete: true' "${mirror_workflow}"
+if grep -Fq 'publish: false' "${mirror_workflow}"; then
+  echo "Mirror passed an unsupported publication input to the read-only appliance proof." >&2
+  exit 1
+fi
 if grep -Fq "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}"; then
   echo "A newly introduced Air workflow cannot be bootstrapped through workflow_dispatch before merge." >&2
   exit 1

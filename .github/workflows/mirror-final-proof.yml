@@ -330,7 +330,6 @@ jobs:
     uses: ./.github/workflows/air-gapped-appliance.yml
     with:
       complete: true
-      publish: false
       create_archive: false
 
   final-proof:

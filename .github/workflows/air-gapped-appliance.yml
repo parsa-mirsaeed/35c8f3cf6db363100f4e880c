@@ -45,9 +45,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
-  attestations: write
 
 concurrency:
   group: air-gapped-appliance-${{ github.head_ref || github.ref_name }}
@@ -74,6 +71,9 @@ jobs:
         run: bash scripts/appliance/validate.sh
 
   build-offline:
+    permissions:
+      contents: read
+      id-token: write
     name: Build and verify complete air-gapped appliance
     if: github.event_name != 'pull_request'
     needs: validate
@@ -254,6 +254,9 @@ jobs:
           cache-to: type=gha,mode=max,scope=edutalent-appliance-tools-arm64
 
   publish-platforms:
+    permissions:
+      contents: read
+      packages: write
     name: Publish native ${{ matrix.arch }} GHCR images
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
@@ -336,6 +339,11 @@ jobs:
           cache-to: type=gha,mode=max,scope=edutalent-appliance-tools-${{ matrix.arch }}
 
   publish-indexes:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     name: Assemble, sign, and attest multi-architecture GHCR indexes
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||

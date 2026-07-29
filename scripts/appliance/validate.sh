@@ -74,6 +74,31 @@ grep -Fq 'platform: linux/arm64' "${air_workflow}"
 grep -Fq "if: github.event_name != 'pull_request'" "${air_workflow}"
 grep -Fq "inputs.publish && github.ref == 'refs/heads/main'" "${air_workflow}"
 grep -Fq 'Build custom images natively for arm64' "${air_workflow}"
+python3 - "${air_workflow}" <<'PYWORKFLOW'
+import sys
+from pathlib import Path
+
+lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+jobs_index = lines.index("jobs:")
+top = lines[:jobs_index]
+for forbidden in ("  packages: write", "  id-token: write", "  attestations: write"):
+    assert forbidden not in top, forbidden
+expected = {
+    "build-offline": ("contents: read", "id-token: write"),
+    "publish-platforms": ("contents: read", "packages: write"),
+    "publish-indexes": (
+        "contents: read",
+        "packages: write",
+        "id-token: write",
+        "attestations: write",
+    ),
+}
+for job, permissions in expected.items():
+    index = lines.index(f"  {job}:")
+    block = lines[index + 1:index + 2 + len(permissions)]
+    assert block[0] == "    permissions:", (job, block)
+    assert tuple(line.strip() for line in block[1:]) == permissions, (job, block)
+PYWORKFLOW
 grep -Fq "if: github.event_name != 'pull_request'" "${package_workflow}"
 grep -Fq 'Verify and serialize complete exact-head proof' "${mirror_workflow}"
 grep -Fq "github.event.pull_request.draft == false" "${mirror_workflow}"

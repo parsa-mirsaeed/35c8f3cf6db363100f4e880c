@@ -1,0 +1,85 @@
+name: Run appliance state hardening
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/run-appliance-state-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Execute reviewed transformation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          launcher = Path("deploy/appliance/edutalent-appliance")
+          text = launcher.read_text(encoding="utf-8")
+          for start_marker, end_marker in (
+              ("production() {\n", "\n}\n\ninit_secrets() {"),
+              ("init_secrets() {\n", "\n}\n\ninstall_bundle() {"),
+          ):
+              start = text.index(start_marker) + len(start_marker)
+              end = text.index(end_marker, start)
+              body = text[start:end]
+              body = "\n".join(("  " + line if line else line) for line in body.splitlines())
+              text = text[:start] + body + text[end:]
+          launcher.write_text(text, encoding="utf-8")
+
+          workflow = Path(".github/workflows/apply-appliance-state-hardening.yml").read_text(encoding="utf-8").splitlines()
+          step = workflow.index("      - name: Apply external-state and scanner corrections")
+          run_line = workflow.index("        run: |", step)
+          next_step = next(
+              index for index in range(run_line + 1, len(workflow))
+              if workflow[index].startswith("      - name:")
+          )
+          script_lines = workflow[run_line + 1:next_step]
+          script = "\n".join(line[10:] if line.startswith("          ") else line for line in script_lines) + "\n"
+          Path("/tmp/apply-state-hardening.sh").write_text(script, encoding="utf-8")
+          PY
+          bash /tmp/apply-state-hardening.sh
+
+      - name: Validate complete appliance definitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n \
+            deploy/appliance/edutalent-appliance \
+            deploy/production/edutalent-production \
+            deploy/production/generate-secrets.sh \
+            scripts/appliance/offline_smoke.sh \
+            scripts/appliance/validate.sh
+          python3 -m py_compile scripts/appliance/release_manifest.py
+          bash scripts/appliance/validate.sh
+          git diff --check
+
+      - name: Commit source-only corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            deploy/appliance/edutalent-appliance \
+            deploy/production/edutalent-production \
+            deploy/production/generate-secrets.sh \
+            scripts/appliance/offline_smoke.sh \
+            scripts/appliance/release_manifest.py \
+            scripts/appliance/validate.sh
+          git commit -m 'fix(appliance): externalize runtime state and scan all payloads'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

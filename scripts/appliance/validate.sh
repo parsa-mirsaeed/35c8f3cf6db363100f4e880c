@@ -6,6 +6,8 @@ for file in \
   "${ROOT_DIR}/scripts/appliance/build.sh" \
   "${ROOT_DIR}/scripts/appliance/sign_release.sh" \
   "${ROOT_DIR}/scripts/appliance/offline_smoke.sh" \
+  "${ROOT_DIR}/deploy/production/bootstrap-supabase.sh" \
+  "${ROOT_DIR}/deploy/production/normalize-supabase-runtime-permissions.sh" \
   "${ROOT_DIR}/deploy/appliance/edutalent-appliance"; do
   bash -n "${file}"
 done
@@ -178,6 +180,35 @@ fi
 
 fixture="$(mktemp -d)"
 trap 'rm -rf "${fixture}"' EXIT
+
+permissions_fixture="${fixture}/strict-umask-runtime"
+(
+  umask 077
+  mkdir -p "${permissions_fixture}/volumes/db"
+  printf 'SELECT 1;\n' > "${permissions_fixture}/volumes/db/webhooks.sql"
+  printf '#!/bin/sh\nexit 0\n' > "${permissions_fixture}/run.sh"
+  chmod u+x "${permissions_fixture}/run.sh"
+)
+test "$(stat -c %a "${permissions_fixture}")" = "700"
+test "$(stat -c %a "${permissions_fixture}/volumes/db/webhooks.sql")" = "600"
+bash "${ROOT_DIR}/deploy/production/normalize-supabase-runtime-permissions.sh" \
+  "${permissions_fixture}"
+test "$(stat -c %a "${permissions_fixture}")" = "755"
+test "$(stat -c %a "${permissions_fixture}/volumes/db")" = "755"
+test "$(stat -c %a "${permissions_fixture}/volumes/db/webhooks.sql")" = "644"
+test "$(stat -c %a "${permissions_fixture}/run.sh")" = "755"
+
+symlink_fixture="${fixture}/symlink-runtime"
+mkdir -p "${symlink_fixture}"
+printf 'outside\n' > "${fixture}/outside.txt"
+chmod 0600 "${fixture}/outside.txt"
+ln -s "${fixture}/outside.txt" "${symlink_fixture}/escape"
+if bash "${ROOT_DIR}/deploy/production/normalize-supabase-runtime-permissions.sh" \
+  "${symlink_fixture}" >/dev/null 2>&1; then
+  echo "Runtime permission normalization accepted a symlink." >&2
+  exit 1
+fi
+test "$(stat -c %a "${fixture}/outside.txt")" = "600"
 
 mkdir -p \
   "${fixture}/home" \

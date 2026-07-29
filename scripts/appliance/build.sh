@@ -70,6 +70,16 @@ python3 "${ROOT_DIR}/scripts/appliance/stage_production.py" \
   --source "${SOURCE_PRODUCTION_DIR}" \
   --destination "${PRODUCTION_DIR}"
 bash "${PRODUCTION_DIR}/edutalent-production" bootstrap
+unreadable_runtime_file="$(find "${SUPABASE_DIR}" -type f ! -perm -004 -print -quit)"
+unsearchable_runtime_directory="$(find "${SUPABASE_DIR}" -type d ! -perm -005 -print -quit)"
+[[ -z "${unreadable_runtime_file}" ]] || {
+  echo "Pinned Supabase runtime file is not container-readable: ${unreadable_runtime_file}" >&2
+  exit 1
+}
+[[ -z "${unsearchable_runtime_directory}" ]] || {
+  echo "Pinned Supabase runtime directory is not container-searchable: ${unsearchable_runtime_directory}" >&2
+  exit 1
+}
 cp "${PRODUCTION_DIR}/.env.edutalent.example" "${APP_ENV}"
 chmod 600 "${APP_ENV}"
 openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \

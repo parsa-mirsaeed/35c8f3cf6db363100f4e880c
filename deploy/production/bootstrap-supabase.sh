@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIN_FILE="${SCRIPT_DIR}/SUPABASE_UPSTREAM"
 RUNTIME_DIR="${SCRIPT_DIR}/runtime/supabase"
+PERMISSIONS_HELPER="${SCRIPT_DIR}/normalize-supabase-runtime-permissions.sh"
 UPSTREAM_URL="https://github.com/supabase/supabase.git"
 
 usage() {
@@ -26,7 +27,7 @@ case "${1:-}" in
   *) usage >&2; exit 2 ;;
 esac
 
-for command in git awk mktemp python3; do
+for command in git awk mktemp python3 find chmod grep; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "Required command not found: ${command}" >&2
     exit 1
@@ -80,6 +81,7 @@ if [[ -e "${RUNTIME_DIR}" ]]; then
   if [[ -f "${RUNTIME_DIR}/UPSTREAM_COMMIT" && -f "${RUNTIME_DIR}/docker-compose.yml" ]]; then
     actual="$(awk 'NF { print $1; exit }' "${RUNTIME_DIR}/UPSTREAM_COMMIT")"
     if [[ "${actual}" == "${commit}" ]]; then
+      bash "${PERMISSIONS_HELPER}" "${RUNTIME_DIR}"
       configure_ci_database_volume
       echo "Official Supabase runtime is already prepared at ${RUNTIME_DIR}"
       echo "Pinned upstream commit: ${commit}"
@@ -114,8 +116,8 @@ actual="$(git -C "${temporary}" rev-parse HEAD)"
 
 cp -a "${temporary}/docker" "${RUNTIME_DIR}"
 printf '%s\n' "${commit}" > "${RUNTIME_DIR}/UPSTREAM_COMMIT"
+bash "${PERMISSIONS_HELPER}" "${RUNTIME_DIR}"
 configure_ci_database_volume
-chmod -R go-w "${RUNTIME_DIR}"
 
 echo "Prepared official Supabase Docker runtime at ${RUNTIME_DIR}"
 echo "Pinned upstream commit: ${commit}"

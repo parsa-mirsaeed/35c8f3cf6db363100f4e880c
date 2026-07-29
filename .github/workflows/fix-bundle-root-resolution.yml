@@ -1,0 +1,17 @@
+name: Fix bundle root resolution
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/fix-bundle-root-resolution.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo staging

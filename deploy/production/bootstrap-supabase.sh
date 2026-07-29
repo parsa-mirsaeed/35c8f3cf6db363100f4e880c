@@ -114,11 +114,12 @@ actual="$(git -C "${temporary}" rev-parse HEAD)"
 }
 
 # A strict caller umask may make checked-out definitions unreadable to the
-# non-root database container. Normalize only this fresh immutable checkout,
-# before any generated environment or mutable installation state can exist.
+# non-root database container. Add our immutable provenance marker before
+# normalizing the complete fresh tree, while no generated environment or
+# mutable installation state exists.
+printf '%s\n' "${commit}" > "${temporary}/docker/UPSTREAM_COMMIT"
 bash "${PERMISSIONS_HELPER}" "${temporary}/docker"
 cp -a "${temporary}/docker" "${RUNTIME_DIR}"
-printf '%s\n' "${commit}" > "${RUNTIME_DIR}/UPSTREAM_COMMIT"
 configure_ci_database_volume
 
 echo "Prepared official Supabase Docker runtime at ${RUNTIME_DIR}"

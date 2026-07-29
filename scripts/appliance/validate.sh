@@ -80,6 +80,7 @@ grep -Fq 'runs-on: ubuntu-24.04-arm' "${air_workflow}"
 grep -Fq 'platform: linux/arm64' "${air_workflow}"
 grep -Fq 'workflow_call:' "${air_workflow}"
 test "$(grep -Fc "if: github.event_name != 'pull_request' || inputs.complete" "${air_workflow}")" -eq 2
+test "$(grep -Fc 'ref: 3707a7ab4dac7916a33e2da12cd7aff6c69418a3' "${air_workflow}")" -eq 5
 grep -Fq "inputs.publish && github.ref == 'refs/heads/main'" "${air_workflow}"
 grep -Fq 'Build custom images natively for arm64' "${air_workflow}"
 python3 - "${air_workflow}" "${mirror_workflow}" <<'PYWORKFLOW'

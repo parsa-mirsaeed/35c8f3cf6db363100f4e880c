@@ -8,7 +8,7 @@ on:
       - .github/workflows/fix-pr-oidc-isolation.yml
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   patch:
@@ -23,11 +23,6 @@ jobs:
       - name: Apply credential-boundary transformation
         run: python3 scripts/ci/apply_oidc_fix.py
 
-      - name: Remove temporary patch machinery
-        run: |
-          rm .github/workflows/fix-pr-oidc-isolation.yml
-          rm scripts/ci/apply_oidc_fix.py
-
       - name: Run focused security regressions
         run: |
           set -euo pipefail
@@ -35,16 +30,16 @@ jobs:
           bash scripts/appliance/validate.sh
           git diff --check
 
-      - name: Commit credential boundary correction
+      - name: Stage transformed source files
         run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .github/workflows/air-gapped-appliance.yml \
-            .github/workflows/mirror-final-proof.yml \
-            scripts/appliance/validate.sh \
-            .github/workflows/fix-pr-oidc-isolation.yml \
-            scripts/ci/apply_oidc_fix.py
-          git commit -m 'fix(ci): isolate OIDC from PR appliance proof'
-          echo "FINAL_COMMIT=$(git rev-parse HEAD)"
-          git push origin HEAD:feature/air-gapped-packaging-ghcr
+          mkdir -p transformed/.github/workflows transformed/scripts/appliance
+          cp .github/workflows/air-gapped-appliance.yml transformed/.github/workflows/
+          cp .github/workflows/mirror-final-proof.yml transformed/.github/workflows/
+          cp scripts/appliance/validate.sh transformed/scripts/appliance/
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: oidc-isolation-transformed-files
+          path: transformed/**
+          if-no-files-found: error
+          retention-days: 1

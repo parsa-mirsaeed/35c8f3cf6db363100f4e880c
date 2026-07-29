@@ -242,12 +242,10 @@ Path(sys.argv[2]).write_text(
 PY
 
 mkdir -p "${BUNDLE_DIR}/deploy"
-cp -a "${PRODUCTION_DIR}" "${BUNDLE_DIR}/deploy/production"
-rm -f \
-  "${BUNDLE_DIR}/deploy/production/.env.edutalent" \
-  "${BUNDLE_DIR}/deploy/production/runtime/supabase/.env" \
-  "${BUNDLE_DIR}/deploy/production/runtime/supabase/docker-compose.yml.edutalent-backup"
-rm -rf "${BUNDLE_DIR}/deploy/production/runtime/supabase/.git"
+python3 "${ROOT_DIR}/scripts/appliance/stage_production.py" \
+  --source "${PRODUCTION_DIR}" \
+  --destination "${BUNDLE_DIR}/deploy/production" \
+  --mode release
 python3 "${ROOT_DIR}/scripts/appliance/patch_production_command.py" \
   "${BUNDLE_DIR}/deploy/production/edutalent-production"
 mkdir -p "${BUNDLE_DIR}/scripts/appliance"

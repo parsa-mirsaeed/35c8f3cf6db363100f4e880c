@@ -38,6 +38,10 @@ grep -Fq 'locked_compose.py' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'SOURCE_PRODUCTION_DIR=' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'PRODUCTION_DIR="${TEMP_DIR}/production"' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'stage_production.py' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq -- '--mode release' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'cleanup_upstream_backups' "${ROOT_DIR}/deploy/production/generate-secrets.sh"
+grep -Fq 'UPSTREAM_ENV_BACKUP="${SUPABASE_DIR}/.env.old"' "${ROOT_DIR}/deploy/production/generate-secrets.sh"
+grep -Fq 'UPSTREAM_COMPOSE_BACKUP="${SUPABASE_COMPOSE}.old"' "${ROOT_DIR}/deploy/production/generate-secrets.sh"
 if grep -Fq 'rm -f "${APP_ENV}"' "${ROOT_DIR}/scripts/appliance/build.sh"; then
   echo "Appliance builder must not delete source-tree production environments." >&2
   exit 1
@@ -219,6 +223,74 @@ test ! -e "${fixture}/production-staged/.env.edutalent"
 test ! -e "${fixture}/production-staged/runtime/supabase"
 grep -Fxq 'live app state' "${fixture}/production-source/.env.edutalent"
 grep -Fxq 'live supabase state' "${fixture}/production-source/runtime/supabase/.env"
+
+mkdir -p \
+  "${fixture}/release-source/runtime/supabase/.git" \
+  "${fixture}/release-source/runtime/keep"
+printf 'release definition\n' > "${fixture}/release-source/keep.txt"
+printf 'generated app secret\n' > "${fixture}/release-source/.env.edutalent"
+printf 'APP_DOMAIN=\n' > "${fixture}/release-source/.env.edutalent.example"
+printf 'generated Supabase secret\n' > "${fixture}/release-source/runtime/supabase/.env"
+printf 'JWT_SECRET=\n' > "${fixture}/release-source/runtime/supabase/.env.example"
+printf 'services: {}\n' > "${fixture}/release-source/runtime/supabase/docker-compose.yml"
+printf 'upstream metadata\n' > "${fixture}/release-source/runtime/supabase/.git/config"
+python3 "${ROOT_DIR}/scripts/appliance/stage_production.py" \
+  --source "${fixture}/release-source" \
+  --destination "${fixture}/release-staged" \
+  --mode release
+test -f "${fixture}/release-staged/keep.txt"
+test -f "${fixture}/release-staged/.env.edutalent.example"
+test -f "${fixture}/release-staged/runtime/supabase/.env.example"
+test ! -e "${fixture}/release-staged/.env.edutalent"
+test ! -e "${fixture}/release-staged/runtime/supabase/.env"
+test ! -e "${fixture}/release-staged/runtime/supabase/.git"
+
+printf 'stale secret backup\n' > "${fixture}/release-source/runtime/supabase/.env.old"
+if python3 "${ROOT_DIR}/scripts/appliance/stage_production.py" \
+  --source "${fixture}/release-source" \
+  --destination "${fixture}/release-rejected-env-old" \
+  --mode release >/dev/null 2>&1; then
+  echo "Release staging accepted a generated Supabase .env.old backup." >&2
+  exit 1
+fi
+rm -f "${fixture}/release-source/runtime/supabase/.env.old"
+printf 'stale compose backup\n' > "${fixture}/release-source/runtime/supabase/docker-compose.yml.old"
+if python3 "${ROOT_DIR}/scripts/appliance/stage_production.py" \
+  --source "${fixture}/release-source" \
+  --destination "${fixture}/release-rejected-compose-old" \
+  --mode release >/dev/null 2>&1; then
+  echo "Release staging accepted a generated Supabase Compose backup." >&2
+  exit 1
+fi
+rm -f "${fixture}/release-source/runtime/supabase/docker-compose.yml.old"
+
+secret_fixture="${fixture}/secret-generation"
+mkdir -p "${secret_fixture}/runtime/supabase/utils"
+cp "${ROOT_DIR}/deploy/production/generate-secrets.sh" "${secret_fixture}/generate-secrets.sh"
+cat > "${secret_fixture}/.env.edutalent" <<'ENV'
+APP_DOMAIN=app.fixture.invalid
+SUPABASE_DOMAIN=supabase.fixture.invalid
+ADMIN_DOMAIN=admin.fixture.invalid
+ENV
+cp "${secret_fixture}/.env.edutalent" "${secret_fixture}/.env.edutalent.example"
+printf 'JWT_SECRET=\n' > "${secret_fixture}/runtime/supabase/.env.example"
+printf 'services: {}\n' > "${secret_fixture}/runtime/supabase/docker-compose.yml"
+cat > "${secret_fixture}/runtime/supabase/utils/generate-keys.sh" <<'SH'
+#!/bin/sh
+set -e
+cp .env .env.old
+SH
+cat > "${secret_fixture}/runtime/supabase/utils/add-new-auth-keys.sh" <<'SH'
+#!/bin/sh
+set -e
+cp .env .env.old
+cp docker-compose.yml docker-compose.yml.old
+SH
+bash "${secret_fixture}/generate-secrets.sh" >/dev/null
+test -f "${secret_fixture}/runtime/supabase/.env"
+test ! -e "${secret_fixture}/runtime/supabase/.env.old"
+test ! -e "${secret_fixture}/runtime/supabase/docker-compose.yml.old"
+test ! -e "${secret_fixture}/runtime/supabase/docker-compose.yml.edutalent-backup"
 
 mkdir -p "${fixture}/locked-compose"
 cat > "${fixture}/locked-compose/services.tsv" <<'TSV'

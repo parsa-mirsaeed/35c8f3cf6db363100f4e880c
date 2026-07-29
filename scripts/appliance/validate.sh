@@ -85,8 +85,10 @@ mirror_workflow="${ROOT_DIR}/.github/workflows/mirror-final-proof.yml"
 grep -Fq 'runs-on: ubuntu-24.04-arm' "${air_workflow}"
 grep -Fq 'platform: linux/arm64' "${air_workflow}"
 grep -Fq 'workflow_call:' "${air_workflow}"
-test "$(grep -Fc "if: github.event_name != 'pull_request' || inputs.complete" "${air_workflow}")" -eq 2
-test "$(grep -Fc 'ref: ${{ github.event.pull_request.head.sha || github.sha }}' "${air_workflow}")" -eq 5
+grep -Fq "if: github.event_name == 'pull_request' && inputs.complete" "${air_workflow}"
+test "$(grep -Fc "if: github.event_name != 'pull_request' || inputs.complete" "${air_workflow}")" -eq 1
+grep -Fq "if: github.event_name != 'pull_request'" "${air_workflow}"
+test "$(grep -Fc 'ref: ${{ github.event.pull_request.head.sha || github.sha }}' "${air_workflow}")" -eq 6
 if grep -Eq '^[[:space:]]+ref: [0-9a-f]{40}$' "${air_workflow}"; then
   echo "Air-gapped workflow contains a hard-coded checkout SHA." >&2
   exit 1
@@ -103,7 +105,8 @@ air_top = air_lines[:air_jobs]
 for forbidden in ("  packages: write", "  id-token: write", "  attestations: write"):
     assert forbidden not in air_top, forbidden
 expected_air = {
-    "build-offline": ("contents: read", "id-token: write"),
+    "build-offline": ("contents: read",),
+    "build-release": ("contents: read", "id-token: write"),
     "publish-platforms": ("contents: read", "packages: write"),
     "publish-indexes": (
         "contents: read",
@@ -112,11 +115,30 @@ expected_air = {
         "attestations: write",
     ),
 }
+def job_block(lines, job):
+    index = lines.index(f"  {job}:")
+    end = next(
+        (candidate for candidate in range(index + 1, len(lines))
+         if lines[candidate].startswith("  ")
+         and not lines[candidate].startswith("    ")
+         and lines[candidate].endswith(":")),
+        len(lines),
+    )
+    return lines[index + 1:end]
+
 for job, permissions in expected_air.items():
-    index = air_lines.index(f"  {job}:")
-    block = air_lines[index + 1:index + 2 + len(permissions)]
-    assert block[0] == "    permissions:", (job, block)
-    assert tuple(line.strip() for line in block[1:]) == permissions, (job, block)
+    block = job_block(air_lines, job)
+    assert block[0] == "    permissions:", (job, block[:5])
+    assert tuple(line.strip() for line in block[1:1 + len(permissions)]) == permissions, (job, block[:5])
+
+pr_build = job_block(air_lines, "build-offline")
+release_build = job_block(air_lines, "build-release")
+assert "      id-token: write" not in pr_build, pr_build[:10]
+assert "    if: github.event_name == 'pull_request' && inputs.complete" in pr_build
+assert "          EDUTALENT_APPLIANCE_SIGNING_MODE: ephemeral" in pr_build
+assert "      id-token: write" in release_build
+assert "    if: github.event_name != 'pull_request'" in release_build
+assert "          EDUTALENT_APPLIANCE_SIGNING_MODE: keyless" in release_build
 
 mirror_lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
 mirror_jobs = mirror_lines.index("jobs:")
@@ -125,12 +147,7 @@ assert "  actions: write" not in mirror_top, mirror_top
 assert "  id-token: write" not in mirror_top, mirror_top
 expected_mirror = {
     "dispatch-and-verify": ("contents: read", "actions: write"),
-    "complete-appliance": (
-    "contents: read",
-    "packages: write",
-    "id-token: write",
-    "attestations: write",
-),
+    "complete-appliance": ("contents: read",),
 }
 for job, permissions in expected_mirror.items():
     index = mirror_lines.index(f"  {job}:")

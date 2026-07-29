@@ -327,9 +327,6 @@ jobs:
     needs: dispatch-and-verify
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
     uses: ./.github/workflows/air-gapped-appliance.yml
     with:
       complete: true

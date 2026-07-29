@@ -1,0 +1,17 @@
+name: Fix production env template
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/fix-production-env-template.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo staging

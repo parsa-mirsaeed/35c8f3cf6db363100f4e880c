@@ -1,0 +1,17 @@
+name: Fix exact-head checkout
+
+on:
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/fix-exact-head-checkout.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo staging

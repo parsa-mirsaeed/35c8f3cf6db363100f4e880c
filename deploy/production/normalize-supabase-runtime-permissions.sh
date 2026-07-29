@@ -3,8 +3,12 @@ set -euo pipefail
 
 runtime_dir="${1:-}"
 [[ -n "${runtime_dir}" && -d "${runtime_dir}" ]] || {
-  echo "Usage: normalize-supabase-runtime-permissions.sh <runtime-directory>" >&2
+  echo "Usage: normalize-supabase-runtime-permissions.sh <fresh-upstream-directory>" >&2
   exit 2
+}
+[[ ! -e "${runtime_dir}/.env" ]] || {
+  echo "Refusing to normalize an initialized Supabase runtime containing .env." >&2
+  exit 1
 }
 
 if find "${runtime_dir}" -type l -print -quit | grep -q .; then
@@ -16,8 +20,8 @@ if find "${runtime_dir}" ! -type d ! -type f -print -quit | grep -q .; then
   exit 1
 fi
 
-# The pinned runtime contains immutable public definitions only. Secrets are
-# generated later and retain mode 0600. Restore read/search access that a
+# This helper is restricted to the fresh pinned upstream checkout. Secrets and
+# mutable installation state do not exist yet. Restore read/search access that a
 # strict caller umask may remove while preserving upstream executable bits.
 chmod -R a+rX,go-w "${runtime_dir}"
 

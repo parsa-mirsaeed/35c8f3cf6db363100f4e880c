@@ -114,7 +114,12 @@ assert "  actions: write" not in mirror_top, mirror_top
 assert "  id-token: write" not in mirror_top, mirror_top
 expected_mirror = {
     "dispatch-and-verify": ("contents: read", "actions: write"),
-    "complete-appliance": ("contents: read", "id-token: write"),
+    "complete-appliance": (
+    "contents: read",
+    "packages: write",
+    "id-token: write",
+    "attestations: write",
+),
 }
 for job, permissions in expected_mirror.items():
     index = mirror_lines.index(f"  {job}:")

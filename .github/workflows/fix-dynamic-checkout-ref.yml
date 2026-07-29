@@ -42,7 +42,7 @@ jobs:
           validate = validate_path.read_text(encoding='utf-8')
           pattern = r'''(?m)^test "\$\(grep -Fc 'ref: [0-9a-f]{40}' "\$\{air_workflow\}"\)" -eq 5$'''
           replacement = (
-              f'''test "$(grep -Fc 'ref: {expression}' "${{air_workflow}}")" -eq 5\n'''
+              "test \"$(grep -Fc 'ref: " + expression + "' \"${air_workflow}\")\" -eq 5\n"
               '''if grep -Eq '^[[:space:]]+ref: [0-9a-f]{40}$' "${air_workflow}"; then\n'''
               '''  echo "Air-gapped workflow contains a hard-coded checkout SHA." >&2\n'''
               '''  exit 1\n'''

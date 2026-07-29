@@ -26,38 +26,42 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import re
           from pathlib import Path
+
+          workflow_lines = Path(".github/workflows/apply-appliance-state-hardening.yml").read_text(encoding="utf-8").splitlines()
+          step = workflow_lines.index("      - name: Apply external-state and scanner corrections")
+          run_line = workflow_lines.index("        run: |", step)
+          next_step = next(
+              index for index in range(run_line + 1, len(workflow_lines))
+              if workflow_lines[index].startswith("      - name:")
+          )
+          script_lines = workflow_lines[run_line + 1:next_step]
+          script = "\n".join(line[10:] if line.startswith("          ") else line for line in script_lines) + "\n"
+
+          def literal(name: str, next_name: str) -> str:
+              match = re.search(
+                  rf"{name} = '''(.*?)'''\n{next_name}",
+                  script,
+                  flags=re.DOTALL,
+              )
+              if match is None:
+                  raise SystemExit(f"unable to extract {name}")
+              return match.group(1).rstrip("\n")
+
+          expected_production = literal("old_production", "new_production")
+          expected_init = literal("old_init", "new_init")
 
           launcher = Path("deploy/appliance/edutalent-appliance")
           text = launcher.read_text(encoding="utf-8")
-
-          start = text.index("production() {\n") + len("production() {\n")
-          end = text.index("\n}\n\ninit_secrets() {", start)
-          body = text[start:end]
-          body = "\n".join(("  " + line if line else line) for line in body.splitlines())
-          text = text[:start] + body + text[end:]
-
-          start = text.index("init_secrets() {\n") + len("init_secrets() {\n")
-          end = text.index("\n}\n\ninstall_bundle() {", start)
-          normalized = []
-          for line in text[start:end].splitlines():
-              if not line:
-                  normalized.append(line)
-                  continue
-              leading = len(line) - len(line.lstrip(" "))
-              normalized.append(" " * (leading * 2) + line.lstrip(" "))
-          text = text[:start] + "\n".join(normalized) + text[end:]
+          production_start = text.index("production() {")
+          init_start = text.index("init_secrets() {", production_start)
+          text = text[:production_start] + expected_production + "\n\n" + text[init_start:]
+          init_start = text.index("init_secrets() {", production_start)
+          install_start = text.index("install_bundle() {", init_start)
+          text = text[:init_start] + expected_init + "\n\n" + text[install_start:]
           launcher.write_text(text, encoding="utf-8")
 
-          workflow = Path(".github/workflows/apply-appliance-state-hardening.yml").read_text(encoding="utf-8").splitlines()
-          step = workflow.index("      - name: Apply external-state and scanner corrections")
-          run_line = workflow.index("        run: |", step)
-          next_step = next(
-              index for index in range(run_line + 1, len(workflow))
-              if workflow[index].startswith("      - name:")
-          )
-          script_lines = workflow[run_line + 1:next_step]
-          script = "\n".join(line[10:] if line.startswith("          ") else line for line in script_lines) + "\n"
           Path("/tmp/apply-state-hardening.sh").write_text(script, encoding="utf-8")
           PY
           bash /tmp/apply-state-hardening.sh

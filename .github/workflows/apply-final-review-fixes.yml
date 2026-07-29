@@ -1,5 +1,5 @@
 name: Apply final review fixes
-# Trigger after workflow creation.
+# Trigger after workflow creation and validate flexible job-key ordering.
 
 on:
   pull_request:
@@ -24,7 +24,43 @@ jobs:
           show-progress: false
 
       - name: Apply reusable proof and stable state corrections
-        run: python3 .github/apply-final-review-fixes.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/apply-final-review-fixes.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/appliance/validate.sh")
+          text = path.read_text(encoding="utf-8")
+          old = '''for job, permissions in expected_mirror.items():
+              index = mirror_lines.index(f"  {job}:")
+              name_index = index + 1
+              permission_index = name_index + 1
+              assert mirror_lines[permission_index] == "    permissions:", (job, mirror_lines[index:index + 8])
+              block = mirror_lines[permission_index + 1:permission_index + 1 + len(permissions)]
+              assert tuple(line.strip() for line in block) == permissions, (job, block)
+          '''
+          new = '''for job, permissions in expected_mirror.items():
+              index = mirror_lines.index(f"  {job}:")
+              end = next(
+                  (candidate for candidate in range(index + 1, len(mirror_lines))
+                   if mirror_lines[candidate].startswith("  ")
+                   and not mirror_lines[candidate].startswith("    ")
+                   and mirror_lines[candidate].endswith(":")),
+                  len(mirror_lines),
+              )
+              job_block = mirror_lines[index + 1:end]
+              permission_line = "    permissions:"
+              assert permission_line in job_block, (job, job_block)
+              permission_index = job_block.index(permission_line)
+              block = job_block[permission_index + 1:permission_index + 1 + len(permissions)]
+              assert tuple(line.strip() for line in block) == permissions, (job, block)
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("mirror permission regression changed unexpectedly")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
 
       - name: Validate scripts, workflows, and appliance regressions
         shell: bash

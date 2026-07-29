@@ -10,7 +10,12 @@ fi
 MANIFEST="${ROOT_DIR}/manifests/release-manifest.json"
 CHECKSUMS="${ROOT_DIR}/SHA256SUMS"
 PRODUCTION_SOURCE_DIR="${ROOT_DIR}/deploy/production"
-STATE_DIR="${EDUTALENT_APPLIANCE_STATE_DIR:-${ROOT_DIR}.state}"
+if [[ -n "${EDUTALENT_APPLIANCE_STATE_DIR:-}" ]]; then
+  STATE_DIR="${EDUTALENT_APPLIANCE_STATE_DIR}"
+else
+  : "${HOME:?HOME is required when EDUTALENT_APPLIANCE_STATE_DIR is unset}"
+  STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/edutalent-appliance"
+fi
 STATE_CONFIG_DIR="${STATE_DIR}/config"
 RUNTIME_PRODUCTION_DIR="${STATE_DIR}/runtime/production"
 APP_ENV="${STATE_CONFIG_DIR}/.env.edutalent"
@@ -33,6 +38,7 @@ Commands:
   stop                   Stop the appliance without deleting data
   status                 Show appliance service status
   checks                 Run database, gateway, AI outage/recovery, and Qdrant checks
+  state-dir              Print the persistent installation state directory
   install <directory>    Copy the verified appliance to a new empty destination
   help                   Show this help
 USAGE
@@ -206,9 +212,9 @@ ensure_images_loaded() {
   fi
 }
 
-initialize_state_dirs() {
+validate_state_dir() {
     [[ "${STATE_DIR}" == /* ]] || {
-        echo "EDUTALENT_APPLIANCE_STATE_DIR must be an absolute path: ${STATE_DIR}" >&2
+        echo "EDUTALENT_APPLIANCE_STATE_DIR and XDG_STATE_HOME must resolve to an absolute path: ${STATE_DIR}" >&2
         exit 1
     }
     case "${STATE_DIR}" in
@@ -217,6 +223,10 @@ initialize_state_dirs() {
         exit 1
         ;;
     esac
+}
+
+initialize_state_dirs() {
+    validate_state_dir
     mkdir -p "${STATE_CONFIG_DIR}" "${STATE_DIR}/runtime"
     chmod 0700 "${STATE_DIR}" "${STATE_CONFIG_DIR}" "${STATE_DIR}/runtime"
 }
@@ -316,6 +326,10 @@ case "${command}" in
     ;;
   stop) production down "$@" ;;
   status) production ps "$@" ;;
+  state-dir)
+    validate_state_dir
+    printf '%s\n' "${STATE_DIR}"
+    ;;
   checks)
     prepare_runtime_production
     export EDUTALENT_APP_ENV="${APP_ENV}"

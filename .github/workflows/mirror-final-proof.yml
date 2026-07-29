@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 concurrency:
   group: mirror-final-proof-${{ github.event.pull_request.number }}
@@ -20,6 +19,9 @@ concurrency:
 jobs:
   dispatch-and-verify:
     name: Verify and serialize complete exact-head proof
+    permissions:
+      contents: read
+      actions: write
     if: >-
       contains(github.event.pull_request.labels.*.name, 'full-validation') &&
       github.event.pull_request.draft == false
@@ -307,76 +309,71 @@ jobs:
               assert jobs.get(job_name) == "success", (job_name, jobs.get(job_name))
           PY
 
-      - name: Dispatch complete exact-head Air-gapped Appliance proof
-        id: appliance
-        shell: bash
-        run: |
-          set -euo pipefail
-          previous="$(gh run list \
-            --repo "$REPOSITORY" \
-            --workflow 'Air-gapped Appliance' \
-            --branch "$HEAD_REF" \
-            --event workflow_dispatch \
-            --limit 50 \
-            --json databaseId,headSha \
-            --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
-          gh workflow run air-gapped-appliance.yml \
-            --repo "$REPOSITORY" \
-            --ref "$HEAD_REF" \
-            -f publish=false \
-            -f create_archive=false
-          for attempt in $(seq 1 120); do
-            run_id="$(gh run list \
-              --repo "$REPOSITORY" \
-              --workflow 'Air-gapped Appliance' \
-              --branch "$HEAD_REF" \
-              --event workflow_dispatch \
-              --limit 50 \
-              --json databaseId,headSha \
-              --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
-            if (( run_id > previous )); then
-              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-              echo "Air-gapped Appliance run: $run_id"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Unable to resolve newly dispatched Air-gapped Appliance run at $HEAD_SHA" >&2
-          exit 1
+      - name: Upload pre-appliance exact-head evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: mirror-pre-appliance-evidence
+          path: |
+            ai-run.json
+            full-validation-run.json
+            production-pr-run.json
+            production-run.json
+            package-run.json
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Wait for and inspect complete appliance proof
+  complete-appliance:
+    name: Complete exact-head Air-gapped Appliance proof
+    needs: dispatch-and-verify
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/air-gapped-appliance.yml
+    with:
+      complete: true
+      publish: false
+      create_archive: false
+
+  final-proof:
+    name: Finalize exact-head mirror evidence
+    needs:
+      - dispatch-and-verify
+      - complete-appliance
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download serialized pre-appliance evidence
+        uses: actions/download-artifact@v6
+        with:
+          name: mirror-pre-appliance-evidence
+          path: mirror-evidence
+
+      - name: Download complete appliance gate evidence
+        uses: actions/download-artifact@v6
+        with:
+          name: air-gapped-appliance-gate
+          path: mirror-evidence
+
+      - name: Enforce exact-head appliance evidence
         shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          gh run watch '${{ steps.appliance.outputs.run_id }}' \
-            --repo "$REPOSITORY" --exit-status
-          gh run view '${{ steps.appliance.outputs.run_id }}' \
-            --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > appliance-run.json
-          python3 - "$HEAD_SHA" appliance-run.json <<'PY'
+          python3 - "$HEAD_SHA" mirror-evidence/air-gapped-appliance-gate.json <<'PY'
           import json
           import sys
 
           expected_sha, path = sys.argv[1:]
-          run = json.load(open(path, encoding="utf-8"))
-          assert run["headSha"] == expected_sha, (run["headSha"], expected_sha)
-          assert run["event"] == "workflow_dispatch", run["event"]
-          assert run["status"] == "completed", run["status"]
-          assert run["conclusion"] == "success", run["conclusion"]
-          jobs = {job["name"]: job["conclusion"] for job in run["jobs"]}
-          for job_name in (
-              "Validate appliance definitions",
-              "Build and verify complete air-gapped appliance",
-              "Build custom images natively for arm64",
-              "Air-gapped appliance gate",
-          ):
-              assert jobs.get(job_name) == "success", (job_name, jobs.get(job_name))
-          for job_name in (
-              "Publish native amd64 GHCR images",
-              "Publish native arm64 GHCR images",
-              "Assemble, sign, and attest multi-architecture GHCR indexes",
-          ):
-              assert jobs.get(job_name) == "skipped", (job_name, jobs.get(job_name))
+          evidence = json.load(open(path, encoding="utf-8"))
+          assert evidence["head_sha"] == expected_sha, (evidence["head_sha"], expected_sha)
+          assert evidence["validation"] == "success", evidence
+          assert evidence["offline_appliance"] == "success", evidence
+          assert evidence["native_arm64"] == "success", evidence
+          assert evidence["ghcr_platforms"] == "skipped", evidence
+          assert evidence["ghcr_indexes"] == "skipped", evidence
           print("Complete serialized exact-head proof verified.")
           PY
 
@@ -384,12 +381,6 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: mirror-final-proof
-          path: |
-            ai-run.json
-            full-validation-run.json
-            production-pr-run.json
-            production-run.json
-            package-run.json
-            appliance-run.json
+          path: mirror-evidence/**
           if-no-files-found: error
           retention-days: 7

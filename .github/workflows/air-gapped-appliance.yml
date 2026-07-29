@@ -23,6 +23,27 @@ on:
       - .github/workflows/air-gapped-appliance.yml
       - .github/workflows/package.yml
       - .github/workflows/mirror-final-proof.yml
+  workflow_call:
+    inputs:
+      version:
+        description: Appliance version; defaults to the exact commit prefix
+        required: false
+        type: string
+      complete:
+        description: Run the complete offline and native architecture proof
+        required: false
+        default: false
+        type: boolean
+      publish:
+        description: Publish signed multi-architecture custom images to GHCR; main only
+        required: false
+        default: false
+        type: boolean
+      create_archive:
+        description: Create and retain the signed offline release archive
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       version:
@@ -75,10 +96,12 @@ jobs:
       contents: read
       id-token: write
     name: Build and verify complete air-gapped appliance
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || inputs.complete
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    env:
+      EDUTALENT_APPLIANCE_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       bundle_dir: ${{ steps.version.outputs.bundle_dir }}
@@ -147,7 +170,7 @@ jobs:
         run: |
           set -euo pipefail
           bundle='${{ steps.version.outputs.bundle_dir }}'
-          python3 - "${bundle}" "${GITHUB_SHA}" > appliance-evidence.json <<'PY'
+          python3 - "${bundle}" "${{ github.event.pull_request.head.sha || github.sha }}" > appliance-evidence.json <<'PY'
           import hashlib
           import json
           import sys
@@ -220,7 +243,7 @@ jobs:
 
   native-arm64:
     name: Build custom images natively for arm64
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || inputs.complete
     needs: validate
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
@@ -502,6 +525,7 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          COMPLETE_REQUESTED: ${{ github.event_name != 'pull_request' || inputs.complete }}
           PUBLISH_REQUESTED: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           OFFLINE_RESULT: ${{ needs.build-offline.result }}
@@ -512,12 +536,12 @@ jobs:
         run: |
           set -euo pipefail
           test "${VALIDATE_RESULT}" = success
-          if [[ "${EVENT_NAME}" == pull_request ]]; then
-            test "${OFFLINE_RESULT}" = skipped
-            test "${ARM64_RESULT}" = skipped
-          else
+          if [[ "${COMPLETE_REQUESTED}" == true ]]; then
             test "${OFFLINE_RESULT}" = success
             test "${ARM64_RESULT}" = success
+          else
+            test "${OFFLINE_RESULT}" = skipped
+            test "${ARM64_RESULT}" = skipped
           fi
           if [[ "${PUBLISH_REQUESTED}" == true ]]; then
             test "${PUBLISH_PLATFORMS_RESULT}" = success

@@ -115,12 +115,19 @@ archives in lexical order when needed, then:
 ./edutalent-appliance init
 ```
 
-The first `init` creates `deploy/production/.env.edutalent`. Set the three domains,
-restricted administrative CIDRs, and absolute operator-supplied TLS certificate
-and key paths. Run `init` again to generate fresh installation-specific secrets
-inside the packaged, network-disabled tools container. Integrity verification
-permits only that file and `deploy/production/runtime/supabase/.env` as mutable
-installation state; every other appliance file remains exactly manifest-bound.
+The first `init` creates the external application environment under the stable
+installation state directory. By default this is
+`${XDG_STATE_HOME:-$HOME/.local/state}/edutalent-appliance`; use
+`./edutalent-appliance state-dir` to print the exact path. An installation may set
+an absolute `EDUTALENT_APPLIANCE_STATE_DIR` before every appliance command when a
+different managed location is required.
+
+Set the three domains, restricted administrative CIDRs, and absolute
+operator-supplied TLS certificate and key paths in
+`<state-dir>/config/.env.edutalent`. Run `init` again to generate fresh
+installation-specific secrets inside the packaged, network-disabled tools
+container. Generated application and Supabase environments remain outside the
+signed release tree; every appliance file remains exactly manifest-bound.
 
 ```bash
 ./edutalent-appliance start
@@ -138,11 +145,14 @@ previous release remaining outside the signed manifest.
 ## Updates and rollback
 
 Each version installs beside the previous version. Stop the current appliance,
-verify and load the new bundle, retain the existing production environment and
-volumes, then start the new version. Rollback selects the previous verified bundle
-and starts it against the unchanged data volumes. Database migration rollback and
-full backup restoration remain part of Plan V1 Production Operations and must be
-proven before a production rollout.
+verify and load the new bundle, and run the new launcher as the same operating-system
+user with the same `XDG_STATE_HOME` or explicit `EDUTALENT_APPLIANCE_STATE_DIR`.
+Confirm that `state-dir` prints the same path for both versions before startup. The
+new version then reuses the existing application environment, Supabase secrets, and
+named data volumes rather than generating replacement credentials. Rollback selects
+the previous verified bundle with that same state directory and unchanged data
+volumes. Database migration rollback and full backup restoration remain part of
+Plan V1 Production Operations and must be proven before a production rollout.
 
 ## Release verification
 

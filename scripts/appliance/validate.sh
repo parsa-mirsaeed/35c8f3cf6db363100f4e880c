@@ -57,6 +57,9 @@ grep -Fq 'EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES' "${ROOT_DIR}/deploy/ap
 grep -Fq 'SCAN_CHUNK_SIZE' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
 grep -Fq 'actual_mode' "${ROOT_DIR}/scripts/appliance/release_manifest.py"
 grep -Fq 'EDUTALENT_APPLIANCE_STATE_DIR' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'XDG_STATE_HOME' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'state-dir)' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
+grep -Fq 'EDUTALENT_APPLIANCE_GIT_SHA' "${ROOT_DIR}/scripts/appliance/build.sh"
 grep -Fq 'EDUTALENT_APP_ENV' "${ROOT_DIR}/deploy/production/edutalent-production"
 grep -Fq 'EDUTALENT_SUPABASE_ENV' "${ROOT_DIR}/deploy/production/generate-secrets.sh"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
@@ -75,19 +78,20 @@ package_workflow="${ROOT_DIR}/.github/workflows/package.yml"
 mirror_workflow="${ROOT_DIR}/.github/workflows/mirror-final-proof.yml"
 grep -Fq 'runs-on: ubuntu-24.04-arm' "${air_workflow}"
 grep -Fq 'platform: linux/arm64' "${air_workflow}"
-grep -Fq "if: github.event_name != 'pull_request'" "${air_workflow}"
+grep -Fq 'workflow_call:' "${air_workflow}"
+test "$(grep -Fc "if: github.event_name != 'pull_request' || inputs.complete" "${air_workflow}")" -eq 2
 grep -Fq "inputs.publish && github.ref == 'refs/heads/main'" "${air_workflow}"
 grep -Fq 'Build custom images natively for arm64' "${air_workflow}"
-python3 - "${air_workflow}" <<'PYWORKFLOW'
+python3 - "${air_workflow}" "${mirror_workflow}" <<'PYWORKFLOW'
 import sys
 from pathlib import Path
 
-lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
-jobs_index = lines.index("jobs:")
-top = lines[:jobs_index]
+air_lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+air_jobs = air_lines.index("jobs:")
+air_top = air_lines[:air_jobs]
 for forbidden in ("  packages: write", "  id-token: write", "  attestations: write"):
-    assert forbidden not in top, forbidden
-expected = {
+    assert forbidden not in air_top, forbidden
+expected_air = {
     "build-offline": ("contents: read", "id-token: write"),
     "publish-platforms": ("contents: read", "packages: write"),
     "publish-indexes": (
@@ -97,22 +101,53 @@ expected = {
         "attestations: write",
     ),
 }
-for job, permissions in expected.items():
-    index = lines.index(f"  {job}:")
-    block = lines[index + 1:index + 2 + len(permissions)]
+for job, permissions in expected_air.items():
+    index = air_lines.index(f"  {job}:")
+    block = air_lines[index + 1:index + 2 + len(permissions)]
     assert block[0] == "    permissions:", (job, block)
     assert tuple(line.strip() for line in block[1:]) == permissions, (job, block)
+
+mirror_lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
+mirror_jobs = mirror_lines.index("jobs:")
+mirror_top = mirror_lines[:mirror_jobs]
+assert "  actions: write" not in mirror_top, mirror_top
+assert "  id-token: write" not in mirror_top, mirror_top
+expected_mirror = {
+    "dispatch-and-verify": ("contents: read", "actions: write"),
+    "complete-appliance": ("contents: read", "id-token: write"),
+}
+for job, permissions in expected_mirror.items():
+    index = mirror_lines.index(f"  {job}:")
+    end = next(
+        (candidate for candidate in range(index + 1, len(mirror_lines))
+         if mirror_lines[candidate].startswith("  ")
+         and not mirror_lines[candidate].startswith("    ")
+         and mirror_lines[candidate].endswith(":")),
+        len(mirror_lines),
+    )
+    job_block = mirror_lines[index + 1:end]
+    permission_line = "    permissions:"
+    assert permission_line in job_block, (job, job_block)
+    permission_index = job_block.index(permission_line)
+    block = job_block[permission_index + 1:permission_index + 1 + len(permissions)]
+    assert tuple(line.strip() for line in block) == permissions, (job, block)
 PYWORKFLOW
 grep -Fq "if: github.event_name != 'pull_request'" "${package_workflow}"
 grep -Fq 'Verify and serialize complete exact-head proof' "${mirror_workflow}"
+grep -Fq 'Finalize exact-head mirror evidence' "${mirror_workflow}"
 grep -Fq "github.event.pull_request.draft == false" "${mirror_workflow}"
 grep -Fq -- "--event pull_request" "${mirror_workflow}"
 grep -Fq "gh workflow run production-foundation.yml" "${mirror_workflow}"
 grep -Fq "gh workflow run package.yml" "${mirror_workflow}"
-grep -Fq "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}"
+grep -Fq 'uses: ./.github/workflows/air-gapped-appliance.yml' "${mirror_workflow}"
+grep -Fq 'complete: true' "${mirror_workflow}"
+if grep -Fq "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}"; then
+  echo "A newly introduced Air workflow cannot be bootstrapped through workflow_dispatch before merge." >&2
+  exit 1
+fi
 production_line="$(grep -n "gh workflow run production-foundation.yml" "${mirror_workflow}" | cut -d: -f1)"
 package_line="$(grep -n "gh workflow run package.yml" "${mirror_workflow}" | cut -d: -f1)"
-appliance_line="$(grep -n "gh workflow run air-gapped-appliance.yml" "${mirror_workflow}" | cut -d: -f1)"
+appliance_line="$(grep -n 'uses: ./.github/workflows/air-gapped-appliance.yml' "${mirror_workflow}" | cut -d: -f1)"
 test "${production_line}" -lt "${package_line}"
 test "${package_line}" -lt "${appliance_line}"
 if grep -Fq 'setup-qemu-action' "${air_workflow}"; then
@@ -129,6 +164,36 @@ fi
 
 fixture="$(mktemp -d)"
 trap 'rm -rf "${fixture}"' EXIT
+
+mkdir -p \
+  "${fixture}/home" \
+  "${fixture}/xdg-state" \
+  "${fixture}/upgrades/v1" \
+  "${fixture}/upgrades/v2"
+cp "${ROOT_DIR}/deploy/appliance/edutalent-appliance" \
+  "${fixture}/upgrades/v1/edutalent-appliance"
+cp "${ROOT_DIR}/deploy/appliance/edutalent-appliance" \
+  "${fixture}/upgrades/v2/edutalent-appliance"
+chmod 0755 \
+  "${fixture}/upgrades/v1/edutalent-appliance" \
+  "${fixture}/upgrades/v2/edutalent-appliance"
+expected_state="${fixture}/home/.local/state/edutalent-appliance"
+state_v1="$(HOME="${fixture}/home" "${fixture}/upgrades/v1/edutalent-appliance" state-dir)"
+state_v2="$(HOME="${fixture}/home" "${fixture}/upgrades/v2/edutalent-appliance" state-dir)"
+test "${state_v1}" = "${expected_state}"
+test "${state_v2}" = "${expected_state}"
+test "${state_v1}" = "${state_v2}"
+xdg_state="$(HOME="${fixture}/home" XDG_STATE_HOME="${fixture}/xdg-state" \
+  "${fixture}/upgrades/v2/edutalent-appliance" state-dir)"
+test "${xdg_state}" = "${fixture}/xdg-state/edutalent-appliance"
+custom_state="$(HOME="${fixture}/home" EDUTALENT_APPLIANCE_STATE_DIR="${fixture}/managed-state" \
+  "${fixture}/upgrades/v2/edutalent-appliance" state-dir)"
+test "${custom_state}" = "${fixture}/managed-state"
+if HOME="${fixture}/home" EDUTALENT_APPLIANCE_STATE_DIR="${fixture}/upgrades/v1/state" \
+  "${fixture}/upgrades/v1/edutalent-appliance" state-dir >/dev/null 2>&1; then
+  echo "Appliance accepted mutable state inside the immutable release." >&2
+  exit 1
+fi
 
 mkdir -p "${fixture}/production-source/runtime/supabase" "${fixture}/production-source/runtime/keep"
 printf 'definition\n' > "${fixture}/production-source/keep.txt"

@@ -79,6 +79,31 @@ host_platform() {
   esac
 }
 
+detect_signature_mode() {
+  local public_key="${ROOT_DIR}/signatures/verification.pub"
+  local manifest_signature="${ROOT_DIR}/signatures/release-manifest.sig"
+  local checksums_signature="${ROOT_DIR}/signatures/SHA256SUMS.sig"
+  local manifest_bundle="${ROOT_DIR}/signatures/release-manifest.sigstore.json"
+  local checksums_bundle="${ROOT_DIR}/signatures/SHA256SUMS.sigstore.json"
+  local ephemeral_complete=false keyless_complete=false
+
+  if [[ -f "${public_key}" && -f "${manifest_signature}" && -f "${checksums_signature}" ]]; then
+    ephemeral_complete=true
+  fi
+  if [[ -f "${manifest_bundle}" && -f "${checksums_bundle}" ]]; then
+    keyless_complete=true
+  fi
+  if [[ "${ephemeral_complete}" == true && "${keyless_complete}" == false ]]; then
+    printf '%s\n' ephemeral
+  elif [[ "${keyless_complete}" == true && "${ephemeral_complete}" == false ]]; then
+    printf '%s\n' keyless
+  else
+    echo "Release signature material is incomplete or ambiguous." >&2
+    return 1
+  fi
+}
+
+VERIFIED_SIGNING_MODE=""
 verify_signatures() {
   local public_key="${ROOT_DIR}/signatures/verification.pub"
   local manifest_signature="${ROOT_DIR}/signatures/release-manifest.sig"
@@ -86,17 +111,13 @@ verify_signatures() {
   local manifest_bundle="${ROOT_DIR}/signatures/release-manifest.sigstore.json"
   local checksums_bundle="${ROOT_DIR}/signatures/SHA256SUMS.sigstore.json"
   local signing_mode
-  signing_mode="$(manifest_value release.signing_mode)"
+  signing_mode="$(detect_signature_mode)"
 
   require_command cosign
   case "${signing_mode}" in
     ephemeral)
       [[ "${EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES:-false}" == "true" ]] || {
         echo "Ephemeral signatures are validation-only and require explicit EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES=true." >&2
-        return 1
-      }
-      [[ -f "${public_key}" && -f "${manifest_signature}" && -f "${checksums_signature}" ]] || {
-        echo "Complete ephemeral release signature material is missing." >&2
         return 1
       }
       cosign verify-blob \
@@ -110,10 +131,6 @@ verify_signatures() {
       echo "Verified explicitly enabled ephemeral validation signatures with the packaged public key."
       ;;
     keyless)
-      [[ -f "${manifest_bundle}" && -f "${checksums_bundle}" ]] || {
-        echo "Complete keyless release signature material is missing." >&2
-        return 1
-      }
       local issuer="${EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER:-}"
       local identity="${EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP:-}"
       [[ -n "${issuer}" && -n "${identity}" ]] || {
@@ -132,22 +149,30 @@ verify_signatures() {
         "${CHECKSUMS}" >/dev/null
       echo "Verified keyless release signatures against the independently supplied trust policy."
       ;;
-    *)
-      echo "Unsupported signed release mode: ${signing_mode}" >&2
-      return 1
-      ;;
+    *) echo "Unsupported signed release mode: ${signing_mode}" >&2; return 1 ;;
   esac
+  VERIFIED_SIGNING_MODE="${signing_mode}"
 }
 
 verify_bundle() {
   require_command python3
+  require_command sha256sum
   [[ -f "${MANIFEST}" && -f "${CHECKSUMS}" ]] || {
     echo "Release manifest or checksum set is missing." >&2
     exit 1
   }
-  python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify --bundle "${ROOT_DIR}"
   verify_signatures
-  local expected actual
+  (
+    cd "${ROOT_DIR}"
+    sha256sum --check --strict SHA256SUMS >/dev/null
+  )
+  python3 "${ROOT_DIR}/scripts/appliance/release_manifest.py" verify --bundle "${ROOT_DIR}"
+  local declared_mode expected actual
+  declared_mode="$(manifest_value release.signing_mode)"
+  [[ "${declared_mode}" == "${VERIFIED_SIGNING_MODE}" ]] || {
+    echo "Release signing mode does not match the authenticated signature material." >&2
+    exit 1
+  }
   expected="$(manifest_value release.platform)"
   actual="$(host_platform)"
   [[ "${expected}" == "${actual}" ]] || {
@@ -301,13 +326,31 @@ init_secrets() {
 }
 
 install_bundle() {
-  local destination="${1:-}"
+  local destination="${1:-}" root_physical
   [[ -n "${destination}" ]] || { echo "install requires a destination directory" >&2; exit 2; }
   verify_bundle
   require_command tar
+  root_physical="$(cd "${ROOT_DIR}" && pwd -P)"
+  destination="$(python3 - "${destination}" <<'PY'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).expanduser().resolve(strict=False))
+PY
+)"
+  case "${destination}/" in
+    "${root_physical%/}/"*)
+      echo "install destination must be outside the current bundle: ${destination}" >&2
+      exit 2
+      ;;
+  esac
   mkdir -p "${destination}"
-  destination="$(cd "${destination}" && pwd)"
-  [[ "${destination}" != "${ROOT_DIR}" ]] || { echo "destination is the current bundle" >&2; exit 2; }
+  destination="$(cd "${destination}" && pwd -P)"
+  case "${destination}/" in
+    "${root_physical%/}/"*)
+      echo "install destination must be outside the current bundle: ${destination}" >&2
+      exit 2
+      ;;
+  esac
   if find "${destination}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
     echo "install destination must be empty: ${destination}" >&2
     exit 1

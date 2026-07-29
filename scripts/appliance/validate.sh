@@ -595,6 +595,33 @@ PATH="${fixture}/fake-bin:${PATH}" \
   bash "${fixture}/repository/dist/packaged-appliance/edutalent-appliance" verify >/dev/null
 grep -Fq -- '--key' "${fixture}/cosign.log"
 
+verifier_backup="${fixture}/release-manifest-verifier.original"
+cp "${fixture}/bundle/scripts/appliance/release_manifest.py" "${verifier_backup}"
+cat > "${fixture}/bundle/scripts/appliance/release_manifest.py" <<PY
+from pathlib import Path
+Path("${fixture}/malicious-verifier-ran").write_text("executed\n", encoding="utf-8")
+raise SystemExit(0)
+PY
+if PATH="${fixture}/fake-bin:${PATH}" \
+  COSIGN_LOG="${fixture}/cosign.log" \
+  EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES=true \
+  bash "${fixture}/bundle/edutalent-appliance" verify >/dev/null 2>&1; then
+  echo "Appliance accepted an unauthenticated replacement verifier." >&2
+  exit 1
+fi
+test ! -e "${fixture}/malicious-verifier-ran"
+mv "${verifier_backup}" "${fixture}/bundle/scripts/appliance/release_manifest.py"
+
+if PATH="${fixture}/fake-bin:${PATH}" \
+  COSIGN_LOG="${fixture}/cosign.log" \
+  EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES=true \
+  bash "${fixture}/bundle/edutalent-appliance" install \
+    "${fixture}/bundle/installed-child" >/dev/null 2>&1; then
+  echo "Appliance accepted an install destination inside its source bundle." >&2
+  exit 1
+fi
+test ! -e "${fixture}/bundle/installed-child"
+
 mkdir -p "${fixture}/bundle/deploy/production/runtime/supabase"
 printf 'attacker app state
 ' > "${fixture}/bundle/deploy/production/.env.edutalent"

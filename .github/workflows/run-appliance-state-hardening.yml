@@ -130,6 +130,17 @@ jobs:
           ''',
                   "smoke init guard",
               ),
+              (
+                  '''if text.count(old_mutable_fixture) != 1:
+              raise SystemExit("mutable environment fixture changed unexpectedly")
+          text = text.replace(old_mutable_fixture, new_mutable_fixture, 1)
+          ''',
+                  '''fixture_start = text.index('mkdir -p "${fixture}/bundle/deploy/production/runtime/supabase"')
+          mode_test_start = text.index('chmod 0755 "${fixture}/bundle/sbom/images/fixture.spdx.json"', fixture_start)
+          text = text[:fixture_start] + new_mutable_fixture.rstrip("\\n") + "\\n" + text[mode_test_start:]
+          ''',
+                  "mutable environment fixture guard",
+              ),
           )
           for old, new, label in replacements:
               if script.count(old) != 1:

@@ -86,7 +86,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 3707a7ab4dac7916a33e2da12cd7aff6c69418a3
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           show-progress: false
 
       - name: Validate scripts, lock files, workflow isolation, and tamper detection
@@ -109,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 3707a7ab4dac7916a33e2da12cd7aff6c69418a3
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           show-progress: false
 
@@ -252,7 +252,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 3707a7ab4dac7916a33e2da12cd7aff6c69418a3
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           show-progress: false
 
       - uses: docker/setup-buildx-action@v4
@@ -305,7 +305,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 3707a7ab4dac7916a33e2da12cd7aff6c69418a3
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           show-progress: false
 
       - uses: docker/setup-buildx-action@v4
@@ -386,7 +386,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 3707a7ab4dac7916a33e2da12cd7aff6c69418a3
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           show-progress: false
 
       - uses: docker/setup-buildx-action@v4

@@ -80,41 +80,46 @@ grep -Fxq 'scripts/appliance' "${ROOT_DIR}/.dockerignore"
 grep -Fxq 'docs' "${ROOT_DIR}/.dockerignore"
 
 air_workflow="${ROOT_DIR}/.github/workflows/air-gapped-appliance.yml"
+release_workflow="${ROOT_DIR}/.github/workflows/air-gapped-release.yml"
 package_workflow="${ROOT_DIR}/.github/workflows/package.yml"
 mirror_workflow="${ROOT_DIR}/.github/workflows/mirror-final-proof.yml"
 grep -Fq 'runs-on: ubuntu-24.04-arm' "${air_workflow}"
-grep -Fq 'platform: linux/arm64' "${air_workflow}"
+grep -Fq 'platforms: linux/arm64' "${air_workflow}"
 grep -Fq 'workflow_call:' "${air_workflow}"
-grep -Fq "if: github.event_name == 'pull_request' && inputs.complete" "${air_workflow}"
-test "$(grep -Fc "if: github.event_name != 'pull_request' || inputs.complete" "${air_workflow}")" -eq 1
-grep -Fq "if: github.event_name != 'pull_request'" "${air_workflow}"
-test "$(grep -Fc 'ref: ${{ github.event.pull_request.head.sha || github.sha }}' "${air_workflow}")" -eq 6
-if grep -Eq '^[[:space:]]+ref: [0-9a-f]{40}$' "${air_workflow}"; then
-  echo "Air-gapped workflow contains a hard-coded checkout SHA." >&2
+grep -Fq 'if: inputs.complete' "${air_workflow}"
+grep -Fq 'EDUTALENT_APPLIANCE_SIGNING_MODE: ephemeral' "${air_workflow}"
+if grep -Eq 'packages: write|id-token: write|attestations: write' "${air_workflow}"; then
+  echo "Pull-request appliance proof must remain read-only." >&2
   exit 1
 fi
-grep -Fq "inputs.publish && github.ref == 'refs/heads/main'" "${air_workflow}"
-grep -Fq 'Build custom images natively for arm64' "${air_workflow}"
-python3 - "${air_workflow}" "${mirror_workflow}" <<'PYWORKFLOW'
+if grep -Fxq '  workflow_dispatch:' "${air_workflow}" || grep -Fxq '  push:' "${air_workflow}"; then
+  echo "Protected release triggers must not exist in the PR proof workflow." >&2
+  exit 1
+fi
+grep -Fq 'workflow_dispatch:' "${release_workflow}"
+grep -Fq 'refs/heads/main' "${release_workflow}"
+grep -Fq 'tags:' "${release_workflow}"
+grep -Fq 'EDUTALENT_APPLIANCE_SIGNING_MODE: keyless' "${release_workflow}"
+grep -Fq 'id-token: write' "${release_workflow}"
+grep -Fq 'packages: write' "${release_workflow}"
+grep -Fq 'attestations: write' "${release_workflow}"
+if grep -Fq 'pull_request:' "${release_workflow}" || grep -Fq 'workflow_call:' "${release_workflow}"; then
+  echo "Protected release workflow must not be callable from pull requests." >&2
+  exit 1
+fi
+if grep -Eq '^[[:space:]]+ref: [0-9a-f]{40}$' "${air_workflow}" "${release_workflow}"; then
+  echo "Air-gapped workflows contain a hard-coded checkout SHA." >&2
+  exit 1
+fi
+if grep -Fq 'setup-qemu-action' "${air_workflow}" "${release_workflow}"; then
+  echo "Air-gapped workflows must use native architecture runners, not QEMU." >&2
+  exit 1
+fi
+python3 - "${air_workflow}" "${release_workflow}" "${mirror_workflow}" <<'PYWORKFLOW'
 import sys
 from pathlib import Path
 
-air_lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
-air_jobs = air_lines.index("jobs:")
-air_top = air_lines[:air_jobs]
-for forbidden in ("  packages: write", "  id-token: write", "  attestations: write"):
-    assert forbidden not in air_top, forbidden
-expected_air = {
-    "build-offline": ("contents: read",),
-    "build-release": ("contents: read", "id-token: write"),
-    "publish-platforms": ("contents: read", "packages: write"),
-    "publish-indexes": (
-        "contents: read",
-        "packages: write",
-        "id-token: write",
-        "attestations: write",
-    ),
-}
+
 def job_block(lines, job):
     index = lines.index(f"  {job}:")
     end = next(
@@ -126,21 +131,31 @@ def job_block(lines, job):
     )
     return lines[index + 1:end]
 
-for job, permissions in expected_air.items():
-    block = job_block(air_lines, job)
-    assert block[0] == "    permissions:", (job, block[:5])
-    assert tuple(line.strip() for line in block[1:1 + len(permissions)]) == permissions, (job, block[:5])
 
+air_lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+assert "  workflow_dispatch:" not in air_lines
+assert "  push:" not in air_lines
 pr_build = job_block(air_lines, "build-offline")
-release_build = job_block(air_lines, "build-release")
-assert "      id-token: write" not in pr_build, pr_build[:10]
-assert "    if: github.event_name == 'pull_request' && inputs.complete" in pr_build
+assert pr_build[0] == "    permissions:"
+assert pr_build[1].strip() == "contents: read"
+assert "      id-token: write" not in pr_build
+assert "    if: inputs.complete" in pr_build
 assert "          EDUTALENT_APPLIANCE_SIGNING_MODE: ephemeral" in pr_build
-assert "      id-token: write" in release_build
-assert "    if: github.event_name != 'pull_request'" in release_build
-assert "          EDUTALENT_APPLIANCE_SIGNING_MODE: keyless" in release_build
+assert not any(line.strip() in {"packages: write", "id-token: write", "attestations: write"} for line in air_lines)
 
-mirror_lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
+release_lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
+release_build = job_block(release_lines, "build-release")
+assert "      id-token: write" in release_build
+assert "          EDUTALENT_APPLIANCE_SIGNING_MODE: keyless" in release_build
+publish_platforms = job_block(release_lines, "publish-platforms")
+assert "      packages: write" in publish_platforms
+publish_indexes = job_block(release_lines, "publish-indexes")
+for permission in ("      packages: write", "      id-token: write", "      attestations: write"):
+    assert permission in publish_indexes, permission
+assert "  pull_request:" not in release_lines
+assert "  workflow_call:" not in release_lines
+
+mirror_lines = Path(sys.argv[3]).read_text(encoding="utf-8").splitlines()
 mirror_jobs = mirror_lines.index("jobs:")
 mirror_top = mirror_lines[:mirror_jobs]
 assert "  actions: write" not in mirror_top, mirror_top
@@ -150,20 +165,10 @@ expected_mirror = {
     "complete-appliance": ("contents: read",),
 }
 for job, permissions in expected_mirror.items():
-    index = mirror_lines.index(f"  {job}:")
-    end = next(
-        (candidate for candidate in range(index + 1, len(mirror_lines))
-         if mirror_lines[candidate].startswith("  ")
-         and not mirror_lines[candidate].startswith("    ")
-         and mirror_lines[candidate].endswith(":")),
-        len(mirror_lines),
-    )
-    job_block = mirror_lines[index + 1:end]
-    permission_line = "    permissions:"
-    assert permission_line in job_block, (job, job_block)
-    permission_index = job_block.index(permission_line)
-    block = job_block[permission_index + 1:permission_index + 1 + len(permissions)]
-    assert tuple(line.strip() for line in block) == permissions, (job, block)
+    block = job_block(mirror_lines, job)
+    permission_index = block.index("    permissions:")
+    actual = tuple(line.strip() for line in block[permission_index + 1:permission_index + 1 + len(permissions)])
+    assert actual == permissions, (job, actual)
 PYWORKFLOW
 grep -Fq "if: github.event_name != 'pull_request'" "${package_workflow}"
 grep -Fq 'Verify and serialize complete exact-head proof' "${mirror_workflow}"

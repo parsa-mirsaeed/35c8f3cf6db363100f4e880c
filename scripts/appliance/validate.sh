@@ -582,6 +582,19 @@ PATH="${fixture}/fake-bin:${PATH}" \
   bash "${fixture}/bundle/edutalent-appliance" verify >/dev/null
 grep -Fq -- '--key' "${fixture}/cosign.log"
 
+mkdir -p \
+  "${fixture}/repository/scripts/appliance" \
+  "${fixture}/repository/dist"
+cp "${ROOT_DIR}/scripts/appliance/release_manifest.py" \
+  "${fixture}/repository/scripts/appliance/release_manifest.py"
+cp -a "${fixture}/bundle" "${fixture}/repository/dist/packaged-appliance"
+: > "${fixture}/cosign.log"
+PATH="${fixture}/fake-bin:${PATH}" \
+  COSIGN_LOG="${fixture}/cosign.log" \
+  EDUTALENT_APPLIANCE_ALLOW_EPHEMERAL_SIGNATURES=true \
+  bash "${fixture}/repository/dist/packaged-appliance/edutalent-appliance" verify >/dev/null
+grep -Fq -- '--key' "${fixture}/cosign.log"
+
 mkdir -p "${fixture}/bundle/deploy/production/runtime/supabase"
 printf 'attacker app state
 ' > "${fixture}/bundle/deploy/production/.env.edutalent"

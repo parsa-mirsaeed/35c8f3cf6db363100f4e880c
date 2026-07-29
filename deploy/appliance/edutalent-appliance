@@ -2,7 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/../../scripts/appliance/release_manifest.py" ]]; then
+if [[ -f "${SCRIPT_DIR}/scripts/appliance/release_manifest.py" ]]; then
+  # A packaged appliance is self-contained. Prefer its verifier even when the
+  # bundle happens to live below a repository-shaped ancestor such as dist/.
+  ROOT_DIR="${SCRIPT_DIR}"
+elif [[ -f "${SCRIPT_DIR}/../../scripts/appliance/release_manifest.py" ]]; then
   ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 else
   ROOT_DIR="${SCRIPT_DIR}"

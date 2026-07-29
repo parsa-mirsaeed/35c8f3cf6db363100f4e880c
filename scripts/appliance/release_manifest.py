@@ -19,6 +19,7 @@ VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DATABASE_URL = re.compile(rb"postgres(?:ql)?://[^\s:@/]+:[^\s@/]+@", re.IGNORECASE)
 FORBIDDEN_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".pdf", ".dump", ".sql.gz"}
 FORBIDDEN_NAMES = {".env", "id_rsa", "id_ed25519", "credentials.json"}
+ALLOWED_DOTENV_PATHS = {"deploy/production/.env.edutalent.example"}
 PRIVATE_KEY_MARKERS = (
     b"-----BEGIN " + b"PRIVATE KEY-----",
     b"-----BEGIN RSA " + b"PRIVATE KEY-----",
@@ -80,7 +81,11 @@ def reject_forbidden_file(root: Path, path: Path) -> None:
     relative = path.relative_to(root)
     name = path.name.lower()
     value = relative.as_posix().lower()
-    dotenv = name == ".env" or (name.startswith(".env.") and name != ".env.example")
+    dotenv = name == ".env" or (
+        name.startswith(".env.")
+        and name != ".env.example"
+        and value not in ALLOWED_DOTENV_PATHS
+    )
     if dotenv or name in FORBIDDEN_NAMES or any(value.endswith(suffix) for suffix in FORBIDDEN_SUFFIXES):
         raise RuntimeError(f"forbidden release file: {relative}")
     if "target/" in f"/{value}" or "node_modules/" in f"/{value}":

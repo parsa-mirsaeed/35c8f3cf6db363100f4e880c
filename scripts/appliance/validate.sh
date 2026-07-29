@@ -585,6 +585,25 @@ example = root / ".env.example"
 example.write_text("TOKEN=\n", encoding="utf-8")
 module.reject_forbidden_file(root, example)
 
+production_template = root / "deploy/production/.env.edutalent.example"
+production_template.parent.mkdir(parents=True, exist_ok=True)
+production_template.write_text("APP_PUBLIC_BASE_URL=\n", encoding="utf-8")
+module.reject_forbidden_file(root, production_template)
+
+for relative in (
+    "deploy/production/.env.edutalent",
+    "deploy/production/.env.edutalent.example.local",
+    "other/.env.edutalent.example",
+):
+    candidate = root / relative
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("TOKEN=fixture\n", encoding="utf-8")
+    try:
+        module.reject_forbidden_file(root, candidate)
+    except RuntimeError:
+        continue
+    raise AssertionError(f"non-allowlisted dotenv path was accepted: {relative}")
+
 large = root / "large-release-note.txt"
 large.write_bytes(b"x" * (5 * 1024 * 1024) + b"-----BEGIN OPENSSH PRIVATE KEY-----\n")
 try:

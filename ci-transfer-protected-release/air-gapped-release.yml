@@ -1,0 +1,552 @@
+name: Air-gapped Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Appliance version; defaults to the exact commit prefix
+        required: false
+        type: string
+      publish:
+        description: Publish signed multi-architecture custom images to GHCR; main only
+        required: false
+        default: false
+        type: boolean
+      create_archive:
+        description: Create and retain the signed offline release archive
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: air-gapped-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  APP_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-app
+  AI_GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-ai-gateway
+  MIGRATION_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-migration
+  TOOLS_IMAGE: ghcr.io/${{ github.repository_owner }}/edutalent-appliance-tools
+
+jobs:
+  release-policy:
+    name: Enforce protected release source
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a version tag or main-branch dispatch
+        env:
+          ALLOWED: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+        run: test "${ALLOWED}" = true
+
+  validate:
+    name: Validate appliance definitions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          show-progress: false
+
+      - name: Validate scripts, lock files, workflow isolation, and tamper detection
+        run: bash scripts/appliance/validate.sh
+
+  build-release:
+    permissions:
+      contents: read
+      id-token: write
+    name: Build and sign protected release appliance
+    needs:
+      - validate
+      - release-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      EDUTALENT_APPLIANCE_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      bundle_dir: ${{ steps.version.outputs.bundle_dir }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          show-progress: false
+
+      - uses: docker/setup-buildx-action@v4
+        with:
+          name: edutalent-appliance-builder
+          keep-state: true
+
+      - uses: sigstore/cosign-installer@v3
+
+      - uses: anchore/sbom-action/download-syft@v0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/appliance/requirements.txt
+
+      - name: Install pinned connected-builder model client
+        run: python -m pip install -r scripts/appliance/requirements.txt
+
+      - id: version
+        name: Resolve exact appliance version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          requested="${REQUESTED_VERSION:-}"
+          if [[ -n "${requested}" ]]; then
+            version="${requested}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${GITHUB_SHA::12}"
+          fi
+          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "Version must be a safe tag and path component." >&2
+            exit 2
+          }
+          {
+            echo "version=${version}"
+            echo "bundle_dir=dist/edutalent-appliance-${version}-amd64"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build every selected image, model, SBOM, manifest, and signature
+        shell: bash
+        env:
+          APPLIANCE_VERSION: ${{ steps.version.outputs.version }}
+          EDUTALENT_APPLIANCE_PLATFORM: linux/amd64
+          EDUTALENT_APPLIANCE_SIGNING_MODE: keyless
+          EDUTALENT_APPLIANCE_CREATE_ARCHIVE: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.create_archive || false }}
+          EDUTALENT_BUILD_CACHE_SCOPE: edutalent-runtime
+        run: |
+          set -euo pipefail
+          bash scripts/appliance/build.sh "${APPLIANCE_VERSION}" \
+            2>&1 | tee appliance-build.log
+
+      - name: Prove first startup with all registry pulls disabled
+        shell: bash
+        env:
+          BUNDLE_DIR: ${{ steps.version.outputs.bundle_dir }}
+        run: |
+          set -euo pipefail
+          bash scripts/appliance/offline_smoke.sh "${BUNDLE_DIR}" \
+            2>&1 | tee appliance-offline-smoke.log
+
+      - name: Write exact-head appliance evidence
+        shell: bash
+        env:
+          BUNDLE_DIR: ${{ steps.version.outputs.bundle_dir }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - "${BUNDLE_DIR}" "${EXPECTED_SHA}" > appliance-evidence.json <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          bundle = Path(sys.argv[1])
+          expected_sha = sys.argv[2]
+          manifest_path = bundle / "manifests/release-manifest.json"
+          manifest = json.load(manifest_path.open(encoding="utf-8"))
+          assert manifest["release"]["git_sha"] == expected_sha
+          assert manifest["release"]["platform"] == "linux/amd64"
+          assert len(manifest["images"]) >= 10, len(manifest["images"])
+          assert manifest["model"]["revision"] == "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+          assert all(image["source_digest"].startswith("sha256:") for image in manifest["images"])
+          assert all(not image["local_tag"].endswith(":latest") for image in manifest["images"])
+          evidence = {
+              "head_sha": expected_sha,
+              "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+              "image_count": len(manifest["images"]),
+              "platform": manifest["release"]["platform"],
+              "model_revision": manifest["model"]["revision"],
+              "offline_startup": "success",
+              "registry_pull_policy": "never",
+          }
+          print(json.dumps(evidence, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload appliance proof and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: air-gapped-appliance-evidence
+          path: |
+            appliance-build.log
+            appliance-offline-smoke.log
+            appliance-evidence.json
+            ${{ steps.version.outputs.bundle_dir }}/manifests/**
+            ${{ steps.version.outputs.bundle_dir }}/signatures/**
+            ${{ steps.version.outputs.bundle_dir }}/sbom/**
+            ${{ steps.version.outputs.bundle_dir }}/models/local-bge-v1/MODEL_METADATA.json
+            ${{ steps.version.outputs.bundle_dir }}/models/local-bge-v1/MODEL_SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload signed offline archive deliverables
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.create_archive)
+        uses: actions/upload-artifact@v6
+        with:
+          name: edutalent-appliance-${{ steps.version.outputs.version }}-amd64
+          path: |
+            dist/edutalent-appliance-*.tar.gz
+            dist/edutalent-appliance-*.tar.gz.*
+            dist/edutalent-appliance-*.parts.SHA256SUMS
+            dist/edutalent-appliance-*.parts.SHA256SUMS.*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Stop and remove appliance smoke data
+        if: always()
+        shell: bash
+        env:
+          BUNDLE_DIR: ${{ steps.version.outputs.bundle_dir }}
+        run: |
+          if [[ -x "${BUNDLE_DIR}/edutalent-appliance" ]]; then
+            "${BUNDLE_DIR}/edutalent-appliance" stop >/dev/null 2>&1 || true
+          fi
+          docker system prune --all --force --volumes >/dev/null 2>&1 || true
+
+  native-arm64:
+    name: Build protected release images natively for arm64
+    needs:
+      - validate
+      - release-policy
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          show-progress: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build runtime image on native arm64
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          platforms: linux/arm64
+          push: false
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=edutalent-runtime-arm64
+          cache-to: type=gha,mode=max,scope=edutalent-runtime-arm64
+
+      - name: Build installer tools image on native arm64
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.appliance-tools
+          platforms: linux/arm64
+          push: false
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=edutalent-appliance-tools-arm64
+          cache-to: type=gha,mode=max,scope=edutalent-appliance-tools-arm64
+
+  publish-platforms:
+    permissions:
+      contents: read
+      packages: write
+    name: Publish native ${{ matrix.arch }} GHCR images
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')
+    needs:
+      - build-release
+      - native-arm64
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          show-progress: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: version
+        name: Resolve publish version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          requested="${REQUESTED_VERSION:-}"
+          if [[ -n "${requested}" ]]; then
+            version="${requested}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${GITHUB_SHA::12}"
+          fi
+          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "Version must be a safe tag and path component." >&2
+            exit 2
+          }
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish native runtime image aliases with SBOM and provenance
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ env.APP_IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+            ${{ env.APP_IMAGE }}:sha-${{ github.sha }}-${{ matrix.arch }}
+            ${{ env.AI_GATEWAY_IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+            ${{ env.AI_GATEWAY_IMAGE }}:sha-${{ github.sha }}-${{ matrix.arch }}
+            ${{ env.MIGRATION_IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+            ${{ env.MIGRATION_IMAGE }}:sha-${{ github.sha }}-${{ matrix.arch }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=edutalent-runtime-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=edutalent-runtime-${{ matrix.arch }}
+
+      - name: Publish native appliance tools image with SBOM and provenance
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.appliance-tools
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ env.TOOLS_IMAGE }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+            ${{ env.TOOLS_IMAGE }}:sha-${{ github.sha }}-${{ matrix.arch }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=edutalent-appliance-tools-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=edutalent-appliance-tools-${{ matrix.arch }}
+
+  publish-indexes:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    name: Assemble, sign, and attest multi-architecture GHCR indexes
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')
+    needs: publish-platforms
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      app_digest: ${{ steps.indexes.outputs.app_digest }}
+      ai_gateway_digest: ${{ steps.indexes.outputs.ai_gateway_digest }}
+      migration_digest: ${{ steps.indexes.outputs.migration_digest }}
+      tools_digest: ${{ steps.indexes.outputs.tools_digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          show-progress: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@v3
+
+      - id: version
+        name: Resolve publish version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          requested="${REQUESTED_VERSION:-}"
+          if [[ -n "${requested}" ]]; then
+            version="${requested}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${GITHUB_SHA::12}"
+          fi
+          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "Version must be a safe tag and path component." >&2
+            exit 2
+          }
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - id: indexes
+        name: Assemble immutable multi-architecture indexes
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="${VERSION}"
+          create_index() {
+            local image="$1"
+            docker buildx imagetools create \
+              --tag "${image}:${version}" \
+              --tag "${image}:sha-${GITHUB_SHA}" \
+              "${image}:${version}-amd64" \
+              "${image}:${version}-arm64"
+            local digest
+            digest="sha256:$(docker buildx imagetools inspect --raw "${image}:${version}" | sha256sum | awk '{print $1}')"
+            test "${#digest}" -eq 71
+            printf '%s\n' "${digest}"
+          }
+          app_digest="$(create_index "${APP_IMAGE}")"
+          ai_gateway_digest="$(create_index "${AI_GATEWAY_IMAGE}")"
+          migration_digest="$(create_index "${MIGRATION_IMAGE}")"
+          tools_digest="$(create_index "${TOOLS_IMAGE}")"
+          {
+            echo "app_digest=${app_digest}"
+            echo "ai_gateway_digest=${ai_gateway_digest}"
+            echo "migration_digest=${migration_digest}"
+            echo "tools_digest=${tools_digest}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Sign every published image index with GitHub OIDC
+        env:
+          APP_DIGEST: ${{ steps.indexes.outputs.app_digest }}
+          AI_GATEWAY_DIGEST: ${{ steps.indexes.outputs.ai_gateway_digest }}
+          MIGRATION_DIGEST: ${{ steps.indexes.outputs.migration_digest }}
+          TOOLS_DIGEST: ${{ steps.indexes.outputs.tools_digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${APP_IMAGE}@${APP_DIGEST}"
+          cosign sign --yes "${AI_GATEWAY_IMAGE}@${AI_GATEWAY_DIGEST}"
+          cosign sign --yes "${MIGRATION_IMAGE}@${MIGRATION_DIGEST}"
+          cosign sign --yes "${TOOLS_IMAGE}@${TOOLS_DIGEST}"
+
+      - name: Attest app image build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.APP_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.app_digest }}
+          push-to-registry: true
+
+      - name: Attest AI Gateway image build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.AI_GATEWAY_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.ai_gateway_digest }}
+          push-to-registry: true
+
+      - name: Attest migration image build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.MIGRATION_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.migration_digest }}
+          push-to-registry: true
+
+      - name: Attest tools image build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.TOOLS_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.tools_digest }}
+          push-to-registry: true
+
+      - name: Write publication evidence
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          APP_DIGEST: ${{ steps.indexes.outputs.app_digest }}
+          AI_GATEWAY_DIGEST: ${{ steps.indexes.outputs.ai_gateway_digest }}
+          MIGRATION_DIGEST: ${{ steps.indexes.outputs.migration_digest }}
+          TOOLS_DIGEST: ${{ steps.indexes.outputs.tools_digest }}
+        run: |
+          cat > ghcr-publication-evidence.json <<EOF
+          {
+            "head_sha": "${GITHUB_SHA}",
+            "version": "${VERSION}",
+            "platforms": ["linux/amd64", "linux/arm64"],
+            "app": "${APP_IMAGE}@${APP_DIGEST}",
+            "ai_gateway": "${AI_GATEWAY_IMAGE}@${AI_GATEWAY_DIGEST}",
+            "migration": "${MIGRATION_IMAGE}@${MIGRATION_DIGEST}",
+            "tools": "${TOOLS_IMAGE}@${TOOLS_DIGEST}",
+            "signed": true,
+            "sbom": true,
+            "provenance": true
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ghcr-publication-evidence
+          path: ghcr-publication-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+  gate:
+    name: Air-gapped release gate
+    if: always()
+    needs:
+      - release-policy
+      - validate
+      - build-release
+      - native-arm64
+      - publish-platforms
+      - publish-indexes
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enforce exact protected release outcomes
+        env:
+          POLICY_RESULT: ${{ needs.release-policy.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          RELEASE_RESULT: ${{ needs.build-release.result }}
+          ARM64_RESULT: ${{ needs.native-arm64.result }}
+          PUBLISH_REQUESTED: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
+          PUBLISH_PLATFORMS_RESULT: ${{ needs.publish-platforms.result }}
+          PUBLISH_INDEXES_RESULT: ${{ needs.publish-indexes.result }}
+        run: |
+          set -euo pipefail
+          test "${POLICY_RESULT}" = success
+          test "${VALIDATE_RESULT}" = success
+          test "${RELEASE_RESULT}" = success
+          test "${ARM64_RESULT}" = success
+          if [[ "${PUBLISH_REQUESTED}" == true ]]; then
+            test "${PUBLISH_PLATFORMS_RESULT}" = success
+            test "${PUBLISH_INDEXES_RESULT}" = success
+          else
+            test "${PUBLISH_PLATFORMS_RESULT}" = skipped
+            test "${PUBLISH_INDEXES_RESULT}" = skipped
+          fi

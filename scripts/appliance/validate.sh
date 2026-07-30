@@ -66,6 +66,12 @@ grep -Fq 'EDUTALENT_APPLIANCE_STATE_DIR' "${ROOT_DIR}/deploy/appliance/edutalent
 grep -Fq 'XDG_STATE_HOME' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'state-dir)' "${ROOT_DIR}/deploy/appliance/edutalent-appliance"
 grep -Fq 'EDUTALENT_APPLIANCE_GIT_SHA' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'GITHUB_WORKFLOW_REF' "${ROOT_DIR}/scripts/appliance/build.sh"
+grep -Fq 'air-gapped-release.yml@${GITHUB_REF}' "${ROOT_DIR}/scripts/appliance/build.sh"
+if grep -Fq 'air-gapped-appliance\.yml@${GITHUB_REF}' "${ROOT_DIR}/scripts/appliance/build.sh"; then
+  echo "Keyless verification must trust the protected release workflow identity." >&2
+  exit 1
+fi
 grep -Fq 'EDUTALENT_APP_ENV' "${ROOT_DIR}/deploy/production/edutalent-production"
 grep -Fq 'EDUTALENT_SUPABASE_ENV' "${ROOT_DIR}/deploy/production/generate-secrets.sh"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"
@@ -115,7 +121,7 @@ if grep -Fq 'setup-qemu-action' "${air_workflow}" "${release_workflow}"; then
   echo "Air-gapped workflows must use native architecture runners, not QEMU." >&2
   exit 1
 fi
-python3 - "${air_workflow}" "${release_workflow}" "${mirror_workflow}" <<'PYWORKFLOW'
+python3 - "${air_workflow}" "${release_workflow}" "${package_workflow}" "${mirror_workflow}" <<'PYWORKFLOW'
 import sys
 from pathlib import Path
 
@@ -144,6 +150,7 @@ assert "          EDUTALENT_APPLIANCE_SIGNING_MODE: ephemeral" in pr_build
 assert not any(line.strip() in {"packages: write", "id-token: write", "attestations: write"} for line in air_lines)
 
 release_lines = Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
+package_lines = Path(sys.argv[3]).read_text(encoding="utf-8").splitlines()
 release_build = job_block(release_lines, "build-release")
 assert "      id-token: write" in release_build
 assert "          EDUTALENT_APPLIANCE_SIGNING_MODE: keyless" in release_build
@@ -155,7 +162,45 @@ for permission in ("      packages: write", "      id-token: write", "      atte
 assert "  pull_request:" not in release_lines
 assert "  workflow_call:" not in release_lines
 
-mirror_lines = Path(sys.argv[3]).read_text(encoding="utf-8").splitlines()
+
+def run_blocks(lines):
+    blocks = []
+    for index, line in enumerate(lines):
+        if line.strip() != "run: |":
+            continue
+        indent = len(line) - len(line.lstrip())
+        block = []
+        for candidate in lines[index + 1:]:
+            candidate_indent = len(candidate) - len(candidate.lstrip())
+            if candidate.strip() and candidate_indent <= indent:
+                break
+            block.append(candidate)
+        blocks.append("\n".join(block))
+    return blocks
+
+
+for workflow_name, lines, expected_resolvers in (
+    ("release", release_lines, 3),
+    ("package", package_lines, 1),
+):
+    input_lines = [line.strip() for line in lines if "${{ inputs.version }}" in line]
+    assert input_lines == ["REQUESTED_VERSION: ${{ inputs.version }}"] * expected_resolvers, (
+        workflow_name,
+        input_lines,
+    )
+    assert lines.count('          requested="${REQUESTED_VERSION:-}"') == expected_resolvers
+    assert lines.count('          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {') == expected_resolvers
+    for block in run_blocks(lines):
+        assert "${{ inputs.version }}" not in block, (workflow_name, block)
+        assert "${{ steps.version.outputs.version }}" not in block, (workflow_name, block)
+        assert "${{ steps.version.outputs.bundle_dir }}" not in block, (workflow_name, block)
+
+assert "          APPLIANCE_VERSION: ${{ steps.version.outputs.version }}" in release_lines
+assert any('bash scripts/appliance/build.sh "${APPLIANCE_VERSION}"' in line for line in release_lines)
+assert "          PACKAGE_VERSION: ${{ steps.version.outputs.version }}" in package_lines
+assert '          bash edutalent package "${PACKAGE_VERSION}" 2>&1 | tee package-build.log' in package_lines
+
+mirror_lines = Path(sys.argv[4]).read_text(encoding="utf-8").splitlines()
 mirror_jobs = mirror_lines.index("jobs:")
 mirror_top = mirror_lines[:mirror_jobs]
 assert "  actions: write" not in mirror_top, mirror_top

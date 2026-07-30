@@ -1,0 +1,163 @@
+name: Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional package version
+        required: false
+        type: string
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - ready_for_review
+    paths:
+      - Dockerfile
+      - Dockerfile.appliance-tools
+      - compose.yaml
+      - compose.release.yaml
+      - edutalent
+      - Makefile
+      - .dockerignore
+      - .env.example
+      - docker/**
+      - deploy/appliance/**
+      - deploy/production/**
+      - scripts/appliance/**
+      - .github/workflows/package.yml
+      - .github/workflows/air-gapped-appliance.yml
+      - Cargo.toml
+      - Cargo.lock
+      - packages/**
+      - migrations/**
+      - scripts/ci/apply_migrations.sh
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  schedule:
+    - cron: "0 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate package definitions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          show-progress: false
+
+      - name: Prepare non-secret environment template
+        run: cp .env.example .env
+
+      - name: Validate centralized packaging and appliance definitions
+        shell: bash
+        run: |
+          set +e
+          bash -x edutalent validate > package-definition-validation.log 2>&1
+          status=$?
+          cat package-definition-validation.log
+          exit "${status}"
+
+      - name: Upload package-definition diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: package-definition-validation
+          path: package-definition-validation.log
+          if-no-files-found: error
+          retention-days: 7
+
+  package:
+    name: Docker image and release bundle
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      EDUTALENT_BUILD_CACHE_SCOPE: edutalent-runtime
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          show-progress: false
+
+      - uses: docker/setup-buildx-action@v4
+        with:
+          name: edutalent-builder
+          keep-state: true
+
+      - name: Prepare non-secret environment template
+        run: cp .env.example .env
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          requested="${REQUESTED_VERSION:-}"
+          if [[ -n "${requested}" ]]; then
+            version="${requested}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${GITHUB_SHA::12}"
+          fi
+          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "Version must be a safe tag and path component." >&2
+            exit 2
+          }
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release bundle through unified command
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash edutalent package "${PACKAGE_VERSION}" 2>&1 | tee package-build.log
+
+      - name: Verify packaged migrations are repeatable
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose --env-file .env -f compose.release.yaml up --detach database 2>&1 | tee package-migrations.log
+          docker compose --env-file .env -f compose.release.yaml run --rm migrate 2>&1 | tee -a package-migrations.log
+          docker compose --env-file .env -f compose.release.yaml run --rm migrate 2>&1 | tee -a package-migrations.log
+
+      - name: Upload packaging diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: package-validation-logs
+          path: |
+            package-build.log
+            package-migrations.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: edutalent-${{ steps.version.outputs.version }}
+          path: |
+            dist/edutalent-${{ steps.version.outputs.version }}.tar.gz
+            dist/edutalent-${{ steps.version.outputs.version }}/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Stop packaging services
+        if: always()
+        run: docker compose --env-file .env -f compose.release.yaml down --volumes --remove-orphans

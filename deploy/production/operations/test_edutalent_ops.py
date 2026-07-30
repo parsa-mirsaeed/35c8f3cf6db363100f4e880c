@@ -10,6 +10,8 @@ from pathlib import Path
 MODULE_PATH = Path(__file__).with_name("edutalent_ops.py")
 PRODUCTION_DIR = Path(__file__).resolve().parent.parent
 OPERATIONS_SCRIPT_PATH = PRODUCTION_DIR / "edutalent-operations"
+COMPOSE_PATH = PRODUCTION_DIR / "compose.production.yaml"
+HBA_PATH = PRODUCTION_DIR / "pg_hba.conf"
 WORKFLOW_PATH = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "production-operations.yml"
 spec = importlib.util.spec_from_file_location("edutalent_ops", MODULE_PATH)
 assert spec and spec.loader
@@ -126,6 +128,25 @@ class WorkflowPrivilegeBoundaryTests(unittest.TestCase):
         self.assertIn("postgresql://postgres@127.0.0.1:5432/", pitr_start)
         self.assertNotIn("--network edutalent-data", pitr_start)
         self.assertNotIn("postgresql://postgres@db:5432/", pitr_start)
+
+    def test_replication_hba_is_scram_and_loopback_only(self) -> None:
+        records = [
+            line.split()
+            for line in HBA_PATH.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        replication_records = [
+            record for record in records if len(record) >= 2 and record[1] == "replication"
+        ]
+        self.assertEqual(
+            replication_records,
+            [["host", "replication", "postgres", "127.0.0.1/32", "scram-sha-256"]],
+        )
+        compose = COMPOSE_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "${EDUTALENT_PRODUCTION_DIR:?EDUTALENT_PRODUCTION_DIR is required}/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro",
+            compose,
+        )
 
 
 class AlertTests(unittest.TestCase):

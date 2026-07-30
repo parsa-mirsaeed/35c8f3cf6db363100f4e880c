@@ -106,6 +106,16 @@ class WorkflowPrivilegeBoundaryTests(unittest.TestCase):
             ),
         )
 
+    def test_wal_switch_waits_for_active_physical_receiver(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "SELECT active::text FROM pg_replication_slots WHERE slot_name = 'edutalent_backup'",
+            workflow,
+        )
+        self.assertIn("test \"${receiver_active}\"", workflow.replace("if [[ ", "test ").replace(" != true ]]; then", " = true"))
+        self.assertIn("docker logs --tail 100 edutalent-pitr-archive", workflow)
+        self.assertIn("Active WAL receiver did not persist an archive file", workflow)
+
 
 class AlertTests(unittest.TestCase):
     def test_stale_backup_disk_and_service_raise_critical_alerts(self) -> None:

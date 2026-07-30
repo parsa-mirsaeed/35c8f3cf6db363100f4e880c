@@ -42,6 +42,26 @@ class BackupManifestTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "inventory mismatch"):
                 ops.verify_manifest(root)
 
+    def test_manifest_rejects_mode_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wal = root / "000000010000000000000001"
+            wal.write_bytes(b"wal")
+            wal.chmod(0o600)
+            ops.create_manifest(root)
+            ops.verify_manifest(root)
+            wal.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, "mode mismatch"):
+                ops.verify_manifest(root)
+
+    def test_decrypt_restores_archived_modes_before_manifest_verification(self) -> None:
+        script = OPERATIONS_SCRIPT_PATH.read_text(encoding="utf-8")
+        decrypt = script.split("decrypt_backup() {", 1)[1].split(
+            "\nverify_decrypted_payload() {", 1
+        )[0]
+        self.assertIn("--same-permissions", decrypt)
+        self.assertIn("manifest-verify", script)
+
 
 class ComposeSecurityTests(unittest.TestCase):
     def secure_config(self) -> dict:

@@ -276,6 +276,34 @@ jobs:
           postgres_database="$(awk -F= '$1 == "POSTGRES_DB" { sub(/^[^=]*=/, ""); print; exit }' "${supabase_env}")"
           postgres_database="${postgres_database:-postgres}"
 
+          receiver_active=false
+          for attempt in $(seq 1 30); do
+            receiver_running="$(docker inspect --format '{{.State.Running}}' edutalent-pitr-archive 2>/dev/null || true)"
+            if [[ "${receiver_running}" != true ]]; then
+              echo "WAL receiver exited before its replication slot became active." >&2
+              docker logs --tail 100 edutalent-pitr-archive >&2 || true
+              exit 1
+            fi
+            slot_active="$(
+              docker exec -e "PGPASSWORD=${postgres_password}" supabase-db \
+                psql -h 127.0.0.1 -U postgres -d "${postgres_database}" -At \
+                  -c "SELECT active::text FROM pg_replication_slots WHERE slot_name = 'edutalent_backup'"
+            )"
+            if [[ "${slot_active}" == true ]]; then
+              receiver_active=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "${receiver_active}" != true ]]; then
+            echo "WAL receiver did not activate its physical replication slot." >&2
+            docker logs --tail 100 edutalent-pitr-archive >&2 || true
+            docker exec -e "PGPASSWORD=${postgres_password}" supabase-db \
+              psql -h 127.0.0.1 -U postgres -d "${postgres_database}" -x \
+                -c "SELECT slot_name, slot_type, active, active_pid, restart_lsn, wal_status FROM pg_replication_slots WHERE slot_name = 'edutalent_backup'" >&2 || true
+            exit 1
+          fi
+
           privilege_state="$(
             docker exec -e "PGPASSWORD=${postgres_password}" supabase-db \
               psql -h 127.0.0.1 -U supabase_admin -d "${postgres_database}" \
@@ -302,7 +330,12 @@ jobs:
             fi
             sleep 2
           done
-          test "${wal_received}" = true
+          if [[ "${wal_received}" != true ]]; then
+            echo "Active WAL receiver did not persist an archive file after pg_switch_wal()." >&2
+            docker logs --tail 100 edutalent-pitr-archive >&2 || true
+            bash deploy/production/edutalent-operations pitr-status >&2 || true
+            exit 1
+          fi
           bash deploy/production/edutalent-operations pitr-status | tee pitr-status.log
           bash deploy/production/edutalent-operations backup-create 2>&1 | tee backup-create.log
           archive="$(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc' -print -quit)"

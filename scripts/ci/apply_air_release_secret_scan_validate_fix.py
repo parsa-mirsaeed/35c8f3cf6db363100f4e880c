@@ -14,6 +14,43 @@ def replace_exact(old: str, new: str, expected_count: int = 1) -> None:
 
 
 replace_exact(
+    '''ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+''',
+    '''ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+gitleaks_ignore="${ROOT_DIR}/.gitleaksignore"
+python3 - "${gitleaks_ignore}" <<'PYIGNORE'
+import sys
+from pathlib import Path
+
+expected = {
+    "2c8b0895d182b4b02bb79c8cad54290a7c0bb75c:scripts/appliance/validate.sh:private-key:314",
+    "2c8b0895d182b4b02bb79c8cad54290a7c0bb75c:scripts/appliance/validate.sh:private-key:317",
+    "242aafbeddaa27df39f4b4b1b75e846f6ea5aed0:scripts/ci/oidc-fix-staging/validate.sh:private-key:747",
+    "242aafbeddaa27df39f4b4b1b75e846f6ea5aed0:scripts/ci/oidc-fix-staging/validate.sh:private-key:750",
+    "242aafbeddaa27df39f4b4b1b75e846f6ea5aed0:scripts/ci/oidc-fix-staging/validate.sh:private-key:753",
+    "71b285a61d0969b3b939669b0e21489310c2f853:scripts/ci/air-release-staging/validate.sh:private-key:752",
+    "71b285a61d0969b3b939669b0e21489310c2f853:scripts/ci/air-release-staging/validate.sh:private-key:755",
+    "71b285a61d0969b3b939669b0e21489310c2f853:scripts/ci/air-release-staging/validate.sh:private-key:758",
+    "70c08cd26b364931ba1b70358bb939de71b625ca:scripts/ci/mirror-air-input-staging/validate.sh:private-key:756",
+    "70c08cd26b364931ba1b70358bb939de71b625ca:scripts/ci/mirror-air-input-staging/validate.sh:private-key:759",
+    "70c08cd26b364931ba1b70358bb939de71b625ca:scripts/ci/mirror-air-input-staging/validate.sh:private-key:762",
+    "49bcb0396bafdadc343fe264f22f1a7993460b5c:.github/workflows/fix-release-portability-secrets.yml:private-key:102",
+    "49bcb0396bafdadc343fe264f22f1a7993460b5c:.github/workflows/fix-release-portability-secrets.yml:private-key:105",
+    "da9595ffef90902ccbcd70262d1c4b580e46dadd:.github/workflows/fix-release-portability-secrets.yml:private-key:97",
+    "da9595ffef90902ccbcd70262d1c4b580e46dadd:.github/workflows/fix-release-portability-secrets.yml:private-key:100",
+    "ad71af2047fd77bbd7edaef7ae36c7e516155ee7:ci-transfer-mirror-air/validate.sh:private-key:756",
+    "ad71af2047fd77bbd7edaef7ae36c7e516155ee7:ci-transfer-mirror-air/validate.sh:private-key:759",
+    "ad71af2047fd77bbd7edaef7ae36c7e516155ee7:ci-transfer-mirror-air/validate.sh:private-key:762",
+    "920ecd8bf53965cd9078ce162140df759da85786:deploy/production/edutalent-production:curl-auth-header:271",
+    "c08d637fdb1330f674698f467729eb8c78ec1e87:deploy/production/edutalent-production:curl-auth-header:255",
+}
+lines = [line.strip() for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]
+assert len(lines) == len(set(lines)), "duplicate Gitleaks fingerprints"
+assert set(lines) == expected, "Gitleaks ignore baseline must contain only reviewed exact fingerprints"
+PYIGNORE
+''',
+)
+replace_exact(
     '''grep -Fq 'attestations: write' "${release_workflow}"
 ''',
     '''grep -Fq 'attestations: write' "${release_workflow}"

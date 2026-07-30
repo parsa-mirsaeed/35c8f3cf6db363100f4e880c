@@ -48,7 +48,7 @@ export them before verifying a tagged release:
 
 ```bash
 export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER=https://token.actions.githubusercontent.com
-export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP='^https://github.com/<owner>/<repository>/\.github/workflows/air-gapped-appliance\.yml@refs/tags/v.*$'
+export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP='^https://github.com/<owner>/<repository>/\.github/workflows/air-gapped-release\.yml@refs/tags/v[0-9A-Za-z._-]+$'
 ./edutalent-appliance verify
 ```
 
@@ -106,14 +106,71 @@ service reads the model only from the packaged read-only directory.
 
 The target host requires Docker Engine with Compose v2, Python 3, GNU tar/gzip,
 and a trusted `cosign` installation for signature verification. Copy the complete
-bundle directory or every split archive part to the target host. Reassemble split
-archives in lexical order when needed, then:
+bundle directory, or the release archive/checksum/signature objects, to the target
+host through the controlled transfer process.
+
+**Authenticate every transferred archive object before reassembly or extraction.**
+Do not extract an archive and then rely only on the verifier contained inside it.
+For a protected keyless release, obtain the issuer and exact release-workflow
+identity from an independently authenticated release policy, then define a trusted
+host-side verifier:
 
 ```bash
+issuer='https://token.actions.githubusercontent.com'
+identity='^https://github.com/<owner>/<repository>/\.github/workflows/air-gapped-release\.yml@refs/tags/v[0-9A-Za-z._-]+$'
+verify_payload() {
+  local payload="$1"
+  cosign verify-blob     --certificate-oidc-issuer "${issuer}"     --certificate-identity-regexp "${identity}"     --bundle "${payload}.sigstore.json"     "${payload}"
+}
+```
+
+For one unsplit archive, verify both the signed checksum manifest and the archive,
+then check the archive bytes before extraction:
+
+```bash
+bundle_name='edutalent-appliance-v1.0.0-amd64'
+archive="${bundle_name}.tar.gz"
+checksum_file="${archive}.SHA256SUMS"
+verify_payload "${checksum_file}"
+verify_payload "${archive}"
+sha256sum --check "${checksum_file}"
+```
+
+For split delivery, first verify the signed checksum manifest. Use only the exact
+part names authenticated by that manifest, verify every part signature, verify every
+part checksum, and only then concatenate them:
+
+```bash
+bundle_name='edutalent-appliance-v1.0.0-amd64'
+archive="${bundle_name}.tar.gz"
+checksum_file="${bundle_name}.parts.SHA256SUMS"
+verify_payload "${checksum_file}"
+mapfile -t parts < <(awk 'NF == 2 { print $2 }' "${checksum_file}")
+((${#parts[@]} > 0))
+for part in "${parts[@]}"; do
+  [[ "${part}" == "${archive}.part-"[0-9][0-9][0-9] ]]
+  verify_payload "${part}"
+done
+sha256sum --check "${checksum_file}"
+cat -- "${parts[@]}" > "${archive}"
+```
+
+Extract the already authenticated archive into a new empty directory. Then run the
+in-bundle verifier, which independently authenticates the signed immutable manifest
+and payload inventory, before loading or initializing anything:
+
+```bash
+install_root="$(mktemp -d)"
+tar --extract --gzip --file "${archive}" --directory "${install_root}"   --no-same-owner --no-same-permissions
+cd "${install_root}/${bundle_name}"
 ./edutalent-appliance verify
 ./edutalent-appliance load
 ./edutalent-appliance init
 ```
+
+The public mirror's ephemeral `.sig`/`.pub` objects are validation-only and are not a
+production trust root. Production transfers must use the protected keyless release
+objects and the independently obtained issuer/identity policy above.
 
 The first `init` creates the external application environment under the stable
 installation state directory. By default this is

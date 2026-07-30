@@ -72,6 +72,24 @@ if grep -Fq 'air-gapped-appliance\.yml@${GITHUB_REF}' "${ROOT_DIR}/scripts/appli
   echo "Keyless verification must trust the protected release workflow identity." >&2
   exit 1
 fi
+grep -Fq 'GITHUB_WORKFLOW_REF' "${ROOT_DIR}/scripts/appliance/offline_smoke.sh"
+grep -Fq 'air-gapped-release.yml@${GITHUB_REF}' "${ROOT_DIR}/scripts/appliance/offline_smoke.sh"
+if grep -Fq 'air-gapped-appliance\.yml@${GITHUB_REF}' "${ROOT_DIR}/scripts/appliance/offline_smoke.sh"; then
+  echo "Offline smoke verification must trust the protected release workflow identity." >&2
+  exit 1
+fi
+appliance_readme="${ROOT_DIR}/deploy/appliance/README.md"
+grep -Fq 'air-gapped-release\.yml@refs/tags/' "${appliance_readme}"
+if grep -Fq 'air-gapped-appliance\.yml@refs/tags/' "${appliance_readme}"; then
+  echo "Operator documentation contains the obsolete appliance-workflow identity." >&2
+  exit 1
+fi
+grep -Fq 'Authenticate every transferred archive object before reassembly or extraction.' "${appliance_readme}"
+grep -Fq -- '--bundle "${payload}.sigstore.json"' "${appliance_readme}"
+grep -Fq 'verify_payload "${checksum_file}"' "${appliance_readme}"
+grep -Fq 'verify_payload "${part}"' "${appliance_readme}"
+grep -Fq 'sha256sum --check "${checksum_file}"' "${appliance_readme}"
+grep -Fq 'cat -- "${parts[@]}" > "${archive}"' "${appliance_readme}"
 grep -Fq 'EDUTALENT_APP_ENV' "${ROOT_DIR}/deploy/production/edutalent-production"
 grep -Fq 'EDUTALENT_SUPABASE_ENV' "${ROOT_DIR}/deploy/production/generate-secrets.sh"
 grep -Fq 'cosign sign-blob' "${ROOT_DIR}/scripts/appliance/sign_release.sh"

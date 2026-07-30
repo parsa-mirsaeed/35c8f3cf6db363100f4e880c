@@ -36,8 +36,17 @@ if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
     keyless)
       : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required for CI keyless verification}"
       : "${GITHUB_REF:?GITHUB_REF is required for CI keyless verification}"
+      expected_workflow_ref="${GITHUB_REPOSITORY}/.github/workflows/air-gapped-release.yml@${GITHUB_REF}"
+      [[ "${GITHUB_WORKFLOW_REF:-}" == "${expected_workflow_ref}" ]] || {
+        echo "Keyless appliance smoke verification is restricted to ${expected_workflow_ref}." >&2
+        exit 1
+      }
+      trusted_identity="https://github.com/${expected_workflow_ref}"
       export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"
-      export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="^https://github.com/${GITHUB_REPOSITORY}/\\.github/workflows/air-gapped-appliance\\.yml@${GITHUB_REF}$"
+      export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="$(
+        python3 -c 'import re, sys; print("^" + re.escape(sys.argv[1]) + "$")' \
+          "${trusted_identity}"
+      )"
       ;;
   esac
 fi

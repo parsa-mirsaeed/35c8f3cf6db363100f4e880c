@@ -270,13 +270,39 @@ jobs:
           printf '%s\n' 'ephemeral-ci-backup-passphrase-not-for-production' > "${EDUTALENT_BACKUP_PASSPHRASE_FILE}"
           chmod 600 "${EDUTALENT_BACKUP_PASSPHRASE_FILE}"
           bash deploy/production/edutalent-operations pitr-start
-          postgres_password="$(awk -F= '$1 == "POSTGRES_PASSWORD" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
+
+          supabase_env=deploy/production/runtime/supabase/.env
+          postgres_password="$(awk -F= '$1 == "POSTGRES_PASSWORD" { sub(/^[^=]*=/, ""); print; exit }' "${supabase_env}")"
+          postgres_database="$(awk -F= '$1 == "POSTGRES_DB" { sub(/^[^=]*=/, ""); print; exit }' "${supabase_env}")"
+          postgres_database="${postgres_database:-postgres}"
+
+          privilege_state="$(
+            docker exec -e "PGPASSWORD=${postgres_password}" supabase-db \
+              psql -h 127.0.0.1 -U supabase_admin -d "${postgres_database}" \
+                -v ON_ERROR_STOP=1 -AtF'|' -c "
+                  SELECT
+                    (SELECT rolsuper::text FROM pg_roles WHERE rolname = 'postgres'),
+                    has_function_privilege('postgres', 'pg_catalog.pg_switch_wal()', 'EXECUTE')::text,
+                    has_function_privilege('supabase_admin', 'pg_catalog.pg_switch_wal()', 'EXECUTE')::text"
+          )"
+          test "${privilege_state}" = 'false|false|true'
+
           docker exec -e "PGPASSWORD=${postgres_password}" supabase-db \
-            psql -h 127.0.0.1 -U postgres -d postgres -Atc 'CREATE TABLE IF NOT EXISTS operations_backup_probe(id integer primary key); INSERT INTO operations_backup_probe VALUES (1) ON CONFLICT DO NOTHING; SELECT pg_switch_wal();' >/dev/null
+            psql -h 127.0.0.1 -U postgres -d "${postgres_database}" -v ON_ERROR_STOP=1 \
+              -c 'CREATE TABLE IF NOT EXISTS operations_backup_probe(id integer primary key); INSERT INTO operations_backup_probe VALUES (1) ON CONFLICT DO NOTHING;' >/dev/null
+          docker exec -e "PGPASSWORD=${postgres_password}" supabase-db \
+            psql -h 127.0.0.1 -U supabase_admin -d "${postgres_database}" -v ON_ERROR_STOP=1 \
+              -Atc 'SELECT pg_switch_wal();' >/dev/null
+
+          wal_received=false
           for attempt in $(seq 1 30); do
-            if find "${EDUTALENT_OPERATIONS_STATE_DIR}/wal" -maxdepth 1 -type f -print -quit | grep -q .; then break; fi
+            if find "${EDUTALENT_OPERATIONS_STATE_DIR}/wal" -maxdepth 1 -type f -print -quit | grep -q .; then
+              wal_received=true
+              break
+            fi
             sleep 2
           done
+          test "${wal_received}" = true
           bash deploy/production/edutalent-operations pitr-status | tee pitr-status.log
           bash deploy/production/edutalent-operations backup-create 2>&1 | tee backup-create.log
           archive="$(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc' -print -quit)"

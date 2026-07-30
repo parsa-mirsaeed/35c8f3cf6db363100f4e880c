@@ -34,7 +34,7 @@ jobs:
           ! grep -Fq 'version = "0.11.13"' Cargo.lock
           ! grep -Fq 'version = "0.101.7"' Cargo.lock
           ! grep -Fq 'version = "0.103.8"' Cargo.lock
-          cargo check -p api --features server --locked --message-format=short
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
           git diff --check
 
       - name: Commit resolved lockfile

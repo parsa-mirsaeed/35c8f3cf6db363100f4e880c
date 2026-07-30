@@ -24,11 +24,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Resolve patched HTTP, QUIC, and TLS dependencies
+      - name: Resolve patched QUIC and TLS dependencies
         shell: bash
         run: |
           set -euo pipefail
-          cargo update -p reqwest@0.11.27 --precise 0.12.24
+          cargo update -p reqwest@0.11.27 --precise 0.11.27
           cargo update -p quinn-proto@0.11.13 --precise 0.11.15
           cargo update -p rustls-webpki@0.103.8 --precise 0.103.13
           ! grep -Fq 'version = "0.11.13"' Cargo.lock
@@ -45,5 +45,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add Cargo.lock
           git diff --cached --quiet && { echo 'No lockfile update produced.' >&2; exit 1; }
-          git commit -m 'fix: update vulnerable HTTP and TLS dependencies'
+          git commit -m 'fix: update vulnerable QUIC and TLS dependencies'
           git push origin HEAD:feature/production-operations

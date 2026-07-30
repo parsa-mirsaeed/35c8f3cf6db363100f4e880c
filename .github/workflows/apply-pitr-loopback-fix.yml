@@ -1,0 +1,63 @@
+name: Apply PITR Loopback Fix
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'feature/production-operations' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/production-operations
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Use the database loopback namespace for physical WAL streaming
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('deploy/production/edutalent-operations')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              "printf 'db:5432:*:postgres:%s\\n' \"${db_password}\" >\"${pgpass}\"":
+                  "printf '127.0.0.1:5432:*:postgres:%s\\n' \"${db_password}\" >\"${pgpass}\"",
+              "    --network edutalent-data \\":
+                  "    --network container:${db_id} \\",
+              '    --dbname="postgresql://postgres@db:5432/${db_name}?sslmode=disable" \\':
+                  '    --dbname="postgresql://postgres@127.0.0.1:5432/${db_name}?sslmode=disable" \\',
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one occurrence, found {count}: {old}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+          PY
+          bash -n deploy/production/edutalent-operations
+          grep -Fq "127.0.0.1:5432:*:postgres" deploy/production/edutalent-operations
+          grep -Fq -- '--network container:${db_id}' deploy/production/edutalent-operations
+          grep -Fq 'postgresql://postgres@127.0.0.1:5432/' deploy/production/edutalent-operations
+          ! grep -Fq -- '--network edutalent-data' deploy/production/edutalent-operations
+          git diff --check
+
+      - name: Commit the production tooling fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add deploy/production/edutalent-operations
+          git diff --cached --quiet && { echo 'PITR loopback patch produced no change.' >&2; exit 1; }
+          git commit -m 'fix: stream WAL through database loopback namespace'
+          git push origin HEAD:feature/production-operations

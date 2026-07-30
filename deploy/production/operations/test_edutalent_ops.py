@@ -90,8 +90,15 @@ class WorkflowPrivilegeBoundaryTests(unittest.TestCase):
                 re.DOTALL,
             ),
         )
-        self.assertIn("postgres|f", workflow)
-        self.assertIn("supabase_admin|t", workflow)
+        self.assertIn(
+            "has_function_privilege('postgres', 'pg_catalog.pg_switch_wal()', 'EXECUTE')",
+            workflow,
+        )
+        self.assertIn(
+            "has_function_privilege('supabase_admin', 'pg_catalog.pg_switch_wal()', 'EXECUTE')",
+            workflow,
+        )
+        self.assertIn("test \"${privilege_state}\" = 'false|false|true'", workflow)
         self.assertNotRegex(
             workflow,
             re.compile(

@@ -104,9 +104,11 @@ jobs:
       - id: version
         name: Resolve exact appliance version
         shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          requested='${{ inputs.version }}'
+          requested="${REQUESTED_VERSION:-}"
           if [[ -n "${requested}" ]]; then
             version="${requested}"
           elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
@@ -114,35 +116,45 @@ jobs:
           else
             version="${GITHUB_SHA::12}"
           fi
-          test -n "${version}"
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "bundle_dir=dist/edutalent-appliance-${version}-amd64" >> "${GITHUB_OUTPUT}"
+          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "Version must be a safe tag and path component." >&2
+            exit 2
+          }
+          {
+            echo "version=${version}"
+            echo "bundle_dir=dist/edutalent-appliance-${version}-amd64"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Build every selected image, model, SBOM, manifest, and signature
         shell: bash
         env:
+          APPLIANCE_VERSION: ${{ steps.version.outputs.version }}
           EDUTALENT_APPLIANCE_PLATFORM: linux/amd64
           EDUTALENT_APPLIANCE_SIGNING_MODE: keyless
           EDUTALENT_APPLIANCE_CREATE_ARCHIVE: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.create_archive || false }}
           EDUTALENT_BUILD_CACHE_SCOPE: edutalent-runtime
         run: |
-          set -o pipefail
-          bash scripts/appliance/build.sh '${{ steps.version.outputs.version }}' \
+          set -euo pipefail
+          bash scripts/appliance/build.sh "${APPLIANCE_VERSION}" \
             2>&1 | tee appliance-build.log
 
       - name: Prove first startup with all registry pulls disabled
         shell: bash
+        env:
+          BUNDLE_DIR: ${{ steps.version.outputs.bundle_dir }}
         run: |
-          set -o pipefail
-          bash scripts/appliance/offline_smoke.sh '${{ steps.version.outputs.bundle_dir }}' \
+          set -euo pipefail
+          bash scripts/appliance/offline_smoke.sh "${BUNDLE_DIR}" \
             2>&1 | tee appliance-offline-smoke.log
 
       - name: Write exact-head appliance evidence
         shell: bash
+        env:
+          BUNDLE_DIR: ${{ steps.version.outputs.bundle_dir }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          bundle='${{ steps.version.outputs.bundle_dir }}'
-          python3 - "${bundle}" "${{ github.event.pull_request.head.sha || github.sha }}" > appliance-evidence.json <<'PY'
+          python3 - "${BUNDLE_DIR}" "${EXPECTED_SHA}" > appliance-evidence.json <<'PY'
           import hashlib
           import json
           import sys
@@ -206,10 +218,11 @@ jobs:
       - name: Stop and remove appliance smoke data
         if: always()
         shell: bash
+        env:
+          BUNDLE_DIR: ${{ steps.version.outputs.bundle_dir }}
         run: |
-          bundle='${{ steps.version.outputs.bundle_dir }}'
-          if [[ -x "${bundle}/edutalent-appliance" ]]; then
-            "${bundle}/edutalent-appliance" stop >/dev/null 2>&1 || true
+          if [[ -x "${BUNDLE_DIR}/edutalent-appliance" ]]; then
+            "${BUNDLE_DIR}/edutalent-appliance" stop >/dev/null 2>&1 || true
           fi
           docker system prune --all --force --volumes >/dev/null 2>&1 || true
 
@@ -290,9 +303,11 @@ jobs:
       - id: version
         name: Resolve publish version
         shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          requested='${{ inputs.version }}'
+          requested="${REQUESTED_VERSION:-}"
           if [[ -n "${requested}" ]]; then
             version="${requested}"
           elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
@@ -300,6 +315,10 @@ jobs:
           else
             version="${GITHUB_SHA::12}"
           fi
+          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "Version must be a safe tag and path component." >&2
+            exit 2
+          }
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish native runtime image aliases with SBOM and provenance
@@ -373,9 +392,11 @@ jobs:
       - id: version
         name: Resolve publish version
         shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          requested='${{ inputs.version }}'
+          requested="${REQUESTED_VERSION:-}"
           if [[ -n "${requested}" ]]; then
             version="${requested}"
           elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
@@ -383,14 +404,20 @@ jobs:
           else
             version="${GITHUB_SHA::12}"
           fi
+          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "Version must be a safe tag and path component." >&2
+            exit 2
+          }
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - id: indexes
         name: Assemble immutable multi-architecture indexes
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          version='${{ steps.version.outputs.version }}'
+          version="${VERSION}"
           create_index() {
             local image="$1"
             docker buildx imagetools create \
@@ -458,6 +485,7 @@ jobs:
       - name: Write publication evidence
         shell: bash
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           APP_DIGEST: ${{ steps.indexes.outputs.app_digest }}
           AI_GATEWAY_DIGEST: ${{ steps.indexes.outputs.ai_gateway_digest }}
           MIGRATION_DIGEST: ${{ steps.indexes.outputs.migration_digest }}
@@ -466,7 +494,7 @@ jobs:
           cat > ghcr-publication-evidence.json <<EOF
           {
             "head_sha": "${GITHUB_SHA}",
-            "version": "${{ steps.version.outputs.version }}",
+            "version": "${VERSION}",
             "platforms": ["linux/amd64", "linux/arm64"],
             "app": "${APP_IMAGE}@${APP_DIGEST}",
             "ai_gateway": "${AI_GATEWAY_IMAGE}@${AI_GATEWAY_DIGEST}",

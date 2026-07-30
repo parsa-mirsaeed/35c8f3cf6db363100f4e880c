@@ -104,22 +104,31 @@ jobs:
       - name: Resolve package version
         id: version
         shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          requested='${{ inputs.version }}'
-          if [[ -n "$requested" ]]; then
-            version="$requested"
-          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            version="$GITHUB_REF_NAME"
+          set -euo pipefail
+          requested="${REQUESTED_VERSION:-}"
+          if [[ -n "${requested}" ]]; then
+            version="${requested}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
           else
             version="${GITHUB_SHA::12}"
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          [[ "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "Version must be a safe tag and path component." >&2
+            exit 2
+          }
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Build release bundle through unified command
         shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -o pipefail
-          bash edutalent package '${{ steps.version.outputs.version }}' 2>&1 | tee package-build.log
+          set -euo pipefail
+          bash edutalent package "${PACKAGE_VERSION}" 2>&1 | tee package-build.log
 
       - name: Verify packaged migrations are repeatable
         shell: bash

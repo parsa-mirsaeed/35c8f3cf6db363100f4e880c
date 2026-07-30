@@ -51,16 +51,14 @@ jobs:
 
           path = Path('deploy/production/compose.production.yaml')
           text = path.read_text(encoding='utf-8')
-          old = '''  db:
-            networks: !override [data]
-            security_opt: [no-new-privileges:true]
-          '''
-          new = '''  db:
-            volumes:
-              - ${EDUTALENT_PRODUCTION_DIR:?EDUTALENT_PRODUCTION_DIR is required}/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
-            networks: !override [data]
-            security_opt: [no-new-privileges:true]
-          '''
+          old = "  db:\n    networks: !override [data]\n    security_opt: [no-new-privileges:true]\n"
+          new = (
+              "  db:\n"
+              "    volumes:\n"
+              "      - ${EDUTALENT_PRODUCTION_DIR:?EDUTALENT_PRODUCTION_DIR is required}/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro\n"
+              "    networks: !override [data]\n"
+              "    security_opt: [no-new-privileges:true]\n"
+          )
           if text.count(old) != 1:
               raise SystemExit(f'expected one production db override, found {text.count(old)}')
           path.write_text(text.replace(old, new), encoding='utf-8')

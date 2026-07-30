@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("edutalent_ops.py")
+WORKFLOW_PATH = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "production-operations.yml"
 spec = importlib.util.spec_from_file_location("edutalent_ops", MODULE_PATH)
 assert spec and spec.loader
 import sys
@@ -69,6 +71,33 @@ class ComposeSecurityTests(unittest.TestCase):
         self.assertIn("only gateway may publish", violations)
         self.assertIn("Docker socket", violations)
         self.assertIn("only ai-gateway", violations)
+
+
+class WorkflowPrivilegeBoundaryTests(unittest.TestCase):
+    def test_wal_switch_uses_admin_without_elevating_postgres(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertRegex(
+            workflow,
+            re.compile(
+                r"psql\s+-h 127\.0\.0\.1\s+-U postgres\b.*?operations_backup_probe",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            workflow,
+            re.compile(
+                r"psql\s+-h 127\.0\.0\.1\s+-U supabase_admin\b.*?pg_switch_wal",
+                re.DOTALL,
+            ),
+        )
+        self.assertIn("postgres|f", workflow)
+        self.assertIn("supabase_admin|t", workflow)
+        self.assertNotRegex(
+            workflow,
+            re.compile(
+                r"(?im)^\s*(?:ALTER\s+ROLE\s+postgres\b[^\n]*\bSUPERUSER\b|GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+[^\n]*pg_switch_wal[^\n]*\bTO\s+postgres\b)"
+            ),
+        )
 
 
 class AlertTests(unittest.TestCase):

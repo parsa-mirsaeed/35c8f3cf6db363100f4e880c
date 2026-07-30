@@ -35,8 +35,10 @@ The development environment template contains placeholder Supabase credentials. 
 | `make migrate` | Apply all canonical and incremental migrations transactionally |
 | `make build` | Build `edutalent:local` |
 | `make package` | Create a source-free application-image bundle under `dist/` |
+| `make appliance-build` | Create the complete signed air-gapped production appliance |
+| `make appliance-verify ARGS=<bundle>` | Verify an extracted appliance manifest, checksums, and signature |
 | `make smoke` | Start the lightweight stack and verify `/healthz` |
-| `make validate` | Validate shell and Compose definitions |
+| `make validate` | Validate shell, Compose, package, and appliance definitions |
 | `make clean` | Stop the lightweight stack and remove its local volumes |
 | `make production-bootstrap` | Materialize the exact pinned official Supabase Docker runtime |
 | `make production-init` | Generate production secrets after domains and TLS paths are configured |
@@ -55,6 +57,7 @@ Pass a version through `ARGS`:
 
 ```bash
 make package ARGS=v0.4.0
+make appliance-build ARGS=v1.0.0
 ```
 
 The same interface is available without Make:
@@ -62,6 +65,7 @@ The same interface is available without Make:
 ```bash
 bash edutalent dev
 bash edutalent package v0.4.0
+bash edutalent appliance-build v1.0.0
 bash edutalent production-validate
 ```
 
@@ -149,19 +153,35 @@ The unchanged local BGE profile deliberately retains the existing production col
 
 See [`deploy/production/README.md`](deploy/production/README.md), the [production architecture decision](docs/adr/0001-offline-first-production-architecture.md), the [controlled AI decision](docs/adr/0002-controlled-external-ai.md), the [production threat model](docs/security/production-threat-model.md), and the [controlled AI threat model](docs/security/controlled-external-ai-threat-model.md).
 
-## Application-image release bundle
+## Release editions
+
+### Thin application bundle
 
 ```bash
 make package ARGS=v0.4.0
 ```
 
-This creates:
+This creates `dist/edutalent-v0.4.0.tar.gz` containing the EduTalent application image, lightweight release Compose file, environment template, and checksum. It is intended for connected preparation environments and is not the complete production appliance.
 
-```text
-dist/edutalent-v0.4.0.tar.gz
+### Full air-gapped appliance
+
+```bash
+EDUTALENT_APPLIANCE_PLATFORM=linux/amd64 \
+EDUTALENT_APPLIANCE_SIGNING_MODE=ephemeral \
+  make appliance-build ARGS=v1.0.0
 ```
 
-The archive contains the EduTalent Docker image, a lightweight release Compose file, an environment template, and a SHA-256 checksum. It is **not yet** the complete air-gapped production appliance. The full offline release will additionally package every Supabase/Qdrant/gateway image, optional model artifacts, digest manifests, SBOMs, signatures, and provenance.
+The full appliance exports every image from the rendered production topology, including optional local TEI and profile-gated Supabase services. It also contains:
+
+- the pinned local BGE model at an immutable revision;
+- local image archives and a Compose override with `pull_policy: never`;
+- source registry digests and archive checksums in one immutable manifest;
+- SPDX SBOMs for every image and the release filesystem;
+- cosign signatures and verification policy;
+- the pinned Supabase runtime and production configuration templates;
+- an offline installer, secret generator, diagnostics, and first-start proof.
+
+The installer generates all deployment secrets on the target host through a packaged tools image with networking disabled. Operator TLS files are supplied separately and never enter release artifacts. See [`deploy/appliance/README.md`](deploy/appliance/README.md), the [air-gapped packaging ADR](docs/adr/0003-air-gapped-appliance-and-ghcr.md), and the [release threat model](docs/security/air-gapped-release-threat-model.md).
 
 ## Container build
 
@@ -178,9 +198,11 @@ The old manually committed `bin-build` path is no longer used. `build-for-render
 
 ## GitHub packages and artifacts
 
-The packaging workflow validates the definitions, builds the same runtime image through `bash edutalent package`, and uploads the release archive as a workflow artifact. Tag builds can publish the application image to GitHub Container Registry.
+The Package workflow continues to build and verify the thin application bundle. The Air-gapped Appliance workflow builds and starts the complete offline appliance on its exact SHA, verifies all local archives, SBOMs, signatures, model artifacts, and no-pull startup, and builds custom images for `linux/amd64` and `linux/arm64`.
 
-No production secrets are stored in the repository or release bundle.
+Protected `v*` tags publish versioned and commit-addressed custom images to GHCR. Buildx emits SBOM and provenance attestations, GitHub emits build-provenance attestations, and cosign signs the published image indexes with GitHub OIDC. No `latest` tag is published.
+
+No production secrets are stored in the repository, image layers, workflow artifacts, or release bundle.
 
 ## Security invariants
 
@@ -196,4 +218,6 @@ Production packaging and deployment must not:
 - use an installation-wide school ID fallback for AI requests;
 - mix embedding models or dimensions in one Qdrant collection;
 - make provider or AI Gateway availability a core application health criterion;
-- expose PostgreSQL, Supavisor, Qdrant, Studio, TEI, the AI Gateway, or internal Supabase services directly to the host network.
+- expose PostgreSQL, Supavisor, Qdrant, Studio, TEI, the AI Gateway, or internal Supabase services directly to the host network;
+- fetch an image or model during first air-gapped startup;
+- accept an unsigned, tampered, wrong-platform, or untracked appliance payload.

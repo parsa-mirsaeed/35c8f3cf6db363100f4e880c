@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PIN_FILE="${SCRIPT_DIR}/SUPABASE_UPSTREAM"
 RUNTIME_DIR="${SCRIPT_DIR}/runtime/supabase"
+PERMISSIONS_HELPER="${SCRIPT_DIR}/normalize-supabase-runtime-permissions.sh"
 UPSTREAM_URL="https://github.com/supabase/supabase.git"
 
 usage() {
@@ -26,7 +27,7 @@ case "${1:-}" in
   *) usage >&2; exit 2 ;;
 esac
 
-for command in git awk mktemp python3; do
+for command in git awk mktemp python3 find chmod grep; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "Required command not found: ${command}" >&2
     exit 1
@@ -112,10 +113,14 @@ actual="$(git -C "${temporary}" rev-parse HEAD)"
   exit 1
 }
 
+# A strict caller umask may make checked-out definitions unreadable to the
+# non-root database container. Add our immutable provenance marker before
+# normalizing the complete fresh tree, while no generated environment or
+# mutable installation state exists.
+printf '%s\n' "${commit}" > "${temporary}/docker/UPSTREAM_COMMIT"
+bash "${PERMISSIONS_HELPER}" "${temporary}/docker"
 cp -a "${temporary}/docker" "${RUNTIME_DIR}"
-printf '%s\n' "${commit}" > "${RUNTIME_DIR}/UPSTREAM_COMMIT"
 configure_ci_database_volume
-chmod -R go-w "${RUNTIME_DIR}"
 
 echo "Prepared official Supabase Docker runtime at ${RUNTIME_DIR}"
 echo "Pinned upstream commit: ${commit}"

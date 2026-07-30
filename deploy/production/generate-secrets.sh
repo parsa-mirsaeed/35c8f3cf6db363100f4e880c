@@ -4,11 +4,13 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUPABASE_DIR="${SCRIPT_DIR}/runtime/supabase"
-SUPABASE_ENV="${SUPABASE_DIR}/.env"
+SUPABASE_ENV="${EDUTALENT_SUPABASE_ENV:-${SUPABASE_DIR}/.env}"
 SUPABASE_COMPOSE="${SUPABASE_DIR}/docker-compose.yml"
 SUPABASE_COMPOSE_BACKUP="${SUPABASE_DIR}/docker-compose.yml.edutalent-backup"
-APP_ENV="${SCRIPT_DIR}/.env.edutalent"
+APP_ENV="${EDUTALENT_APP_ENV:-${SCRIPT_DIR}/.env.edutalent}"
 APP_TEMPLATE="${SCRIPT_DIR}/.env.edutalent.example"
+UPSTREAM_ENV_BACKUP="${SUPABASE_DIR}/.env.old"
+UPSTREAM_COMPOSE_BACKUP="${SUPABASE_COMPOSE}.old"
 
 usage() {
   cat <<'USAGE'
@@ -84,7 +86,11 @@ done
 
 cp "${SUPABASE_COMPOSE}" "${SUPABASE_COMPOSE_BACKUP}"
 initialization_complete=false
+cleanup_upstream_backups() {
+  rm -f -- "${UPSTREAM_ENV_BACKUP}" "${UPSTREAM_COMPOSE_BACKUP}"
+}
 cleanup_partial_initialization() {
+  cleanup_upstream_backups
   if [[ "${initialization_complete}" != true ]]; then
     rm -f "${SUPABASE_ENV}"
     if [[ -f "${SUPABASE_COMPOSE_BACKUP}" ]]; then
@@ -102,6 +108,7 @@ chmod 600 "${SUPABASE_ENV}"
   sh utils/generate-keys.sh --update-env >/dev/null
   sh utils/add-new-auth-keys.sh --update-env >/dev/null
 )
+cleanup_upstream_backups
 
 set_env "${SUPABASE_ENV}" SUPABASE_PUBLIC_URL "https://${supabase_domain}"
 set_env "${SUPABASE_ENV}" API_EXTERNAL_URL "https://${supabase_domain}/auth/v1"
@@ -132,6 +139,7 @@ set_env "${APP_ENV}" QDRANT_API_KEY "$(openssl rand -hex 32)"
 set_env "${APP_ENV}" AI_GATEWAY_INTERNAL_TOKEN "$(openssl rand -hex 32)"
 chmod 600 "${SUPABASE_ENV}" "${APP_ENV}"
 
+cleanup_upstream_backups
 initialization_complete=true
 rm -f "${SUPABASE_COMPOSE_BACKUP}"
 trap - EXIT

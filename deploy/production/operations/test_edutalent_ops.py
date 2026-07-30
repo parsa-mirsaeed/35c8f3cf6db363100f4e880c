@@ -112,7 +112,7 @@ class WorkflowPrivilegeBoundaryTests(unittest.TestCase):
             "SELECT active::text FROM pg_replication_slots WHERE slot_name = 'edutalent_backup'",
             workflow,
         )
-        self.assertIn("test \"${receiver_active}\"", workflow.replace("if [[ ", "test ").replace(" != true ]]; then", " = true"))
+        self.assertIn('if [[ "${receiver_active}" != true ]]; then', workflow)
         self.assertIn("docker logs --tail 100 edutalent-pitr-archive", workflow)
         self.assertIn("Active WAL receiver did not persist an archive file", workflow)
 

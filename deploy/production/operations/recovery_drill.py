@@ -43,7 +43,8 @@ def wait_postgres(container: str, password: str, timeout: float = 90.0) -> None:
         if result.returncode == 0:
             return
         time.sleep(1)
-    raise RuntimeError(f"PostgreSQL did not become ready: {container}")
+    logs = docker("logs", "--tail", "80", container, capture=True, check=False)
+    raise RuntimeError(f"PostgreSQL did not become ready: {container}; logs: {logs}")
 
 
 def psql(container: str, password: str, sql: str, database: str = "postgres", *, check: bool = True) -> str:
@@ -179,7 +180,9 @@ def postgres_drill(prefix: str) -> dict[str, Any]:
         image,
         "-eu",
         "-c",
-        f"printf %s {json.dumps(config)} >> /restore/postgresql.auto.conf; touch /restore/recovery.signal; chown -R postgres:postgres /restore",
+        'printf "%s" "$1" >> /restore/postgresql.auto.conf; touch /restore/recovery.signal; chown -R postgres:postgres /restore',
+        "recovery-config",
+        config,
     )
     docker(
         "run",

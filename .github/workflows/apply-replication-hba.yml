@@ -1,0 +1,83 @@
+name: Apply Replication HBA
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'feature/production-operations' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/production-operations
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Add exact loopback replication policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > deploy/production/pg_hba.conf <<'HBA'
+          # EduTalent production PostgreSQL client authentication policy.
+          # This preserves the pinned Supabase self-hosted defaults and adds one
+          # SCRAM-authenticated physical-replication path for the local WAL receiver.
+
+          local all  supabase_admin     trust
+          local all  all                peer map=supabase_map
+
+          # Physical replication is deliberately limited to the postgres role over
+          # the database container's own IPv4 loopback namespace.
+          host  replication  postgres  127.0.0.1/32  scram-sha-256
+
+          host  all  all  127.0.0.1/32  trust
+          host  all  all  ::1/128       trust
+
+          host  all  all  10.0.0.0/8      scram-sha-256
+          host  all  all  172.16.0.0/12   scram-sha-256
+          host  all  all  192.168.0.0/16  scram-sha-256
+          host  all  all  0.0.0.0/0       scram-sha-256
+          host  all  all  ::0/0           scram-sha-256
+          HBA
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('deploy/production/compose.production.yaml')
+          text = path.read_text(encoding='utf-8')
+          old = '''  db:
+            networks: !override [data]
+            security_opt: [no-new-privileges:true]
+          '''
+          new = '''  db:
+            volumes:
+              - ${EDUTALENT_PRODUCTION_DIR:?EDUTALENT_PRODUCTION_DIR is required}/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+            networks: !override [data]
+            security_opt: [no-new-privileges:true]
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one production db override, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
+          test "$(grep -Ec '^[[:space:]]*host[[:space:]]+replication[[:space:]]+postgres[[:space:]]+127\.0\.0\.1/32[[:space:]]+scram-sha-256[[:space:]]*$' deploy/production/pg_hba.conf)" -eq 1
+          ! grep -Eq '^[[:space:]]*host[^#]*replication[^#]*(0\.0\.0\.0/0|::0/0|all)' deploy/production/pg_hba.conf
+          grep -Fq '/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro' deploy/production/compose.production.yaml
+          git diff --check
+
+      - name: Commit declarative HBA policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add deploy/production/pg_hba.conf deploy/production/compose.production.yaml
+          git diff --cached --quiet && { echo 'Replication HBA patch produced no change.' >&2; exit 1; }
+          git commit -m 'fix: declare loopback-only physical replication access'
+          git push origin HEAD:feature/production-operations

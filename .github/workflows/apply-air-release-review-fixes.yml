@@ -1,22 +1,24 @@
 name: Apply protected release review correction
 
 on:
-  push:
-    branches:
-      - feature/air-gapped-packaging-ghcr
-    paths:
-      - .github/workflows/apply-air-release-review-fixes.yml
+  pull_request:
+    types:
+      - labeled
 
 permissions:
   contents: write
 
 concurrency:
-  group: apply-air-release-review-fixes
+  group: apply-air-release-review-fixes-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   patch:
-    if: github.repository == 'parsa-mirsaeed/35c8f3cf6db363100f4e880c'
+    if: >-
+      github.repository == 'parsa-mirsaeed/35c8f3cf6db363100f4e880c' &&
+      github.event.label.name == 'apply-release-fix' &&
+      github.event.pull_request.head.ref == 'feature/air-gapped-packaging-ghcr' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

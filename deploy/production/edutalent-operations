@@ -470,10 +470,10 @@ pitr_start() {
     docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${db_name}" -v ON_ERROR_STOP=1 -c "SELECT pg_create_physical_replication_slot('${slot}', true)" >/dev/null
   fi
   pgpass="${PITR_DIR}/pgpass"
-  printf 'db:5432:*:postgres:%s\n' "${db_password}" >"${pgpass}"
+  printf '127.0.0.1:5432:*:postgres:%s\n' "${db_password}" >"${pgpass}"
   chmod 0600 "${pgpass}"
   docker run --detach --name edutalent-pitr-archive --restart unless-stopped \
-    --network edutalent-data \
+    --network container:${db_id} \
     --user "$(id -u):$(id -g)" \
     --read-only --tmpfs /tmp \
     --cap-drop ALL --security-opt no-new-privileges \
@@ -482,7 +482,7 @@ pitr_start() {
     --mount "type=bind,source=${pgpass},target=/run/secrets/pgpass,readonly" \
     --entrypoint pg_receivewal \
     "${image}" \
-    --dbname="postgresql://postgres@db:5432/${db_name}?sslmode=disable" \
+    --dbname="postgresql://postgres@127.0.0.1:5432/${db_name}?sslmode=disable" \
     --directory=/archive --slot="${slot}" --synchronous --verbose >/dev/null
   echo "Continuous WAL reception started in ${WAL_DIR}."
 }

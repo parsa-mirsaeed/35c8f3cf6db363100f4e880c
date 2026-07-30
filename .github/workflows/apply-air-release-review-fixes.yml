@@ -28,42 +28,44 @@ jobs:
           fetch-depth: 0
           show-progress: false
 
-      - name: Normalize the staged build matcher
+      - name: Stage the protected release identity correction
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("scripts/ci/apply_air_release_review_fixes.py")
-          text = path.read_text(encoding="utf-8")
-          start = text.index('build = ROOT / "scripts/appliance/build.sh"')
-          end = text.index('\n\nrelease = ROOT / ".github/workflows/air-gapped-release.yml"', start)
-          replacement = '''build = ROOT / "scripts/appliance/build.sh"
-          build_text = build.read_text(encoding="utf-8")
-          identity_start = build_text.index(
-              '      export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER='
-          )
-          identity_end = build_text.index("    fi\\n", identity_start)
-          old_identity_block = build_text[identity_start:identity_end]
-          if "air-gapped-appliance" not in old_identity_block:
-              raise RuntimeError("Unexpected keyless identity block")
-          new_identity_block = '''      expected_workflow_ref="${GITHUB_REPOSITORY}/.github/workflows/air-gapped-release.yml@${GITHUB_REF}"
-                [[ "${GITHUB_WORKFLOW_REF:-}" == "${expected_workflow_ref}" ]] || {
-                  echo "Keyless appliance signing is restricted to ${expected_workflow_ref}." >&2
-                  exit 1
-                }
-                trusted_identity="https://github.com/${expected_workflow_ref}"
-                export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"
-                export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="$(
-                  python3 -c 'import re, sys; print("^" + re.escape(sys.argv[1]) + "$")' \\
-                    "${trusted_identity}"
-                )"
-          '''
-          build.write_text(
-              build_text[:identity_start] + new_identity_block + build_text[identity_end:],
+          patch_path = Path("scripts/ci/apply_air_release_review_fixes.py")
+          patch_lines = patch_path.read_text(encoding="utf-8").splitlines()
+          patch_start = patch_lines.index('build = ROOT / "scripts/appliance/build.sh"')
+          patch_end = patch_lines.index('release = ROOT / ".github/workflows/air-gapped-release.yml"')
+          patch_path.write_text(
+              "\n".join(patch_lines[:patch_start] + patch_lines[patch_end:]) + "\n",
               encoding="utf-8",
           )
-          '''
-          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+
+          build_path = Path("scripts/appliance/build.sh")
+          build_lines = build_path.read_text(encoding="utf-8").splitlines()
+          identity_index = next(
+              index
+              for index, line in enumerate(build_lines)
+              if "EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP=" in line
+          )
+          issuer_index = identity_index - 1
+          if "EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER=" not in build_lines[issuer_index]:
+              raise RuntimeError("Unexpected keyless verification identity block")
+          replacement = [
+              '      expected_workflow_ref="${GITHUB_REPOSITORY}/.github/workflows/air-gapped-release.yml@${GITHUB_REF}"',
+              '      [[ "${GITHUB_WORKFLOW_REF:-}" == "${expected_workflow_ref}" ]] || {',
+              '        echo "Keyless appliance signing is restricted to ${expected_workflow_ref}." >&2',
+              '        exit 1',
+              '      }',
+              '      trusted_identity="https://github.com/${expected_workflow_ref}"',
+              '      export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"',
+              '      export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="$(python3 -c \'import re, sys; print("^" + re.escape(sys.argv[1]) + "$")\' "${trusted_identity}")"',
+          ]
+          build_path.write_text(
+              "\n".join(build_lines[:issuer_index] + replacement + build_lines[identity_index + 1:]) + "\n",
+              encoding="utf-8",
+          )
           PY
 
       - name: Apply reviewed release hardening

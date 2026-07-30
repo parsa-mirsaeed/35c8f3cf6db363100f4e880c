@@ -28,6 +28,44 @@ jobs:
           fetch-depth: 0
           show-progress: false
 
+      - name: Normalize the staged build matcher
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/apply_air_release_review_fixes.py")
+          text = path.read_text(encoding="utf-8")
+          start = text.index('build = ROOT / "scripts/appliance/build.sh"')
+          end = text.index('\n\nrelease = ROOT / ".github/workflows/air-gapped-release.yml"', start)
+          replacement = '''build = ROOT / "scripts/appliance/build.sh"
+          build_text = build.read_text(encoding="utf-8")
+          identity_start = build_text.index(
+              '      export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER='
+          )
+          identity_end = build_text.index("    fi\\n", identity_start)
+          old_identity_block = build_text[identity_start:identity_end]
+          if "air-gapped-appliance" not in old_identity_block:
+              raise RuntimeError("Unexpected keyless identity block")
+          new_identity_block = '''      expected_workflow_ref="${GITHUB_REPOSITORY}/.github/workflows/air-gapped-release.yml@${GITHUB_REF}"
+                [[ "${GITHUB_WORKFLOW_REF:-}" == "${expected_workflow_ref}" ]] || {
+                  echo "Keyless appliance signing is restricted to ${expected_workflow_ref}." >&2
+                  exit 1
+                }
+                trusted_identity="https://github.com/${expected_workflow_ref}"
+                export EDUTALENT_APPLIANCE_TRUSTED_OIDC_ISSUER="https://token.actions.githubusercontent.com"
+                export EDUTALENT_APPLIANCE_TRUSTED_IDENTITY_REGEXP="$(
+                  python3 -c 'import re, sys; print("^" + re.escape(sys.argv[1]) + "$")' \\
+                    "${trusted_identity}"
+                )"
+          '''
+          build.write_text(
+              build_text[:identity_start] + new_identity_block + build_text[identity_end:],
+              encoding="utf-8",
+          )
+          '''
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+          PY
+
       - name: Apply reviewed release hardening
         run: python3 scripts/ci/apply_air_release_review_fixes.py
 

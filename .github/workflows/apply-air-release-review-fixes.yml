@@ -37,10 +37,14 @@ jobs:
           patch_lines = patch_path.read_text(encoding="utf-8").splitlines()
           patch_start = patch_lines.index('build = ROOT / "scripts/appliance/build.sh"')
           patch_end = patch_lines.index('release = ROOT / ".github/workflows/air-gapped-release.yml"')
-          patch_path.write_text(
-              "\n".join(patch_lines[:patch_start] + patch_lines[patch_end:]) + "\n",
-              encoding="utf-8",
-          )
+          remaining = patch_lines[:patch_start] + patch_lines[patch_end:]
+          remaining = [
+              'assert any(\'bash scripts/appliance/build.sh "${APPLIANCE_VERSION}"\' in line for line in release_lines)'
+              if "assert '          bash scripts/appliance/build.sh" in line
+              else line
+              for line in remaining
+          ]
+          patch_path.write_text("\n".join(remaining) + "\n", encoding="utf-8")
 
           build_path = Path("scripts/appliance/build.sh")
           build_lines = build_path.read_text(encoding="utf-8").splitlines()

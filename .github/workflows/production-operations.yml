@@ -1,0 +1,405 @@
+name: Production Operations
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+    paths:
+      - deploy/production/**
+      - docs/adr/0004-production-operations.md
+      - docs/security/production-operations-threat-model.md
+      - .github/workflows/production-operations.yml
+      - .github/FULL_VALIDATION.md
+  push:
+    branches:
+      - main
+    paths:
+      - deploy/production/**
+      - docs/adr/0004-production-operations.md
+      - docs/security/production-operations-threat-model.md
+      - .github/workflows/production-operations.yml
+  workflow_dispatch:
+  schedule:
+    - cron: "30 4 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-operations-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  EDUTALENT_OPERATIONS_STATE_DIR: ${{ github.workspace }}/.operations-state
+  EDUTALENT_BACKUP_MIN_FREE_BYTES: "104857600"
+
+jobs:
+  definitions:
+    name: Validate operations definitions and regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          show-progress: false
+
+      - name: Validate shell, Python, alert policy, and regression tests
+        shell: bash
+        run: |
+          set -o pipefail
+          bash deploy/production/edutalent-operations validate-definitions 2>&1 | tee operations-definitions.log
+
+      - name: Exercise bounded load tester against a local endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 18765 --bind 127.0.0.1 >local-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "${server_pid}" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            curl --fail --silent http://127.0.0.1:18765/ >/dev/null 2>&1 && break
+            sleep 0.25
+          done
+          python3 deploy/production/operations/edutalent_ops.py load-test \
+            --url http://127.0.0.1:18765/ \
+            --duration 2 \
+            --concurrency 4 \
+            --maximum-error-rate 0 \
+            --maximum-p95-ms 1000 \
+            --output load-regression.json
+
+      - name: Exercise fail-closed backup capacity preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/backups"
+          printf '%s\n' 'validation-only-passphrase' > "${RUNNER_TEMP}/backup.passphrase"
+          chmod 600 "${RUNNER_TEMP}/backup.passphrase"
+          if EDUTALENT_BACKUP_DIR="${RUNNER_TEMP}/backups" \
+             EDUTALENT_BACKUP_PASSPHRASE_FILE="${RUNNER_TEMP}/backup.passphrase" \
+             EDUTALENT_BACKUP_MIN_FREE_BYTES=1 \
+             EDUTALENT_TEST_AVAILABLE_BYTES=0 \
+             bash deploy/production/edutalent-operations backup-preflight \
+             >backup-capacity.log 2>&1; then
+            echo "Backup preflight unexpectedly accepted a full destination." >&2
+            exit 1
+          fi
+          grep -Fq 'Insufficient backup capacity' backup-capacity.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-operations-definition-evidence
+          path: |
+            operations-definitions.log
+            load-regression.json
+            backup-capacity.log
+            local-http.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  security-scan:
+    name: Scan dependencies and production configuration
+    needs: definitions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Scan dependency manifests for high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: json
+          output: trivy-vulnerabilities.json
+
+      - name: Scan infrastructure definitions for high and critical misconfiguration
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: json
+          output: trivy-misconfiguration.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-operations-security-scan
+          path: |
+            trivy-vulnerabilities.json
+            trivy-misconfiguration.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  recovery-drill:
+    name: Prove PostgreSQL PITR, Qdrant recovery, and migration rollback
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-validation') }}
+    needs:
+      - definitions
+      - security-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          show-progress: false
+
+      - name: Run isolated recovery drills
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 deploy/production/operations/recovery_drill.py \
+            --output recovery-drill.json 2>&1 | tee recovery-drill.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-operations-recovery-evidence
+          path: |
+            recovery-drill.json
+            recovery-drill.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  production-acceptance:
+    name: Prove backup, alerts, load, restart, and fail-closed configuration
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-validation') }}
+    needs:
+      - definitions
+      - security-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      EDUTALENT_BUILD_CACHE_SCOPE: edutalent-runtime
+      COMPOSE_PARALLEL_LIMIT: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          show-progress: false
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          name: edutalent-operations-builder
+          keep-state: true
+
+      - name: Build exact runtime image and materialize pinned Supabase
+        run: |
+          bash edutalent build local
+          bash edutalent production-bootstrap
+
+      - name: Create isolated configuration and prove certificate/CIDR failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp deploy/production/.env.edutalent.example deploy/production/.env.edutalent
+          mkdir -p "${RUNNER_TEMP}/tls"
+          sed -i \
+            -e 's/app.example.invalid/app.ops.internal/' \
+            -e 's/supabase.example.invalid/supabase.ops.internal/' \
+            -e 's/admin.example.invalid/admin.ops.internal/' \
+            -e 's|^ADMIN_ALLOWED_CIDRS=.*|ADMIN_ALLOWED_CIDRS=127.0.0.1/32 172.16.0.0/12|' \
+            -e "s|TLS_CERT_FILE=.*|TLS_CERT_FILE=${RUNNER_TEMP}/tls/fullchain.pem|" \
+            -e "s|TLS_KEY_FILE=.*|TLS_KEY_FILE=${RUNNER_TEMP}/tls/privkey.pem|" \
+            deploy/production/.env.edutalent
+          chmod 600 deploy/production/.env.edutalent
+          openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 1 \
+            -subj '/CN=app.ops.internal' \
+            -addext 'subjectAltName=DNS:app.ops.internal,DNS:supabase.ops.internal,DNS:admin.ops.internal' \
+            -keyout "${RUNNER_TEMP}/tls/privkey.pem" \
+            -out "${RUNNER_TEMP}/tls/fullchain.pem" >/dev/null 2>&1
+          bash edutalent production-init
+          if bash edutalent production-validate >near-expiry.log 2>&1; then
+            echo "Preflight unexpectedly accepted a near-expiry certificate." >&2
+            exit 1
+          fi
+          grep -Eiq 'expire|validity|14 days' near-expiry.log
+
+          openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
+            -subj '/CN=app.ops.internal' \
+            -addext 'subjectAltName=DNS:app.ops.internal,DNS:supabase.ops.internal,DNS:admin.ops.internal' \
+            -keyout "${RUNNER_TEMP}/tls/privkey.pem" \
+            -out "${RUNNER_TEMP}/tls/fullchain.pem" >/dev/null 2>&1
+          sed -i 's|^ADMIN_ALLOWED_CIDRS=.*|ADMIN_ALLOWED_CIDRS=0.0.0.0/0|' deploy/production/.env.edutalent
+          if bash edutalent production-validate >unsafe-cidr.log 2>&1; then
+            echo "Preflight unexpectedly accepted an internet-wide admin CIDR." >&2
+            exit 1
+          fi
+          grep -Eiq 'CIDR|internet|0.0.0.0/0' unsafe-cidr.log
+          sed -i 's|^ADMIN_ALLOWED_CIDRS=.*|ADMIN_ALLOWED_CIDRS=127.0.0.1/32 172.16.0.0/12|' deploy/production/.env.edutalent
+          bash edutalent production-validate 2>&1 | tee production-operations-preflight.log
+
+      - name: Start complete production stack
+        shell: bash
+        run: |
+          set -o pipefail
+          bash edutalent production-up 2>&1 | tee production-operations-startup.log
+
+      - name: Verify local security and monitoring baseline
+        shell: bash
+        run: |
+          set -o pipefail
+          bash deploy/production/edutalent-operations security-check 2>&1 | tee operations-acceptance.log
+          bash deploy/production/edutalent-operations snapshot | tee snapshot-path.txt
+
+      - name: Start WAL reception and create encrypted full backup
+        shell: bash
+        env:
+          EDUTALENT_BACKUP_DIR: ${{ runner.temp }}/backups
+          EDUTALENT_BACKUP_PASSPHRASE_FILE: ${{ runner.temp }}/backup.passphrase
+        run: |
+          set -euo pipefail
+          mkdir -p "${EDUTALENT_BACKUP_DIR}"
+          printf '%s\n' 'ephemeral-ci-backup-passphrase-not-for-production' > "${EDUTALENT_BACKUP_PASSPHRASE_FILE}"
+          chmod 600 "${EDUTALENT_BACKUP_PASSPHRASE_FILE}"
+          bash deploy/production/edutalent-operations pitr-start
+          postgres_password="$(awk -F= '$1 == "POSTGRES_PASSWORD" { sub(/^[^=]*=/, ""); print; exit }' deploy/production/runtime/supabase/.env)"
+          docker exec -e "PGPASSWORD=${postgres_password}" supabase-db \
+            psql -h 127.0.0.1 -U postgres -d postgres -Atc 'CREATE TABLE IF NOT EXISTS operations_backup_probe(id integer primary key); INSERT INTO operations_backup_probe VALUES (1) ON CONFLICT DO NOTHING; SELECT pg_switch_wal();' >/dev/null
+          for attempt in $(seq 1 30); do
+            if find "${EDUTALENT_OPERATIONS_STATE_DIR}/wal" -maxdepth 1 -type f -print -quit | grep -q .; then break; fi
+            sleep 2
+          done
+          bash deploy/production/edutalent-operations pitr-status | tee pitr-status.log
+          bash deploy/production/edutalent-operations backup-create 2>&1 | tee backup-create.log
+          archive="$(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc' -print -quit)"
+          test -n "${archive}"
+          bash deploy/production/edutalent-operations backup-verify "${archive}" 2>&1 | tee backup-verify.log
+          bash deploy/production/edutalent-operations restore-drill "${archive}" 2>&1 | tee restore-drill.log
+
+      - name: Run sustained load while exercising database and application recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '127.0.0.1 app.ops.internal supabase.ops.internal admin.ops.internal' | sudo tee -a /etc/hosts >/dev/null
+          EDUTALENT_LOAD_INSECURE=true \
+          EDUTALENT_LOAD_DURATION_SECONDS=90 \
+          EDUTALENT_LOAD_CONCURRENCY=16 \
+          EDUTALENT_LOAD_MAXIMUM_ERROR_RATE=0.25 \
+          EDUTALENT_LOAD_MAXIMUM_P95_MS=3000 \
+            bash deploy/production/edutalent-operations load-test https://app.ops.internal/healthz \
+            >load-acceptance.log 2>&1 &
+          load_pid=$!
+          sleep 15
+          bash deploy/production/edutalent-operations fault-test 2>&1 | tee fault-acceptance.log
+          wait "${load_pid}"
+          cat load-acceptance.log
+
+      - name: Run final production boundaries and alert evaluation
+        shell: bash
+        env:
+          EDUTALENT_BACKUP_DIR: ${{ runner.temp }}/backups
+          EDUTALENT_BACKUP_PASSPHRASE_FILE: ${{ runner.temp }}/backup.passphrase
+        run: |
+          set -o pipefail
+          bash edutalent production-database-check 2>&1 | tee -a operations-acceptance.log
+          bash edutalent production-gateway-check 2>&1 | tee -a operations-acceptance.log
+          bash edutalent production-qdrant-check 2>&1 | tee -a operations-acceptance.log
+          bash edutalent production-ai-check 2>&1 | tee -a operations-acceptance.log
+          snapshot="$(bash deploy/production/edutalent-operations snapshot | tail -n1)"
+          # CI verifies alert evaluation mechanics separately. The live snapshot may
+          # legitimately warn that the default empty Qdrant collection is absent.
+          bash deploy/production/edutalent-operations alerts "${snapshot}" 2>&1 | tee alerts-live.log || test $? -eq 2
+
+      - name: Stop WAL receiver
+        if: always()
+        run: bash deploy/production/edutalent-operations pitr-stop || true
+
+      - name: Upload operations acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-operations-acceptance-evidence
+          path: |
+            production-operations-preflight.log
+            production-operations-startup.log
+            operations-acceptance.log
+            near-expiry.log
+            unsafe-cidr.log
+            snapshot-path.txt
+            pitr-status.log
+            backup-create.log
+            backup-verify.log
+            restore-drill.log
+            load-acceptance.log
+            fault-acceptance.log
+            alerts-live.log
+            .operations-state/snapshots/*.json
+            .operations-state/alerts/*.json
+            ${{ runner.temp }}/backups/*.metadata.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop and remove acceptance data
+        if: always()
+        run: |
+          bash edutalent production-down || true
+          docker volume prune --force >/dev/null 2>&1 || true
+
+  gate:
+    name: Production operations gate
+    if: always()
+    needs:
+      - definitions
+      - security-scan
+      - recovery-drill
+      - production-acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enforce exact-head operations outcomes
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMPLETE_REQUIRED: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-validation') }}
+          DEFINITIONS_RESULT: ${{ needs.definitions.result }}
+          SECURITY_RESULT: ${{ needs.security-scan.result }}
+          RECOVERY_RESULT: ${{ needs.recovery-drill.result }}
+          ACCEPTANCE_RESULT: ${{ needs.production-acceptance.result }}
+        run: |
+          set -euo pipefail
+          test "${DEFINITIONS_RESULT}" = success
+          test "${SECURITY_RESULT}" = success
+          if [[ "${COMPLETE_REQUIRED}" == true ]]; then
+            test "${RECOVERY_RESULT}" = success
+            test "${ACCEPTANCE_RESULT}" = success
+          else
+            case "${RECOVERY_RESULT}" in success|skipped) ;; *) exit 1 ;; esac
+            case "${ACCEPTANCE_RESULT}" in success|skipped) ;; *) exit 1 ;; esac
+          fi
+          cat > production-operations-evidence.json <<EOF
+          {
+            "head_sha": "${HEAD_SHA}",
+            "complete_required": ${COMPLETE_REQUIRED},
+            "results": {
+              "definitions": "${DEFINITIONS_RESULT}",
+              "security_scan": "${SECURITY_RESULT}",
+              "recovery_drill": "${RECOVERY_RESULT}",
+              "production_acceptance": "${ACCEPTANCE_RESULT}"
+            }
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-operations-gate-evidence
+          path: production-operations-evidence.json
+          if-no-files-found: error
+          retention-days: 30

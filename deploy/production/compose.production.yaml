@@ -319,6 +319,8 @@ services:
     security_opt: [no-new-privileges:true]
 
   db:
+    volumes:
+      - ${EDUTALENT_PRODUCTION_DIR:?EDUTALENT_PRODUCTION_DIR is required}/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     networks: !override [data]
     security_opt: [no-new-privileges:true]
 

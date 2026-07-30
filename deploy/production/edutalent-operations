@@ -1,0 +1,652 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_CANDIDATE="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+HELPER="${SCRIPT_DIR}/operations/edutalent_ops.py"
+POLICY="${EDUTALENT_ALERT_POLICY:-${SCRIPT_DIR}/operations/alert-policy.json}"
+PRODUCTION_COMMAND="${SCRIPT_DIR}/edutalent-production"
+SUPABASE_DIR="${SCRIPT_DIR}/runtime/supabase"
+BUNDLE_MODE=false
+if [[ -f "${ROOT_CANDIDATE}/manifests/compose.locked.yaml" && -f "${ROOT_CANDIDATE}/manifests/release-manifest.json" ]]; then
+  BUNDLE_MODE=true
+fi
+
+canonical_path() {
+  python3 - "$1" <<'PY'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).expanduser().resolve(strict=False))
+PY
+}
+
+if [[ "${BUNDLE_MODE}" == true ]]; then
+  APPLIANCE_STATE="${EDUTALENT_APPLIANCE_STATE_DIR:-${XDG_STATE_HOME:-${HOME:?HOME is required}/.local/state}/edutalent-appliance}"
+  APP_ENV="${EDUTALENT_APP_ENV:-${APPLIANCE_STATE}/config/.env.edutalent}"
+  SUPABASE_ENV="${EDUTALENT_SUPABASE_ENV:-${APPLIANCE_STATE}/config/supabase.env}"
+  COMPOSE_OVERRIDE="${EDUTALENT_COMPOSE_OVERRIDE:-${ROOT_CANDIDATE}/manifests/compose.locked.yaml}"
+  OPERATIONS_STATE="${EDUTALENT_OPERATIONS_STATE_DIR:-${APPLIANCE_STATE}/operations}"
+else
+  APP_ENV="${EDUTALENT_APP_ENV:-${SCRIPT_DIR}/.env.edutalent}"
+  SUPABASE_ENV="${EDUTALENT_SUPABASE_ENV:-${SUPABASE_DIR}/.env}"
+  COMPOSE_OVERRIDE="${EDUTALENT_COMPOSE_OVERRIDE:-}"
+  OPERATIONS_STATE="${EDUTALENT_OPERATIONS_STATE_DIR:-${XDG_STATE_HOME:-${HOME:?HOME is required}/.local/state}/edutalent-production-operations}"
+fi
+OPERATIONS_STATE="$(canonical_path "${OPERATIONS_STATE}")"
+SNAPSHOT_DIR="${OPERATIONS_STATE}/snapshots"
+ALERT_DIR="${OPERATIONS_STATE}/alerts"
+WAL_DIR="${OPERATIONS_STATE}/wal"
+PITR_DIR="${OPERATIONS_STATE}/pitr"
+
+usage() {
+  cat <<'USAGE'
+EduTalent production operations
+
+Usage: edutalent-operations <command> [arguments]
+
+Commands:
+  validate-definitions           Run deterministic local syntax and unit checks
+  snapshot                      Collect a local JSON health/resource snapshot
+  alerts [snapshot]             Evaluate the local alert policy
+  monitor-once                  Collect a snapshot and evaluate alerts
+  monitor-loop [seconds]        Run local monitoring continuously (default 60)
+  backup-preflight              Verify backup path, passphrase, and free capacity
+  backup-create                 Create, verify, and encrypt a complete backup
+  backup-verify <archive>       Decrypt and verify a backup without restoring it
+  restore-drill <archive>       Restore the database into a temporary drill DB
+  pitr-start                    Start continuous PostgreSQL WAL reception
+  pitr-stop                     Stop continuous WAL reception
+  pitr-status                   Show WAL receiver status and last archive time
+  security-check                Verify rendered and live security boundaries
+  load-test [url]               Run bounded concurrent HTTP load/soak testing
+  fault-test                    Restart database and recreate app with recovery checks
+  acceptance [url]              Run the non-destructive final acceptance suite
+  prune                         Apply configured encrypted-backup retention
+  help                          Show this help
+
+Backup environment:
+  EDUTALENT_BACKUP_DIR                 Absolute path on a separate protected disk
+  EDUTALENT_BACKUP_PASSPHRASE_FILE     Mode 0400/0600 passphrase file
+  EDUTALENT_BACKUP_MIN_FREE_BYTES      Default 10737418240 (10 GiB)
+  EDUTALENT_BACKUP_RETENTION_DAYS      Default 30
+  EDUTALENT_BACKUP_MINIMUM_COPIES      Default 7
+USAGE
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "Required command not found: $1" >&2
+    exit 1
+  }
+}
+
+require_definitions() {
+  require_command python3
+  [[ -f "${HELPER}" && -f "${POLICY}" ]] || {
+    echo "Operations helper or alert policy is missing." >&2
+    exit 1
+  }
+}
+
+require_envs() {
+  [[ -f "${SUPABASE_DIR}/docker-compose.yml" ]] || {
+    echo "Supabase runtime is missing." >&2
+    exit 1
+  }
+  [[ -f "${APP_ENV}" && -f "${SUPABASE_ENV}" ]] || {
+    echo "Production environment files are missing." >&2
+    exit 1
+  }
+}
+
+read_env() {
+  local file="$1" key="$2"
+  awk -F= -v key="${key}" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "${file}"
+}
+
+compose() {
+  require_envs
+  export EDUTALENT_PRODUCTION_DIR="${SCRIPT_DIR}"
+  local -a profile_args=() override_args=()
+  local profile
+  profile="$(read_env "${APP_ENV}" EMBEDDING_PROFILE)"
+  case "${profile}" in
+    local-bge-v1) profile_args=(--profile local-embedding) ;;
+    openai-v1) ;;
+    *) echo "Unsupported EMBEDDING_PROFILE=${profile}" >&2; exit 1 ;;
+  esac
+  if [[ -n "${COMPOSE_OVERRIDE}" ]]; then
+    [[ -f "${COMPOSE_OVERRIDE}" ]] || { echo "Compose lock override is missing: ${COMPOSE_OVERRIDE}" >&2; exit 1; }
+    override_args=(-f "${COMPOSE_OVERRIDE}")
+  fi
+  docker compose \
+    --project-name edutalent \
+    --project-directory "${SUPABASE_DIR}" \
+    --env-file "${SUPABASE_ENV}" \
+    --env-file "${APP_ENV}" \
+    -f "${SUPABASE_DIR}/docker-compose.yml" \
+    -f "${SCRIPT_DIR}/compose.production.yaml" \
+    "${override_args[@]}" \
+    "${profile_args[@]}" \
+    "$@"
+}
+
+initialize_state() {
+  mkdir -p "${OPERATIONS_STATE}" "${SNAPSHOT_DIR}" "${ALERT_DIR}" "${WAL_DIR}" "${PITR_DIR}"
+  chmod 0700 "${OPERATIONS_STATE}" "${SNAPSHOT_DIR}" "${ALERT_DIR}" "${WAL_DIR}" "${PITR_DIR}"
+}
+
+latest_file_time_iso() {
+  local directory="$1" pattern="$2" latest
+  latest="$(find "${directory}" -maxdepth 1 -type f -name "${pattern}" -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+  if [[ -n "${latest}" ]]; then
+    date -u -d "@$(stat -c %Y "${latest}")" +%Y-%m-%dT%H:%M:%SZ
+  fi
+}
+
+collect_snapshot() {
+  require_definitions
+  require_command docker
+  require_command openssl
+  initialize_state
+  local temp output now services_json stats_json db_metrics disk_free tls_remaining
+  local core_health=false qdrant_health=false ai_health=false latest_backup latest_wal
+  temp="$(mktemp -d)"
+  trap 'rm -rf "${temp}"' RETURN
+  services_json="${temp}/services.json"
+  stats_json="${temp}/stats.json"
+  if ! compose ps --format json >"${services_json}" 2>/dev/null; then
+    printf '[]\n' >"${services_json}"
+  fi
+  container_ids="$(compose ps --quiet 2>/dev/null | paste -sd' ' - || true)"
+  if [[ -n "${container_ids}" ]]; then
+    # shellcheck disable=SC2086
+    docker stats --no-stream --format '{{json .}}' ${container_ids} >"${stats_json}" 2>/dev/null || :
+  else
+    : >"${stats_json}"
+  fi
+  if compose exec -T app curl --fail --silent --max-time 5 http://127.0.0.1:8080/healthz >/dev/null 2>&1; then core_health=true; fi
+  if compose exec -T app sh -eu -c 'curl --fail --silent --max-time 5 --header "api-key: ${QDRANT_API_KEY}" http://qdrant:6333/readyz >/dev/null' >/dev/null 2>&1; then qdrant_health=true; fi
+  if compose exec -T app curl --fail --silent --max-time 5 http://ai-gateway:8090/healthz >/dev/null 2>&1; then ai_health=true; fi
+  db_metrics="$(compose exec -T db psql -U postgres -d "$(read_env "${SUPABASE_ENV}" POSTGRES_DB || true)" -AtF'|' -c "SELECT count(*), current_setting('max_connections')::int, pg_database_size(current_database())" 2>/dev/null || true)"
+  [[ "${db_metrics}" =~ ^[0-9]+\|[0-9]+\|[0-9]+$ ]] || db_metrics="-1|-1|-1"
+  disk_free="$(df -Pk "${OPERATIONS_STATE}" | awk 'NR==2 {print $4 * 1024}')"
+  tls_remaining=-1
+  tls_cert="$(read_env "${APP_ENV}" TLS_CERT_FILE)"
+  if [[ -f "${tls_cert}" ]]; then
+    not_after="$(openssl x509 -in "${tls_cert}" -noout -enddate | cut -d= -f2-)"
+    tls_remaining="$(( $(date -d "${not_after}" +%s) - $(date +%s) ))"
+  fi
+  latest_backup=""
+  if [[ -n "${EDUTALENT_BACKUP_DIR:-}" && -d "${EDUTALENT_BACKUP_DIR}" ]]; then
+    latest_metadata="$(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name '*.metadata.json' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+    if [[ -n "${latest_metadata}" ]]; then
+      latest_backup="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("created_at", ""))' "${latest_metadata}")"
+    fi
+  fi
+  latest_wal="$(latest_file_time_iso "${WAL_DIR}" '*')"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="${SNAPSHOT_DIR}/$(date -u +%Y%m%dT%H%M%SZ).json"
+  python3 - "${services_json}" "${stats_json}" "${output}" "${now}" "${disk_free}" "${tls_remaining}" "${db_metrics}" "${latest_backup}" "${latest_wal}" "${core_health}" "${qdrant_health}" "${ai_health}" <<'PY'
+import json, sys, time
+from pathlib import Path
+services_path, stats_path, output, collected, disk, tls, db, backup, wal, core, qdrant, ai = sys.argv[1:]
+def read_maybe_lines(path):
+    text = Path(path).read_text(encoding="utf-8").strip()
+    if not text:
+        return []
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, list) else [value]
+    except json.JSONDecodeError:
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+connections, connection_limit, database_size = (int(item) for item in db.split("|"))
+payload = {
+    "schema_version": 1,
+    "collected_at": collected,
+    "collected_epoch": time.time(),
+    "services": read_maybe_lines(services_path),
+    "container_stats": read_maybe_lines(stats_path),
+    "disk_free_bytes": int(float(disk)),
+    "tls_seconds_remaining": int(tls),
+    "database_connections": connections,
+    "database_connection_limit": connection_limit,
+    "database_size_bytes": database_size,
+    "latest_backup_created_at": backup or None,
+    "latest_wal_received_at": wal or None,
+    "core_health": core == "true",
+    "qdrant_health": qdrant == "true",
+    "ai_gateway_health": ai == "true",
+}
+Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(output)
+PY
+  cp "${output}" "${SNAPSHOT_DIR}/current.json.tmp"
+  mv "${SNAPSHOT_DIR}/current.json.tmp" "${SNAPSHOT_DIR}/current.json"
+  printf '%s\n' "${output}"
+}
+
+evaluate_alerts() {
+  require_definitions
+  initialize_state
+  local snapshot="${1:-${SNAPSHOT_DIR}/current.json}" output
+  [[ -f "${snapshot}" ]] || { echo "Snapshot not found: ${snapshot}" >&2; exit 1; }
+  output="${ALERT_DIR}/$(date -u +%Y%m%dT%H%M%SZ).json"
+  set +e
+  python3 "${HELPER}" evaluate-alerts --snapshot "${snapshot}" --policy "${POLICY}" --output "${output}"
+  result=$?
+  set -e
+  cp "${output}" "${ALERT_DIR}/current.json.tmp"
+  mv "${ALERT_DIR}/current.json.tmp" "${ALERT_DIR}/current.json"
+  return "${result}"
+}
+
+require_backup_configuration() {
+  require_command openssl
+  require_command tar
+  [[ -n "${EDUTALENT_BACKUP_DIR:-}" ]] || { echo "EDUTALENT_BACKUP_DIR is required." >&2; exit 1; }
+  [[ "${EDUTALENT_BACKUP_DIR}" == /* ]] || { echo "EDUTALENT_BACKUP_DIR must be absolute." >&2; exit 1; }
+  [[ -n "${EDUTALENT_BACKUP_PASSPHRASE_FILE:-}" && -f "${EDUTALENT_BACKUP_PASSPHRASE_FILE}" ]] || {
+    echo "EDUTALENT_BACKUP_PASSPHRASE_FILE must name an existing file." >&2
+    exit 1
+  }
+  pass_mode="$(stat -c %a "${EDUTALENT_BACKUP_PASSPHRASE_FILE}")"
+  case "${pass_mode}" in 400|600) ;; *) echo "Backup passphrase file must have mode 0400 or 0600." >&2; exit 1 ;; esac
+  mkdir -p "${EDUTALENT_BACKUP_DIR}"
+  chmod 0700 "${EDUTALENT_BACKUP_DIR}"
+  backup_root="$(canonical_path "${EDUTALENT_BACKUP_DIR}")"
+  case "${backup_root}/" in
+    "${SCRIPT_DIR%/}/"*|"${ROOT_CANDIDATE%/}/"*)
+      echo "Backup directory must remain outside the deployment and immutable release." >&2
+      exit 1
+      ;;
+  esac
+}
+
+backup_available_bytes() {
+  if [[ -n "${EDUTALENT_TEST_AVAILABLE_BYTES:-}" ]]; then
+    printf '%s\n' "${EDUTALENT_TEST_AVAILABLE_BYTES}"
+  else
+    df -Pk "${EDUTALENT_BACKUP_DIR}" | awk 'NR==2 {print $4 * 1024}'
+  fi
+}
+
+decrypt_backup() {
+  local archive="$1" destination="$2"
+  openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+    -pass "file:${EDUTALENT_BACKUP_PASSPHRASE_FILE}" \
+    -in "${archive}" | tar -C "${destination}" -xzf -
+}
+
+verify_decrypted_payload() {
+  local payload="$1"
+  python3 "${HELPER}" manifest-verify --root "${payload}" >/dev/null
+}
+
+backup_preflight() {
+  require_backup_configuration
+  local minimum_free available
+  minimum_free="${EDUTALENT_BACKUP_MIN_FREE_BYTES:-10737418240}"
+  available="$(backup_available_bytes)"
+  if (( available < minimum_free )); then
+    echo "Insufficient backup capacity: ${available} bytes available; ${minimum_free} required." >&2
+    exit 1
+  fi
+  echo "Backup destination and capacity verified: ${available} bytes available."
+}
+
+backup_create() {
+  require_definitions
+  backup_preflight >/dev/null
+  require_command docker
+  require_envs
+  local timestamp name archive temp payload metadata_file db_id db_name db_password collection
+  db_id="$(compose ps --quiet db)"
+  [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  name="edutalent-backup-${timestamp}"
+  archive="${EDUTALENT_BACKUP_DIR}/${name}.tar.gz.enc"
+  metadata_file="${archive}.metadata.json"
+  [[ ! -e "${archive}" && ! -e "${metadata_file}" ]] || { echo "Backup already exists: ${archive}" >&2; exit 1; }
+  temp="$(mktemp -d)"
+  payload="${temp}/${name}"
+  cleanup_backup() { rm -rf "${temp}" "${archive}.partial"; }
+  trap cleanup_backup RETURN
+  mkdir -p "${payload}/database" "${payload}/storage" "${payload}/qdrant" "${payload}/configuration/public" "${payload}/configuration/secret-escrow" "${payload}/wal"
+  chmod 0700 "${payload}" "${payload}/configuration/secret-escrow"
+  db_name="$(read_env "${SUPABASE_ENV}" POSTGRES_DB)"
+  db_name="${db_name:-postgres}"
+  db_password="$(read_env "${SUPABASE_ENV}" POSTGRES_PASSWORD)"
+  docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+    pg_dump -h 127.0.0.1 -U postgres -d "${db_name}" --format=custom --no-owner --no-acl \
+    >"${payload}/database/database.dump"
+  docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+    pg_dumpall -h 127.0.0.1 -U postgres --globals-only --no-role-passwords \
+    >"${payload}/database/globals.sql"
+  docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+    pg_basebackup -h 127.0.0.1 -U postgres -D - --format=tar --wal-method=fetch --checkpoint=fast --no-password \
+    >"${payload}/database/base.tar"
+
+  compose cp storage:/var/lib/storage/. "${payload}/storage" >/dev/null
+  collection="$(read_env "${APP_ENV}" QDRANT_COLLECTION)"
+  qdrant_response="${temp}/qdrant-snapshot.json"
+  qdrant_status="$(compose exec -T app sh -eu -c 'curl --silent --show-error --output /tmp/edutalent-qdrant-snapshot.json --write-out "%{http_code}" --request POST --header "api-key: ${QDRANT_API_KEY}" "http://qdrant:6333/collections/${QDRANT_COLLECTION}/snapshots"; cat /tmp/edutalent-qdrant-snapshot.json >&2' 2>"${qdrant_response}" || true)"
+  if [[ "${qdrant_status}" == "200" ]]; then
+    snapshot_name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["result"]["name"])' "${qdrant_response}")"
+    compose cp "qdrant:/qdrant/storage/collections/${collection}/snapshots/${snapshot_name}" "${payload}/qdrant/${snapshot_name}" >/dev/null
+    printf '%s\n' "${snapshot_name}" >"${payload}/qdrant/snapshot-name.txt"
+  elif [[ "${qdrant_status}" == "404" ]]; then
+    printf '%s\n' "collection-not-created" >"${payload}/qdrant/status.txt"
+  else
+    echo "Qdrant snapshot failed with HTTP ${qdrant_status:-unknown}." >&2
+    cat "${qdrant_response}" >&2
+    exit 1
+  fi
+
+  cp "${SCRIPT_DIR}/.env.edutalent.example" "${payload}/configuration/public/"
+  cp "${SCRIPT_DIR}/compose.production.yaml" "${payload}/configuration/public/"
+  cp "${SCRIPT_DIR}/Caddyfile" "${payload}/configuration/public/"
+  cp "${SCRIPT_DIR}/SUPABASE_UPSTREAM" "${payload}/configuration/public/"
+  cp "${APP_ENV}" "${payload}/configuration/secret-escrow/.env.edutalent"
+  cp "${SUPABASE_ENV}" "${payload}/configuration/secret-escrow/supabase.env"
+  chmod 0600 "${payload}/configuration/secret-escrow/.env.edutalent" "${payload}/configuration/secret-escrow/supabase.env"
+  if [[ -f "${ROOT_CANDIDATE}/manifests/release-manifest.json" ]]; then
+    cp "${ROOT_CANDIDATE}/manifests/release-manifest.json" "${payload}/configuration/public/"
+  elif command -v git >/dev/null 2>&1 && git -C "${ROOT_CANDIDATE}" rev-parse HEAD >/dev/null 2>&1; then
+    git -C "${ROOT_CANDIDATE}" rev-parse HEAD >"${payload}/configuration/public/git-head.txt"
+  fi
+  if find "${WAL_DIR}" -maxdepth 1 -type f -print -quit | grep -q .; then
+    cp -a "${WAL_DIR}/." "${payload}/wal/"
+  fi
+  python3 - "${temp}/metadata.json" "${timestamp}" "${db_name}" "${collection}" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+  "backup_type": "full",
+  "created_at_compact": sys.argv[2],
+  "database": sys.argv[3],
+  "qdrant_collection": sys.argv[4],
+  "includes": ["postgres-logical", "postgres-base", "storage", "qdrant", "encrypted-secret-escrow", "wal", "release-manifest"],
+  "provisional_rpo_seconds": 900,
+  "provisional_rto_seconds": 7200
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  python3 "${HELPER}" manifest-create --root "${payload}" --metadata "${temp}/metadata.json" >/dev/null
+  tar -C "${temp}" -czf - "${name}" | openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000 \
+    -pass "file:${EDUTALENT_BACKUP_PASSPHRASE_FILE}" -out "${archive}.partial"
+  chmod 0600 "${archive}.partial"
+  mv "${archive}.partial" "${archive}"
+  verify_temp="${temp}/verify"
+  mkdir -p "${verify_temp}"
+  decrypt_backup "${archive}" "${verify_temp}"
+  verify_decrypted_payload "${verify_temp}/${name}"
+  archive_sha="$(sha256sum "${archive}" | awk '{print $1}')"
+  python3 - "${metadata_file}.partial" "${archive}" "${archive_sha}" <<'PY'
+import json, os, sys
+from datetime import datetime, timezone
+from pathlib import Path
+path, archive, digest = sys.argv[1:]
+Path(path).write_text(json.dumps({
+  "schema_version": 1,
+  "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+  "archive": os.path.basename(archive),
+  "sha256": digest,
+  "encrypted": True,
+  "cipher": "AES-256-CBC",
+  "kdf": "PBKDF2-SHA256",
+  "iterations": 600000
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  chmod 0600 "${metadata_file}.partial"
+  mv "${metadata_file}.partial" "${metadata_file}"
+  echo "Created and verified encrypted backup: ${archive}"
+}
+
+backup_verify() {
+  require_definitions
+  require_backup_configuration
+  local archive="$1" temp payload
+  [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
+  temp="$(mktemp -d)"
+  trap 'rm -rf "${temp}"' RETURN
+  decrypt_backup "${archive}" "${temp}"
+  payload="$(find "${temp}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+  [[ -n "${payload}" ]] || { echo "Backup payload is missing." >&2; exit 1; }
+  verify_decrypted_payload "${payload}"
+  echo "Encrypted backup verified: ${archive}"
+}
+
+restore_drill() {
+  require_definitions
+  require_backup_configuration
+  require_command docker
+  local archive="$1" temp payload dump db_id db_password source_db drill_db
+  [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
+  db_id="$(compose ps --quiet db)"
+  [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
+  temp="$(mktemp -d)"
+  trap 'rm -rf "${temp}"' RETURN
+  decrypt_backup "${archive}" "${temp}"
+  payload="$(find "${temp}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+  verify_decrypted_payload "${payload}"
+  dump="${payload}/database/database.dump"
+  [[ -f "${dump}" ]] || { echo "Database dump is missing from backup." >&2; exit 1; }
+  source_db="$(read_env "${SUPABASE_ENV}" POSTGRES_DB)"; source_db="${source_db:-postgres}"
+  db_password="$(read_env "${SUPABASE_ENV}" POSTGRES_PASSWORD)"
+  drill_db="edutalent_restore_$(date -u +%Y%m%d%H%M%S)_$RANDOM"
+  cleanup_drill() {
+    docker exec -e "PGPASSWORD=${db_password}" "${db_id}" dropdb -h 127.0.0.1 -U postgres --if-exists "${drill_db}" >/dev/null 2>&1 || true
+  }
+  trap cleanup_drill RETURN
+  docker exec -e "PGPASSWORD=${db_password}" "${db_id}" createdb -h 127.0.0.1 -U postgres "${drill_db}"
+  docker cp "${dump}" "${db_id}:/tmp/edutalent-restore.dump"
+  docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+    pg_restore -h 127.0.0.1 -U postgres -d "${drill_db}" --no-owner --no-acl /tmp/edutalent-restore.dump
+  migration_count="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${drill_db}" -Atc 'SELECT count(*) FROM public.edutalent_migration_files')"
+  [[ "${migration_count}" =~ ^[1-9][0-9]*$ ]] || { echo "Restored migration registry is empty." >&2; exit 1; }
+  docker exec "${db_id}" rm -f /tmp/edutalent-restore.dump
+  cleanup_drill
+  trap - RETURN
+  echo "Database restore drill succeeded in temporary database ${drill_db}; source ${source_db} was not modified."
+}
+
+pitr_start() {
+  require_command docker
+  require_envs
+  initialize_state
+  if docker inspect edutalent-pitr-archive >/dev/null 2>&1; then
+    echo "Continuous WAL receiver already exists." >&2
+    exit 1
+  fi
+  db_id="$(compose ps --quiet db)"
+  [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
+  db_name="$(read_env "${SUPABASE_ENV}" POSTGRES_DB)"; db_name="${db_name:-postgres}"
+  db_password="$(read_env "${SUPABASE_ENV}" POSTGRES_PASSWORD)"
+  image="$(docker inspect --format '{{.Config.Image}}' "${db_id}")"
+  slot="edutalent_backup"
+  slot_exists="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${db_name}" -Atc "SELECT count(*) FROM pg_replication_slots WHERE slot_name='${slot}'")"
+  if [[ "${slot_exists}" == "0" ]]; then
+    docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${db_name}" -v ON_ERROR_STOP=1 -c "SELECT pg_create_physical_replication_slot('${slot}', true)" >/dev/null
+  fi
+  pgpass="${PITR_DIR}/pgpass"
+  printf 'db:5432:*:postgres:%s\n' "${db_password}" >"${pgpass}"
+  chmod 0600 "${pgpass}"
+  docker run --detach --name edutalent-pitr-archive --restart unless-stopped \
+    --network edutalent-data \
+    --user "$(id -u):$(id -g)" \
+    --read-only --tmpfs /tmp \
+    --cap-drop ALL --security-opt no-new-privileges \
+    --env PGPASSFILE=/run/secrets/pgpass \
+    --mount "type=bind,source=${WAL_DIR},target=/archive" \
+    --mount "type=bind,source=${pgpass},target=/run/secrets/pgpass,readonly" \
+    --entrypoint pg_receivewal \
+    "${image}" \
+    --dbname="postgresql://postgres@db:5432/${db_name}?sslmode=disable" \
+    --directory=/archive --slot="${slot}" --synchronous --verbose >/dev/null
+  echo "Continuous WAL reception started in ${WAL_DIR}."
+}
+
+pitr_stop() {
+  require_command docker
+  docker rm --force edutalent-pitr-archive >/dev/null 2>&1 || true
+  echo "Continuous WAL receiver stopped; archived WAL files were retained."
+}
+
+pitr_status() {
+  require_command docker
+  initialize_state
+  if docker inspect edutalent-pitr-archive >/dev/null 2>&1; then
+    docker inspect --format 'status={{.State.Status}} started={{.State.StartedAt}} restarts={{.RestartCount}}' edutalent-pitr-archive
+  else
+    echo "status=stopped"
+  fi
+  latest="$(latest_file_time_iso "${WAL_DIR}" '*')"
+  echo "latest_wal_received_at=${latest:-none}"
+}
+
+security_check() {
+  require_definitions
+  require_command docker
+  local temp
+  temp="$(mktemp -d)"
+  trap 'rm -rf "${temp}"' RETURN
+  compose config --format json >"${temp}/compose.json"
+  python3 "${HELPER}" compose-security --config "${temp}/compose.json"
+  if [[ -x "${PRODUCTION_COMMAND}" || -f "${PRODUCTION_COMMAND}" ]]; then
+    EDUTALENT_APP_ENV="${APP_ENV}" EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}" \
+      EDUTALENT_COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE}" bash "${PRODUCTION_COMMAND}" validate >/dev/null
+  fi
+  for service in $(compose config --services); do
+    id="$(compose ps --quiet "${service}" 2>/dev/null || true)"
+    [[ -n "${id}" ]] || continue
+    privileged="$(docker inspect --format '{{.HostConfig.Privileged}}' "${id}")"
+    network_mode="$(docker inspect --format '{{.HostConfig.NetworkMode}}' "${id}")"
+    [[ "${privileged}" == "false" && "${network_mode}" != "host" ]] || {
+      echo "Live security boundary failed for ${service}." >&2
+      exit 1
+    }
+  done
+  echo "Rendered and live production security boundaries verified."
+}
+
+load_test() {
+  require_definitions
+  local url="${1:-${EDUTALENT_LOAD_URL:-}}"
+  if [[ -z "${url}" ]]; then
+    app_domain="$(read_env "${APP_ENV}" APP_DOMAIN)"
+    url="https://${app_domain}/healthz"
+  fi
+  initialize_state
+  output="${OPERATIONS_STATE}/load-$(date -u +%Y%m%dT%H%M%SZ).json"
+  insecure_args=()
+  if [[ "${EDUTALENT_LOAD_INSECURE:-false}" == "true" ]]; then insecure_args=(--insecure); fi
+  python3 "${HELPER}" load-test \
+    --url "${url}" \
+    "${insecure_args[@]}" \
+    --duration "${EDUTALENT_LOAD_DURATION_SECONDS:-60}" \
+    --concurrency "${EDUTALENT_LOAD_CONCURRENCY:-16}" \
+    --timeout "${EDUTALENT_LOAD_TIMEOUT_SECONDS:-5}" \
+    --maximum-error-rate "${EDUTALENT_LOAD_MAXIMUM_ERROR_RATE:-0.01}" \
+    --maximum-p95-ms "${EDUTALENT_LOAD_MAXIMUM_P95_MS:-1000}" \
+    --output "${output}"
+}
+
+fault_test() {
+  require_command docker
+  echo "Restarting PostgreSQL to verify bounded recovery."
+  compose restart db >/dev/null
+  recovered=false
+  for attempt in $(seq 1 90); do
+    if compose exec -T app sh -eu -c 'psql "${DATABASE_URL}" -Atc "SELECT 1"' >/dev/null 2>&1; then recovered=true; break; fi
+    sleep 2
+  done
+  [[ "${recovered}" == true ]] || { echo "Database did not recover after restart." >&2; exit 1; }
+  echo "Database restart recovery verified."
+  compose up --detach --no-deps --force-recreate app >/dev/null
+  recovered=false
+  for attempt in $(seq 1 90); do
+    if compose exec -T app curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null 2>&1; then recovered=true; break; fi
+    sleep 2
+  done
+  [[ "${recovered}" == true ]] || { echo "Application did not recover after controlled recreation." >&2; exit 1; }
+  echo "Controlled application recreation verified."
+}
+
+acceptance() {
+  local url="${1:-}"
+  security_check
+  EDUTALENT_APP_ENV="${APP_ENV}" EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}" EDUTALENT_COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE}" bash "${PRODUCTION_COMMAND}" database-check
+  EDUTALENT_APP_ENV="${APP_ENV}" EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}" EDUTALENT_COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE}" bash "${PRODUCTION_COMMAND}" gateway-check
+  EDUTALENT_APP_ENV="${APP_ENV}" EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}" EDUTALENT_COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE}" bash "${PRODUCTION_COMMAND}" qdrant-check
+  EDUTALENT_APP_ENV="${APP_ENV}" EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}" EDUTALENT_COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE}" bash "${PRODUCTION_COMMAND}" ai-check
+  snapshot="$(collect_snapshot | tail -n1)"
+  evaluate_alerts "${snapshot}"
+  load_test "${url}"
+  fault_test
+  if [[ -n "${EDUTALENT_BACKUP_DIR:-}" && -n "${EDUTALENT_BACKUP_PASSPHRASE_FILE:-}" ]]; then
+    backup_create
+    latest_archive="$(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+    backup_verify "${latest_archive}"
+    restore_drill "${latest_archive}"
+  else
+    echo "Backup/restore acceptance was not run because backup configuration is absent." >&2
+    exit 1
+  fi
+  echo "Final non-destructive production acceptance suite passed."
+}
+
+prune_backups() {
+  require_backup_configuration
+  local retention="${EDUTALENT_BACKUP_RETENTION_DAYS:-30}" minimum="${EDUTALENT_BACKUP_MINIMUM_COPIES:-7}"
+  mapfile -t archives < <(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc' -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+  for index in "${!archives[@]}"; do
+    archive="${archives[$index]}"
+    if (( index < minimum )); then continue; fi
+    if [[ "$(find "${archive}" -mtime "+${retention}" -print)" == "${archive}" ]]; then
+      rm -f -- "${archive}" "${archive}.metadata.json"
+      echo "Pruned expired backup: ${archive}"
+    fi
+  done
+}
+
+validate_definitions() {
+  require_definitions
+  bash -n "${SCRIPT_DIR}/edutalent-operations"
+  python3 -m py_compile "${HELPER}" "${SCRIPT_DIR}/operations/recovery_drill.py"
+  python3 -m unittest discover -s "${SCRIPT_DIR}/operations" -p 'test_*.py' -v
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value["minimum_disk_free_bytes"] > 0' "${POLICY}"
+  echo "Production operations definitions are valid."
+}
+
+command="${1:-help}"
+shift || true
+case "${command}" in
+  validate-definitions) validate_definitions ;;
+  snapshot) collect_snapshot ;;
+  alerts) evaluate_alerts "${1:-}" ;;
+  monitor-once) snapshot="$(collect_snapshot | tail -n1)"; evaluate_alerts "${snapshot}" ;;
+  monitor-loop)
+    interval="${1:-60}"
+    [[ "${interval}" =~ ^[1-9][0-9]*$ ]] || { echo "monitor-loop interval must be a positive integer." >&2; exit 2; }
+    while true; do
+      snapshot="$(collect_snapshot | tail -n1)"
+      evaluate_alerts "${snapshot}" || true
+      sleep "${interval}"
+    done
+    ;;
+  backup-preflight) backup_preflight ;;
+  backup-create) backup_create ;;
+  backup-verify) [[ $# -eq 1 ]] || { echo "backup-verify requires one archive." >&2; exit 2; }; backup_verify "$1" ;;
+  restore-drill) [[ $# -eq 1 ]] || { echo "restore-drill requires one archive." >&2; exit 2; }; restore_drill "$1" ;;
+  pitr-start) pitr_start ;;
+  pitr-stop) pitr_stop ;;
+  pitr-status) pitr_status ;;
+  security-check) security_check ;;
+  load-test) load_test "${1:-}" ;;
+  fault-test) fault_test ;;
+  acceptance) acceptance "${1:-}" ;;
+  prune) prune_backups ;;
+  help|-h|--help) usage ;;
+  *) echo "Unknown command: ${command}" >&2; usage >&2; exit 2 ;;
+esac

@@ -6,9 +6,10 @@ The `full-validation` label marks a pull request as being in final review.
 
 Keep a pull request in draft and remove `full-validation` while implementation is
 still changing. Every commit still runs `AI change gate`, package-definition
-validation, production-topology validation, and appliance-definition validation
-when their paths are affected. The complete image, database, production-stack,
-and appliance builds are deliberately not repeated for every draft commit.
+validation, production-topology validation, appliance-definition validation, and
+production-operations definition/security scanning when their paths are affected.
+The complete image, database, production-stack, appliance, recovery, backup, and
+load builds are deliberately not repeated for every draft commit.
 
 ## Final exact-head review
 
@@ -23,9 +24,14 @@ While the PR is ready and the label is present, the final candidate must complet
 
 - `.github/workflows/full-validation.yml` with complete database, Rust, and gate
   jobs successful;
-- the pull-request validation jobs in Package, Production Foundation, and
-  Air-gapped Appliance with their expensive jobs either successful when selected
-  or intentionally skipped while focused validation is selected;
+- the pull-request validation jobs in Package, Production Foundation, Air-gapped
+  Appliance, and Production Operations with their expensive jobs successful when
+  selected or intentionally skipped while focused validation is selected;
+- `.github/workflows/production-operations.yml` with definition regressions and
+  high/critical security scans successful, plus PostgreSQL PITR, Qdrant recovery,
+  failed-migration rollback, encrypted full backup/restore, configuration-failure,
+  local alert, sustained-load, database-restart, and controlled-app-recreation
+  evidence successful on the exact final head;
 - `.github/workflows/mirror-final-proof.yml` in the public validation mirror,
   which verifies the exact-head AI and Full Validation gates and then enforces
   this strict order:
@@ -39,16 +45,17 @@ While the PR is ready and the label is present, the final candidate must complet
   complete amd64 image/model/SBOM/signature appliance build, first startup with
   pulls disabled, a native arm64 custom-image build, and its final gate successful.
 
-A failed Production Foundation required job is never hidden by fallback. Mirror
-uses fallback only for an absent exact-head PR run or the expected focused result
-where topology succeeded and the two complete jobs were skipped. Fresh dispatch
-IDs prevent older canceled runs on the same SHA from being reused.
+A failed Production Foundation or Production Operations required job is never
+hidden by fallback. Mirror uses fallback only for an absent exact-head Production
+Foundation PR run or the expected focused result where topology succeeded and the
+two complete jobs were skipped. Fresh dispatch IDs prevent older canceled runs on
+the same SHA from being reused.
 
-The sequential proof prevents complete Production Foundation, Package, and
+The sequential mirror proof prevents complete Production Foundation, Package, and
 appliance builds from competing or duplicating heavy work. Package runs immediately
 before the appliance so both use the shared `edutalent-runtime` BuildKit cache.
-The final exact-head appliance proof remains mandatory; only its timing is deferred
-until the cheaper gates have succeeded.
+The final exact-head appliance and operations recovery proof remain mandatory;
+only their timing is separated.
 
 GHCR publication is intentionally skipped on pull requests. It becomes mandatory
 only for a protected `v*` release tag or an explicitly approved workflow dispatch
@@ -62,5 +69,6 @@ before committing. Reapply the label and mark ready only when the next final
 candidate is stable.
 
 Do not count an older SHA, canceled workflow, or skipped required job as passing.
-Inspect diagnostic and release evidence artifacts before merge. Merge only with an
-expected-head guard after all required jobs and review threads are resolved.
+Inspect diagnostic, scan, backup, recovery, load, and release evidence artifacts
+before merge. Merge only with an expected-head guard after all required jobs and
+review threads are resolved.

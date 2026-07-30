@@ -1,0 +1,18 @@
+{
+  "required_services": [
+    "gateway",
+    "app",
+    "ai-gateway",
+    "db",
+    "kong",
+    "auth",
+    "rest",
+    "storage",
+    "qdrant"
+  ],
+  "minimum_disk_free_bytes": 10737418240,
+  "minimum_tls_seconds_remaining": 1209600,
+  "maximum_database_connection_ratio": 0.85,
+  "maximum_backup_age_seconds": 90000,
+  "maximum_wal_age_seconds": 1200
+}

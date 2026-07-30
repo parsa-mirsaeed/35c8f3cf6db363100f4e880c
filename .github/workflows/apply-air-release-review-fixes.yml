@@ -1,0 +1,58 @@
+name: Apply protected release review correction
+
+on:
+  push:
+    branches:
+      - feature/air-gapped-packaging-ghcr
+    paths:
+      - .github/workflows/apply-air-release-review-fixes.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-air-release-review-fixes
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.repository == 'parsa-mirsaeed/35c8f3cf6db363100f4e880c'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/air-gapped-packaging-ghcr
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Apply reviewed release hardening
+        run: python3 scripts/ci/apply_air_release_review_fixes.py
+
+      - name: Run focused appliance and workflow regressions
+        run: |
+          set -euo pipefail
+          bash -n scripts/appliance/build.sh scripts/appliance/validate.sh
+          bash scripts/appliance/validate.sh
+          git diff --check
+
+      - name: Commit only the reviewed correction
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/apply-air-release-review-fixes.yml \
+            scripts/ci/apply_air_release_review_fixes.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- \
+            .github/workflows/air-gapped-release.yml \
+            .github/workflows/package.yml \
+            scripts/appliance/build.sh \
+            scripts/appliance/validate.sh
+          git add -u -- \
+            .github/workflows/apply-air-release-review-fixes.yml \
+            scripts/ci/apply_air_release_review_fixes.py
+          git diff --cached --check
+          git status --short
+          git commit -m 'fix(release): harden protected keyless workflow'
+          git push origin HEAD:feature/air-gapped-packaging-ghcr

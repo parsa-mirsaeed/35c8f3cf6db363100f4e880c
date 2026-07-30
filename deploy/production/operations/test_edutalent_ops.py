@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("edutalent_ops.py")
+PRODUCTION_DIR = Path(__file__).resolve().parent.parent
+OPERATIONS_SCRIPT_PATH = PRODUCTION_DIR / "edutalent-operations"
 WORKFLOW_PATH = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "production-operations.yml"
 spec = importlib.util.spec_from_file_location("edutalent_ops", MODULE_PATH)
 assert spec and spec.loader
@@ -115,6 +117,15 @@ class WorkflowPrivilegeBoundaryTests(unittest.TestCase):
         self.assertIn('if [[ "${receiver_active}" != true ]]; then', workflow)
         self.assertIn("docker logs --tail 100 edutalent-pitr-archive", workflow)
         self.assertIn("Active WAL receiver did not persist an archive file", workflow)
+
+    def test_wal_receiver_uses_database_loopback_namespace(self) -> None:
+        script = OPERATIONS_SCRIPT_PATH.read_text(encoding="utf-8")
+        pitr_start = script.split("pitr_start() {", 1)[1].split("\npitr_stop() {", 1)[0]
+        self.assertIn("--network container:${db_id}", pitr_start)
+        self.assertIn("127.0.0.1:5432:*:postgres", pitr_start)
+        self.assertIn("postgresql://postgres@127.0.0.1:5432/", pitr_start)
+        self.assertNotIn("--network edutalent-data", pitr_start)
+        self.assertNotIn("postgresql://postgres@db:5432/", pitr_start)
 
 
 class AlertTests(unittest.TestCase):

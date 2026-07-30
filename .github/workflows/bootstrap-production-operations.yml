@@ -1,9 +1,12 @@
 name: Materialize Production Operations
 
 on:
-  push:
+  pull_request:
+    types:
+      - opened
+      - synchronize
     branches:
-      - feature/production-operations
+      - main
 
 permissions:
   contents: write

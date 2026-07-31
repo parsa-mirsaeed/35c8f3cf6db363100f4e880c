@@ -1,0 +1,71 @@
+name: Apply Operations Review Fixes V2
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'feature/production-operations' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/production-operations
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Extract and execute the standalone patch program
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'EXTRACT_PATCH_PROGRAM'
+          from pathlib import Path
+          from textwrap import dedent
+
+          workflow = Path('.github/workflows/apply-operations-review-fixes.yml')
+          text = workflow.read_text(encoding='utf-8')
+          start_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n          rm -f .github/workflows/apply-operations-review-fixes.yml"
+          start = text.find(start_marker)
+          end = text.rfind(end_marker)
+          if start < 0 or end < 0 or end <= start:
+              raise SystemExit('could not extract the complete operations review patch program')
+          source = dedent(text[start + len(start_marker):end])
+          destination = Path('/tmp/apply_operations_review_fixes.py')
+          destination.write_text(source, encoding='utf-8')
+          EXTRACT_PATCH_PROGRAM
+
+          python3 -m py_compile /tmp/apply_operations_review_fixes.py
+          python3 /tmp/apply_operations_review_fixes.py
+
+          rm -f .github/workflows/apply-operations-review-fixes.yml
+          rm -f .github/workflows/apply-operations-review-fixes-v2.yml
+
+          bash -n deploy/production/edutalent-operations
+          python3 -m py_compile deploy/production/operations/edutalent_ops.py
+          python3 -m unittest discover -s deploy/production/operations -p 'test_*.py' -v
+          bash deploy/production/edutalent-operations validate-definitions
+          python3 - <<'VALIDATE_POLICY'
+          import json
+          from pathlib import Path
+          policy = json.loads(Path('deploy/production/operations/alert-policy.json').read_text(encoding='utf-8'))
+          assert policy['minimum_backup_disk_free_bytes'] > 0
+          VALIDATE_POLICY
+          git diff --check
+
+      - name: Commit implementation and regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git diff --cached --quiet && { echo 'Operations review patch produced no change.' >&2; exit 1; }
+          git commit -m 'fix: close production operations integrity gaps'
+          git push origin HEAD:feature/production-operations

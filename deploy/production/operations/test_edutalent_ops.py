@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -54,13 +55,36 @@ class BackupManifestTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "mode mismatch"):
                 ops.verify_manifest(root)
 
-    def test_decrypt_restores_archived_modes_before_manifest_verification(self) -> None:
+    def test_manifest_normalizes_payload_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "payload"
+            nested = root / "nested"
+            nested.mkdir(parents=True)
+            root.chmod(0o755)
+            nested.chmod(0o755)
+            public_file = nested / "public.txt"
+            public_file.write_text("public", encoding="utf-8")
+            public_file.chmod(0o644)
+            executable_file = root / "tool"
+            executable_file.write_bytes(b"tool")
+            executable_file.chmod(0o755)
+
+            manifest = ops.create_manifest(root)
+            ops.verify_manifest(root)
+
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(nested.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(public_file.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(executable_file.stat().st_mode), 0o600)
+            self.assertEqual({row["mode"] for row in manifest["files"]}, {0o600})
+
         script = OPERATIONS_SCRIPT_PATH.read_text(encoding="utf-8")
         decrypt = script.split("decrypt_backup() {", 1)[1].split(
             "\nverify_decrypted_payload() {", 1
         )[0]
-        self.assertIn("--same-permissions", decrypt)
-        self.assertIn("manifest-verify", script)
+        self.assertNotIn("--same-permissions", decrypt)
+        self.assertIn("manifest-create", script)
+
 
 
 class ComposeSecurityTests(unittest.TestCase):

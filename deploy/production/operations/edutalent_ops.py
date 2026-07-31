@@ -47,10 +47,36 @@ def iter_payload_files(root: Path) -> Iterable[Path]:
             yield path
 
 
+def normalize_payload_permissions(root: Path) -> dict[str, int]:
+    root = root.resolve()
+    if not root.is_dir():
+        raise RuntimeError(f"backup payload is not a directory: {root}")
+    root.chmod(0o700)
+    directories = 1
+    files = 0
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise RuntimeError(
+                f"backup payload contains a symlink: {path.relative_to(root)}"
+            )
+        if path.is_dir():
+            path.chmod(0o700)
+            directories += 1
+            continue
+        if not path.is_file():
+            raise RuntimeError(
+                f"backup payload contains a non-regular entry: {path.relative_to(root)}"
+            )
+        path.chmod(0o600)
+        files += 1
+    return {"directories": directories, "files": files}
+
+
 def create_manifest(root: Path, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     root = root.resolve()
     if not root.is_dir():
         raise RuntimeError(f"backup payload is not a directory: {root}")
+    normalize_payload_permissions(root)
     files = []
     for path in iter_payload_files(root):
         stat = path.stat()

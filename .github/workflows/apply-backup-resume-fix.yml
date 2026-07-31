@@ -6,6 +6,11 @@ on:
       - feature/production-operations
     paths:
       - .github/workflows/apply-backup-resume-fix.yml
+  pull_request:
+    types:
+      - synchronize
+    paths:
+      - .github/workflows/apply-backup-resume-fix.yml
 
 permissions:
   contents: write

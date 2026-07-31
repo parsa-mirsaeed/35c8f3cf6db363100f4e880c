@@ -1,11 +1,6 @@
 name: Apply exact-container backup resume fix
 
 on:
-  push:
-    branches:
-      - feature/production-operations
-    paths:
-      - .github/workflows/apply-backup-resume-fix.yml
   pull_request:
     types:
       - synchronize
@@ -117,10 +112,10 @@ jobs:
               ),
           ]
           for old, new in replacements:
-              count = script.count(old)
-              if count != 1:
-                  raise SystemExit(f"expected one script match, found {count}: {old[:80]!r}")
-              script = script.replace(old, new, 1)
+              if old in script:
+                  script = script.replace(old, new, 1)
+              elif new not in script:
+                  raise SystemExit(f"script is in an unexpected state: {old[:80]!r}")
           script_path.write_text(script, encoding="utf-8")
 
           test_path = Path("deploy/production/operations/test_review_regressions.py")
@@ -150,12 +145,13 @@ jobs:
                   self.assertNotIn("db|", quiesce_case)
                   self.assertNotIn("qdrant", quiesce_case)
 '''
-          count = tests.count(old_test)
-          if count != 1:
-              raise SystemExit(f"expected one regression-test match, found {count}")
-          test_path.write_text(tests.replace(old_test, new_test, 1), encoding="utf-8")
+          if old_test in tests:
+              tests = tests.replace(old_test, new_test, 1)
+          elif new_test not in tests:
+              raise SystemExit("regression test is in an unexpected state")
+          test_path.write_text(tests, encoding="utf-8")
 
-          Path(".github/workflows/apply-backup-resume-fix.yml").unlink()
+          Path(".github/workflows/apply-backup-resume-fix.yml").unlink(missing_ok=True)
           PY
 
           bash -n deploy/production/edutalent-operations
@@ -177,5 +173,9 @@ jobs:
             deploy/production/operations/test_review_regressions.py \
             .github/workflows/apply-backup-resume-fix.yml
           git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Implementation already applied."
+            exit 0
+          fi
           git commit -m "fix(operations): resume exact quiesced containers"
           git push origin HEAD:feature/production-operations

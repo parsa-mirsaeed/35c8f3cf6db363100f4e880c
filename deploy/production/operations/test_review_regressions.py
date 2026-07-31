@@ -97,11 +97,14 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
     def function(self, name: str, next_name: str) -> str:
         return self.script.split(f"{name}() {{", 1)[1].split(f"\n{next_name}() {{", 1)[0]
 
-    def test_backup_quiesces_and_resumes_writer_services(self) -> None:
+    def test_backup_quiesces_and_resumes_exact_writer_containers(self) -> None:
         backup = self.function("backup_create", "backup_verify")
         self.assertIn("compose ps --services --filter status=running", backup)
         self.assertIn("compose stop --timeout 30", backup)
-        self.assertIn('compose start "${quiesced_services[@]}"', backup)
+        self.assertIn("quiesced_container_ids=()", backup)
+        self.assertIn('id="$(compose ps --quiet "${service}"', backup)
+        self.assertIn('docker start "${quiesced_container_ids[@]}"', backup)
+        self.assertNotIn('compose start "${quiesced_services[@]}"', backup)
         self.assertIn("--no-deps --pull never --entrypoint sh app", backup)
         self.assertIn('"consistency": "write-quiesced"', backup)
         quiesce_case = backup.split('case "${service}" in', 1)[1].split('esac', 1)[0]

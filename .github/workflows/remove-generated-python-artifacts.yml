@@ -1,0 +1,44 @@
+name: Remove Generated Python Artifacts
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.head_ref == 'feature/production-operations' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/production-operations
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Remove generated artifacts and verify the source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          find deploy/production/operations -type d -name __pycache__ -prune -exec rm -rf {} +
+          find deploy/production/operations -type f -name '*.py[co]' -delete
+          rm -f .github/workflows/remove-generated-python-artifacts.yml
+          test -z "$(find deploy/production/operations \( -type d -name __pycache__ -o -type f -name '*.py[co]' \) -print -quit)"
+          bash -n deploy/production/edutalent-operations
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s deploy/production/operations -p 'test_*.py' -v
+          git diff --check
+
+      - name: Commit clean source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git diff --cached --quiet && { echo 'Generated-artifact cleanup produced no change.' >&2; exit 1; }
+          git commit -m 'chore: remove generated Python bytecode'
+          git push origin HEAD:feature/production-operations

@@ -26,6 +26,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          from textwrap import dedent, indent
 
           helper = Path('deploy/production/operations/edutalent_ops.py')
           text = helper.read_text(encoding='utf-8')
@@ -91,7 +92,8 @@ jobs:
           end = text.find('\n\n\nclass ComposeSecurityTests', start)
           if start < 0 or end < 0:
               raise SystemExit('backup permission regression test anchor was not found')
-          replacement = '''    def test_manifest_normalizes_payload_permissions(self) -> None:
+          method = dedent('''\
+          def test_manifest_normalizes_payload_permissions(self) -> None:
               with tempfile.TemporaryDirectory() as directory:
                   root = Path(directory) / "payload"
                   nested = root / "nested"
@@ -120,7 +122,8 @@ jobs:
               )[0]
               self.assertNotIn("--same-permissions", decrypt)
               self.assertIn("manifest-create", script)
-          '''
+          ''')
+          replacement = indent(method, '    ')
           tests.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
           PY
 

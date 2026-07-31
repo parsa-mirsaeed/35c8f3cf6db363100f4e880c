@@ -96,3 +96,13 @@ Then execute the tenant/document/final security acceptance cases in `SECURITY_AC
 - monthly: isolated PostgreSQL PITR and Qdrant snapshot recovery;
 - quarterly: full replacement-host restore including Storage, secrets, TLS, load, and controlled failback;
 - after every database, Supabase, Qdrant, storage, or release-format upgrade: full recovery drill before deployment.
+
+
+## Coordinated backup boundary
+
+`backup-create` stops the running application and Supabase writer-facing
+services before capturing PostgreSQL, Storage, and the Qdrant snapshot. A
+capability-free one-off application image performs only the Qdrant snapshot
+request. Writer services are restarted after capture and on every error path.
+This creates a documented write-quiesced cross-service recovery point instead
+of three independently timed copies.

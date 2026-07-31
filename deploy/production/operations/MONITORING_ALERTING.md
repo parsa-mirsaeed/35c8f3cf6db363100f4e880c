@@ -51,3 +51,13 @@ Any integration must stay inside the approved management network unless the secu
 ## Threshold changes
 
 Thresholds live in `alert-policy.json`. Changes require review and regression tests. Lowering sensitivity to hide a recurring incident is not remediation. Capacity thresholds must account for database growth, WAL retention, Qdrant snapshots, Storage, and at least one complete backup staging cycle.
+
+
+## Fail-closed integrity signals
+
+Monitoring verifies the newest backup sidecar against the referenced encrypted
+archive and its SHA-256 digest. A missing, truncated, replaced, or path-unsafe
+archive is critical even when the sidecar timestamp is recent. The backup disk
+has an independent free-space threshold, the WAL receiver must be running in
+addition to having a recent completed segment, and an unreadable or invalid TLS
+certificate is reported as an unknown critical state rather than ignored.

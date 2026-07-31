@@ -56,6 +56,7 @@ Commands:
   backup-verify <archive>       Decrypt and verify a backup without restoring it
   restore-drill <archive>       Restore the database into a temporary drill DB
   pitr-start                    Start continuous PostgreSQL WAL reception
+  pitr-verify                   Verify active reception and force a new WAL archive
   pitr-stop                     Stop continuous WAL reception
   pitr-status                   Show WAL receiver status and last archive time
   security-check                Verify rendered and live security boundaries
@@ -145,13 +146,23 @@ latest_file_time_iso() {
   fi
 }
 
+latest_wal_time_iso() {
+  local latest
+  latest="$(find "${WAL_DIR}" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9A-F]{24}' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+  if [[ -n "${latest}" ]]; then
+    date -u -d "@$(stat -c %Y "${latest}")" +%Y-%m-%dT%H:%M:%SZ
+  fi
+}
+
 collect_snapshot() {
   require_definitions
   require_command docker
   require_command openssl
   initialize_state
-  local temp output now services_json stats_json db_metrics disk_free tls_remaining
-  local core_health=false qdrant_health=false ai_health=false latest_backup latest_wal
+  local temp output now services_json stats_json db_metrics disk_free backup_disk_free tls_remaining
+  local latest_backup latest_wal latest_metadata tls_cert not_after expiry_epoch container_ids
+  local core_health=false qdrant_health=false ai_health=false
+  local backup_configured=false backup_verified=false wal_receiver_running=false
   temp="$(mktemp -d)"
   trap 'rm -rf "${temp}"' RETURN
   services_json="${temp}/services.json"
@@ -171,27 +182,38 @@ collect_snapshot() {
   if compose exec -T app curl --fail --silent --max-time 5 http://ai-gateway:8090/healthz >/dev/null 2>&1; then ai_health=true; fi
   db_metrics="$(compose exec -T db psql -U postgres -d "$(read_env "${SUPABASE_ENV}" POSTGRES_DB || true)" -AtF'|' -c "SELECT count(*), current_setting('max_connections')::int, pg_database_size(current_database())" 2>/dev/null || true)"
   [[ "${db_metrics}" =~ ^[0-9]+\|[0-9]+\|[0-9]+$ ]] || db_metrics="-1|-1|-1"
-  disk_free="$(df -Pk "${OPERATIONS_STATE}" | awk 'NR==2 {print $4 * 1024}')"
-  tls_remaining=-1
-  tls_cert="$(read_env "${APP_ENV}" TLS_CERT_FILE)"
-  if [[ -f "${tls_cert}" ]]; then
-    not_after="$(openssl x509 -in "${tls_cert}" -noout -enddate | cut -d= -f2-)"
-    tls_remaining="$(( $(date -d "${not_after}" +%s) - $(date +%s) ))"
-  fi
+  disk_free="$(df -Pk "${OPERATIONS_STATE}" 2>/dev/null | awk 'NR==2 {print $4 * 1024}' || true)"
+  [[ "${disk_free}" =~ ^[0-9]+$ ]] || disk_free=-1
+  backup_disk_free=-1
   latest_backup=""
-  if [[ -n "${EDUTALENT_BACKUP_DIR:-}" && -d "${EDUTALENT_BACKUP_DIR}" ]]; then
-    latest_metadata="$(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name '*.metadata.json' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true)"
-    if [[ -n "${latest_metadata}" ]]; then
-      latest_backup="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("created_at", ""))' "${latest_metadata}")"
+  if [[ -n "${EDUTALENT_BACKUP_DIR:-}" ]]; then
+    backup_configured=true
+    if [[ -d "${EDUTALENT_BACKUP_DIR}" ]]; then
+      backup_disk_free="$(df -Pk "${EDUTALENT_BACKUP_DIR}" 2>/dev/null | awk 'NR==2 {print $4 * 1024}' || true)"
+      [[ "${backup_disk_free}" =~ ^[0-9]+$ ]] || backup_disk_free=-1
+      latest_metadata="$(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name '*.metadata.json' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+      if [[ -n "${latest_metadata}" ]] && latest_backup="$(python3 "${HELPER}" backup-metadata-verify --metadata "${latest_metadata}" --backup-dir "${EDUTALENT_BACKUP_DIR}" 2>/dev/null)"; then
+        backup_verified=true
+      else
+        latest_backup=""
+      fi
     fi
   fi
-  latest_wal="$(latest_file_time_iso "${WAL_DIR}" '*')"
+  tls_remaining=-1
+  tls_cert="$(read_env "${APP_ENV}" TLS_CERT_FILE)"
+  if [[ -r "${tls_cert}" ]] && not_after="$(openssl x509 -in "${tls_cert}" -noout -enddate 2>/dev/null | cut -d= -f2-)" && expiry_epoch="$(date -d "${not_after}" +%s 2>/dev/null)"; then
+    tls_remaining="$(( expiry_epoch - $(date +%s) ))"
+  fi
+  if [[ "$(docker inspect --format '{{.State.Running}}' edutalent-pitr-archive 2>/dev/null || true)" == true ]]; then
+    wal_receiver_running=true
+  fi
+  latest_wal="$(latest_wal_time_iso)"
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   output="${SNAPSHOT_DIR}/$(date -u +%Y%m%dT%H%M%SZ).json"
-  python3 - "${services_json}" "${stats_json}" "${output}" "${now}" "${disk_free}" "${tls_remaining}" "${db_metrics}" "${latest_backup}" "${latest_wal}" "${core_health}" "${qdrant_health}" "${ai_health}" <<'PY'
+  python3 - "${services_json}" "${stats_json}" "${output}" "${now}" "${disk_free}" "${backup_disk_free}" "${tls_remaining}" "${db_metrics}" "${latest_backup}" "${latest_wal}" "${core_health}" "${qdrant_health}" "${ai_health}" "${backup_configured}" "${backup_verified}" "${wal_receiver_running}" <<'PY'
 import json, sys, time
 from pathlib import Path
-services_path, stats_path, output, collected, disk, tls, db, backup, wal, core, qdrant, ai = sys.argv[1:]
+services_path, stats_path, output, collected, disk, backup_disk, tls, db, backup, wal, core, qdrant, ai, backup_configured, backup_verified, wal_receiver = sys.argv[1:]
 def read_maybe_lines(path):
     text = Path(path).read_text(encoding="utf-8").strip()
     if not text:
@@ -209,12 +231,16 @@ payload = {
     "services": read_maybe_lines(services_path),
     "container_stats": read_maybe_lines(stats_path),
     "disk_free_bytes": int(float(disk)),
+    "backup_disk_free_bytes": int(float(backup_disk)),
     "tls_seconds_remaining": int(tls),
     "database_connections": connections,
     "database_connection_limit": connection_limit,
     "database_size_bytes": database_size,
     "latest_backup_created_at": backup or None,
+    "latest_backup_verified": backup_verified == "true",
+    "backup_configured": backup_configured == "true",
     "latest_wal_received_at": wal or None,
+    "wal_receiver_running": wal_receiver == "true",
     "core_health": core == "true",
     "qdrant_health": qdrant == "true",
     "ai_gateway_health": ai == "true",
@@ -302,6 +328,9 @@ backup_create() {
   require_command docker
   require_envs
   local timestamp name archive temp payload metadata_file db_id db_name db_password collection
+  local qdrant_response qdrant_output qdrant_status snapshot_name service required_service id app_recovered wal_file
+  local -a running_services=() quiesced_services=()
+  local services_resumed=false
   db_id="$(compose ps --quiet db)"
   [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -311,10 +340,46 @@ backup_create() {
   [[ ! -e "${archive}" && ! -e "${metadata_file}" ]] || { echo "Backup already exists: ${archive}" >&2; exit 1; }
   temp="$(mktemp -d)"
   payload="${temp}/${name}"
-  cleanup_backup() { rm -rf "${temp}" "${archive}.partial"; }
+  cleanup_backup() {
+    local status=$?
+    if [[ "${services_resumed}" != true && ${#quiesced_services[@]} -gt 0 ]]; then
+      if compose start "${quiesced_services[@]}" >/dev/null; then
+        services_resumed=true
+      else
+        echo "Failed to resume services after backup capture." >&2
+        status=1
+      fi
+    fi
+    rm -rf "${temp}" "${archive}.partial"
+    return "${status}"
+  }
   trap cleanup_backup RETURN
   mkdir -p "${payload}/database" "${payload}/storage" "${payload}/qdrant" "${payload}/configuration/public" "${payload}/configuration/secret-escrow" "${payload}/wal"
   chmod 0700 "${payload}" "${payload}/configuration/secret-escrow"
+
+  mapfile -t running_services < <(compose ps --services --filter status=running)
+  for service in "${running_services[@]}"; do
+    case "${service}" in
+      gateway|app|kong|supavisor|studio|auth|rest|realtime|storage|meta|functions)
+        quiesced_services+=("${service}")
+        ;;
+    esac
+  done
+  for required_service in gateway app storage; do
+    printf '%s\n' "${quiesced_services[@]}" | grep -Fxq "${required_service}" || {
+      echo "Required writer-facing service is not running: ${required_service}" >&2
+      exit 1
+    }
+  done
+  compose stop --timeout 30 "${quiesced_services[@]}" >/dev/null
+  for service in "${quiesced_services[@]}"; do
+    id="$(compose ps --all --quiet "${service}" 2>/dev/null || true)"
+    if [[ -n "${id}" && "$(docker inspect --format '{{.State.Running}}' "${id}" 2>/dev/null || true)" == true ]]; then
+      echo "Writer-facing service did not quiesce: ${service}" >&2
+      exit 1
+    fi
+  done
+
   db_name="$(read_env "${SUPABASE_ENV}" POSTGRES_DB)"
   db_name="${db_name:-postgres}"
   db_password="$(read_env "${SUPABASE_ENV}" POSTGRES_PASSWORD)"
@@ -331,7 +396,14 @@ backup_create() {
   compose cp storage:/var/lib/storage/. "${payload}/storage" >/dev/null
   collection="$(read_env "${APP_ENV}" QDRANT_COLLECTION)"
   qdrant_response="${temp}/qdrant-snapshot.json"
-  qdrant_status="$(compose exec -T app sh -eu -c 'curl --silent --show-error --output /tmp/edutalent-qdrant-snapshot.json --write-out "%{http_code}" --request POST --header "api-key: ${QDRANT_API_KEY}" "http://qdrant:6333/collections/${QDRANT_COLLECTION}/snapshots"; cat /tmp/edutalent-qdrant-snapshot.json >&2' 2>"${qdrant_response}" || true)"
+  qdrant_output="$(compose run --rm --no-deps --pull never --entrypoint sh app -eu -c '
+    response=/tmp/edutalent-qdrant-snapshot.json
+    status="$(curl --silent --show-error --output "${response}" --write-out "%{http_code}" --request POST --header "api-key: ${QDRANT_API_KEY}" "http://qdrant:6333/collections/${QDRANT_COLLECTION}/snapshots")"
+    printf "%s\n" "${status}"
+    cat "${response}"
+  ' 2>"${temp}/qdrant-client.log" || true)"
+  qdrant_status="$(printf '%s\n' "${qdrant_output}" | head -n1)"
+  printf '%s\n' "${qdrant_output}" | tail -n +2 >"${qdrant_response}"
   if [[ "${qdrant_status}" == "200" ]]; then
     snapshot_name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["result"]["name"])' "${qdrant_response}")"
     compose cp "qdrant:/qdrant/storage/collections/${collection}/snapshots/${snapshot_name}" "${payload}/qdrant/${snapshot_name}" >/dev/null
@@ -340,7 +412,8 @@ backup_create() {
     printf '%s\n' "collection-not-created" >"${payload}/qdrant/status.txt"
   else
     echo "Qdrant snapshot failed with HTTP ${qdrant_status:-unknown}." >&2
-    cat "${qdrant_response}" >&2
+    cat "${temp}/qdrant-client.log" >&2 || true
+    cat "${qdrant_response}" >&2 || true
     exit 1
   fi
 
@@ -356,14 +429,28 @@ backup_create() {
   elif command -v git >/dev/null 2>&1 && git -C "${ROOT_CANDIDATE}" rev-parse HEAD >/dev/null 2>&1; then
     git -C "${ROOT_CANDIDATE}" rev-parse HEAD >"${payload}/configuration/public/git-head.txt"
   fi
-  if find "${WAL_DIR}" -maxdepth 1 -type f -print -quit | grep -q .; then
-    cp -a "${WAL_DIR}/." "${payload}/wal/"
-  fi
+  while IFS= read -r wal_file; do
+    cp -a "${wal_file}" "${payload}/wal/"
+  done < <(find "${WAL_DIR}" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9A-F]{24}' -print | sort)
+
+  compose start "${quiesced_services[@]}" >/dev/null
+  services_resumed=true
+  app_recovered=false
+  for attempt in $(seq 1 90); do
+    if compose exec -T app curl --fail --silent --max-time 5 http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+      app_recovered=true
+      break
+    fi
+    sleep 2
+  done
+  [[ "${app_recovered}" == true ]] || { echo "Application did not recover after backup quiescence." >&2; exit 1; }
+
   python3 - "${temp}/metadata.json" "${timestamp}" "${db_name}" "${collection}" <<'PY'
 import json, sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({
   "backup_type": "full",
+  "consistency": "write-quiesced",
   "created_at_compact": sys.argv[2],
   "database": sys.argv[3],
   "qdrant_collection": sys.argv[4],
@@ -400,6 +487,7 @@ Path(path).write_text(json.dumps({
 PY
   chmod 0600 "${metadata_file}.partial"
   mv "${metadata_file}.partial" "${metadata_file}"
+  python3 "${HELPER}" backup-metadata-verify --metadata "${metadata_file}" --backup-dir "${EDUTALENT_BACKUP_DIR}" >/dev/null
   echo "Created and verified encrypted backup: ${archive}"
 }
 
@@ -421,31 +509,41 @@ restore_drill() {
   require_definitions
   require_backup_configuration
   require_command docker
-  local archive="$1" temp payload dump db_id db_password source_db drill_db
+  local archive="$1" temp payload dump db_id db_password source_db drill_db container_dump migration_count
   [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
   db_id="$(compose ps --quiet db)"
   [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
   temp="$(mktemp -d)"
-  trap 'rm -rf "${temp}"' RETURN
+  drill_db=""
+  container_dump=""
+  cleanup_drill() {
+    local status=$?
+    if [[ -n "${db_id:-}" && -n "${container_dump:-}" ]]; then
+      docker exec "${db_id}" rm -f "${container_dump}" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${db_id:-}" && -n "${db_password:-}" && -n "${drill_db:-}" ]]; then
+      docker exec -e "PGPASSWORD=${db_password}" "${db_id}" dropdb -h 127.0.0.1 -U postgres --if-exists "${drill_db}" >/dev/null 2>&1 || true
+    fi
+    rm -rf "${temp}"
+    return "${status}"
+  }
+  trap cleanup_drill RETURN
   decrypt_backup "${archive}" "${temp}"
   payload="$(find "${temp}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+  [[ -n "${payload}" ]] || { echo "Backup payload is missing." >&2; exit 1; }
   verify_decrypted_payload "${payload}"
   dump="${payload}/database/database.dump"
   [[ -f "${dump}" ]] || { echo "Database dump is missing from backup." >&2; exit 1; }
   source_db="$(read_env "${SUPABASE_ENV}" POSTGRES_DB)"; source_db="${source_db:-postgres}"
   db_password="$(read_env "${SUPABASE_ENV}" POSTGRES_PASSWORD)"
   drill_db="edutalent_restore_$(date -u +%Y%m%d%H%M%S)_$RANDOM"
-  cleanup_drill() {
-    docker exec -e "PGPASSWORD=${db_password}" "${db_id}" dropdb -h 127.0.0.1 -U postgres --if-exists "${drill_db}" >/dev/null 2>&1 || true
-  }
-  trap cleanup_drill RETURN
+  container_dump="/tmp/edutalent-restore-${RANDOM}.dump"
   docker exec -e "PGPASSWORD=${db_password}" "${db_id}" createdb -h 127.0.0.1 -U postgres "${drill_db}"
-  docker cp "${dump}" "${db_id}:/tmp/edutalent-restore.dump"
+  docker cp "${dump}" "${db_id}:${container_dump}"
   docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
-    pg_restore -h 127.0.0.1 -U postgres -d "${drill_db}" --no-owner --no-acl /tmp/edutalent-restore.dump
+    pg_restore -h 127.0.0.1 -U postgres -d "${drill_db}" --no-owner --no-acl "${container_dump}"
   migration_count="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${drill_db}" -Atc 'SELECT count(*) FROM public.edutalent_migration_files')"
   [[ "${migration_count}" =~ ^[1-9][0-9]*$ ]] || { echo "Restored migration registry is empty." >&2; exit 1; }
-  docker exec "${db_id}" rm -f /tmp/edutalent-restore.dump
   cleanup_drill
   trap - RETURN
   echo "Database restore drill succeeded in temporary database ${drill_db}; source ${source_db} was not modified."
@@ -487,6 +585,56 @@ pitr_start() {
   echo "Continuous WAL reception started in ${WAL_DIR}."
 }
 
+
+pitr_verify() {
+  require_command docker
+  require_envs
+  initialize_state
+  if ! docker inspect edutalent-pitr-archive >/dev/null 2>&1; then
+    pitr_start
+  elif [[ "$(docker inspect --format '{{.State.Running}}' edutalent-pitr-archive 2>/dev/null || true)" != true ]]; then
+    docker rm --force edutalent-pitr-archive >/dev/null 2>&1 || true
+    pitr_start
+  fi
+  db_id="$(compose ps --quiet db)"
+  [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
+  db_name="$(read_env "${SUPABASE_ENV}" POSTGRES_DB)"; db_name="${db_name:-postgres}"
+  db_password="$(read_env "${SUPABASE_ENV}" POSTGRES_PASSWORD)"
+  receiver_active=false
+  for attempt in $(seq 1 60); do
+    if [[ "$(docker inspect --format '{{.State.Running}}' edutalent-pitr-archive 2>/dev/null || true)" != true ]]; then
+      echo "WAL receiver exited before its replication slot became active." >&2
+      docker logs --tail 100 edutalent-pitr-archive >&2 || true
+      exit 1
+    fi
+    slot_active="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${db_name}" -Atc "SELECT active::text FROM pg_replication_slots WHERE slot_name='edutalent_backup'" 2>/dev/null || true)"
+    if [[ "${slot_active}" == true ]]; then
+      receiver_active=true
+      break
+    fi
+    sleep 1
+  done
+  [[ "${receiver_active}" == true ]] || { echo "WAL receiver did not activate its physical replication slot." >&2; exit 1; }
+  privilege_state="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U supabase_admin -d "${db_name}" -AtF'|' -v ON_ERROR_STOP=1 -c "SELECT (SELECT rolsuper::text FROM pg_roles WHERE rolname='postgres'), has_function_privilege('postgres', 'pg_catalog.pg_switch_wal()', 'EXECUTE')::text, has_function_privilege('supabase_admin', 'pg_catalog.pg_switch_wal()', 'EXECUTE')::text")"
+  [[ "${privilege_state}" == 'false|false|true' ]] || { echo "Unexpected WAL privilege boundary: ${privilege_state}" >&2; exit 1; }
+  before_inventory="$(find "${WAL_DIR}" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9A-F]{24}' -printf '%f\n' | sort)"
+  docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U supabase_admin -d "${db_name}" -v ON_ERROR_STOP=1 -Atc 'SELECT pg_switch_wal();' >/dev/null
+  wal_received=false
+  for attempt in $(seq 1 60); do
+    current_inventory="$(find "${WAL_DIR}" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9A-F]{24}' -printf '%f\n' | sort)"
+    if [[ -n "${current_inventory}" && "${current_inventory}" != "${before_inventory}" ]]; then
+      wal_received=true
+      break
+    fi
+    sleep 1
+  done
+  if [[ "${wal_received}" != true ]]; then
+    echo "Active WAL receiver did not persist a new archive file after pg_switch_wal()." >&2
+    docker logs --tail 100 edutalent-pitr-archive >&2 || true
+    exit 1
+  fi
+  echo "Continuous WAL reception and forced archive verified."
+}
 pitr_stop() {
   require_command docker
   docker rm --force edutalent-pitr-archive >/dev/null 2>&1 || true
@@ -496,12 +644,12 @@ pitr_stop() {
 pitr_status() {
   require_command docker
   initialize_state
-  if docker inspect edutalent-pitr-archive >/dev/null 2>&1; then
+  if [[ "$(docker inspect --format '{{.State.Running}}' edutalent-pitr-archive 2>/dev/null || true)" == true ]]; then
     docker inspect --format 'status={{.State.Status}} started={{.State.StartedAt}} restarts={{.RestartCount}}' edutalent-pitr-archive
   else
     echo "status=stopped"
   fi
-  latest="$(latest_file_time_iso "${WAL_DIR}" '*')"
+  latest="$(latest_wal_time_iso)"
   echo "latest_wal_received_at=${latest:-none}"
 }
 
@@ -574,25 +722,27 @@ fault_test() {
 }
 
 acceptance() {
-  local url="${1:-}"
+  local url="${1:-}" latest_archive snapshot
   security_check
   EDUTALENT_APP_ENV="${APP_ENV}" EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}" EDUTALENT_COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE}" bash "${PRODUCTION_COMMAND}" database-check
   EDUTALENT_APP_ENV="${APP_ENV}" EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}" EDUTALENT_COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE}" bash "${PRODUCTION_COMMAND}" gateway-check
   EDUTALENT_APP_ENV="${APP_ENV}" EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}" EDUTALENT_COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE}" bash "${PRODUCTION_COMMAND}" qdrant-check
   EDUTALENT_APP_ENV="${APP_ENV}" EDUTALENT_SUPABASE_ENV="${SUPABASE_ENV}" EDUTALENT_COMPOSE_OVERRIDE="${COMPOSE_OVERRIDE}" bash "${PRODUCTION_COMMAND}" ai-check
-  snapshot="$(collect_snapshot | tail -n1)"
-  evaluate_alerts "${snapshot}"
-  load_test "${url}"
-  fault_test
   if [[ -n "${EDUTALENT_BACKUP_DIR:-}" && -n "${EDUTALENT_BACKUP_PASSPHRASE_FILE:-}" ]]; then
+    pitr_verify
     backup_create
     latest_archive="$(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+    [[ -n "${latest_archive}" ]] || { echo "Acceptance backup archive was not created." >&2; exit 1; }
     backup_verify "${latest_archive}"
     restore_drill "${latest_archive}"
   else
     echo "Backup/restore acceptance was not run because backup configuration is absent." >&2
     exit 1
   fi
+  snapshot="$(collect_snapshot | tail -n1)"
+  evaluate_alerts "${snapshot}"
+  load_test "${url}"
+  fault_test
   echo "Final non-destructive production acceptance suite passed."
 }
 
@@ -640,6 +790,7 @@ case "${command}" in
   backup-verify) [[ $# -eq 1 ]] || { echo "backup-verify requires one archive." >&2; exit 2; }; backup_verify "$1" ;;
   restore-drill) [[ $# -eq 1 ]] || { echo "restore-drill requires one archive." >&2; exit 2; }; restore_drill "$1" ;;
   pitr-start) pitr_start ;;
+  pitr-verify) pitr_verify ;;
   pitr-stop) pitr_stop ;;
   pitr-status) pitr_status ;;
   security-check) security_check ;;

@@ -72,6 +72,33 @@ def normalize_payload_permissions(root: Path) -> dict[str, int]:
     return {"directories": directories, "files": files}
 
 
+def verify_backup_metadata(metadata_path: Path, backup_dir: Path) -> dict[str, Any]:
+    backup_dir = backup_dir.resolve()
+    if metadata_path.is_symlink() or not metadata_path.is_file():
+        raise RuntimeError(f"backup metadata is not a regular file: {metadata_path}")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("schema_version") != 1:
+        raise RuntimeError("unsupported backup metadata schema")
+    archive_name = metadata.get("archive")
+    if not isinstance(archive_name, str) or Path(archive_name).name != archive_name:
+        raise RuntimeError("backup metadata contains an invalid archive name")
+    archive = (backup_dir / archive_name).resolve()
+    if archive.parent != backup_dir or archive.is_symlink() or not archive.is_file():
+        raise RuntimeError(f"backup archive is missing or unsafe: {archive_name}")
+    expected = metadata.get("sha256")
+    if not isinstance(expected, str) or len(expected) != 64 or any(
+        character not in "0123456789abcdef" for character in expected.lower()
+    ):
+        raise RuntimeError("backup metadata contains an invalid SHA-256 digest")
+    observed = sha256_file(archive)
+    if observed != expected.lower():
+        raise RuntimeError(f"backup archive checksum mismatch: {archive_name}")
+    created_at = metadata.get("created_at")
+    if not isinstance(created_at, str) or parse_iso8601_epoch(created_at) is None:
+        raise RuntimeError("backup metadata contains an invalid creation timestamp")
+    return metadata
+
+
 def create_manifest(root: Path, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     root = root.resolve()
     if not root.is_dir():
@@ -212,12 +239,26 @@ def evaluate_alerts(snapshot: dict[str, Any], policy: dict[str, Any]) -> list[di
 
     disk_free = int(snapshot.get("disk_free_bytes", -1))
     min_disk = int(policy.get("minimum_disk_free_bytes", 0))
-    if disk_free >= 0 and disk_free < min_disk:
+    if disk_free < 0:
+        alerts.append({"severity": "critical", "code": "disk_status_unknown"})
+    elif disk_free < min_disk:
         alerts.append({"severity": "critical", "code": "disk_free_low", "observed": disk_free, "threshold": min_disk})
+
+    if snapshot.get("backup_configured") is True:
+        backup_disk_free = int(snapshot.get("backup_disk_free_bytes", -1))
+        min_backup_disk = int(policy.get("minimum_backup_disk_free_bytes", min_disk))
+        if backup_disk_free < 0:
+            alerts.append({"severity": "critical", "code": "backup_disk_status_unknown"})
+        elif backup_disk_free < min_backup_disk:
+            alerts.append({"severity": "critical", "code": "backup_disk_free_low", "observed": backup_disk_free, "threshold": min_backup_disk})
+        if snapshot.get("latest_backup_verified") is not True:
+            alerts.append({"severity": "critical", "code": "backup_unverifiable"})
 
     cert_seconds = int(snapshot.get("tls_seconds_remaining", -1))
     cert_min = int(policy.get("minimum_tls_seconds_remaining", 0))
-    if cert_seconds >= 0 and cert_seconds < cert_min:
+    if cert_seconds < 0:
+        alerts.append({"severity": "critical", "code": "tls_status_unknown"})
+    elif cert_seconds < cert_min:
         alerts.append({"severity": "critical", "code": "tls_expiring", "observed": cert_seconds, "threshold": cert_min})
 
     connections = int(snapshot.get("database_connections", -1))
@@ -235,6 +276,8 @@ def evaluate_alerts(snapshot: dict[str, Any], policy: dict[str, Any]) -> list[di
         if maximum_age > 0 and (observed is None or now - observed > maximum_age):
             alerts.append({"severity": "critical", "code": code, "observed": snapshot.get(key), "maximum_age_seconds": maximum_age})
 
+    if snapshot.get("wal_receiver_running") is not True:
+        alerts.append({"severity": "critical", "code": "wal_receiver_stopped"})
     if snapshot.get("core_health") is False:
         alerts.append({"severity": "critical", "code": "core_health_failed"})
     if snapshot.get("qdrant_health") is False:
@@ -242,7 +285,6 @@ def evaluate_alerts(snapshot: dict[str, Any], policy: dict[str, Any]) -> list[di
     if snapshot.get("ai_gateway_health") is False:
         alerts.append({"severity": "warning", "code": "ai_gateway_unavailable"})
     return alerts
-
 
 @dataclass(frozen=True)
 class LoadResult:
@@ -325,6 +367,11 @@ def command_manifest_verify(args: argparse.Namespace) -> None:
     print(json.dumps({"verified": True, "files": len(manifest["files"])}, sort_keys=True))
 
 
+def command_backup_metadata_verify(args: argparse.Namespace) -> None:
+    metadata = verify_backup_metadata(args.metadata, args.backup_dir)
+    print(metadata["created_at"])
+
+
 def command_compose_security(args: argparse.Namespace) -> None:
     violations = validate_compose_security(parse_json_file(args.config))
     output = {"passed": not violations, "violations": violations}
@@ -369,6 +416,11 @@ def parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("manifest-verify")
     verify.add_argument("--root", type=Path, required=True)
     verify.set_defaults(func=command_manifest_verify)
+
+    metadata = subparsers.add_parser("backup-metadata-verify")
+    metadata.add_argument("--metadata", type=Path, required=True)
+    metadata.add_argument("--backup-dir", type=Path, required=True)
+    metadata.set_defaults(func=command_backup_metadata_verify)
 
     security = subparsers.add_parser("compose-security")
     security.add_argument("--config", type=Path, required=True)

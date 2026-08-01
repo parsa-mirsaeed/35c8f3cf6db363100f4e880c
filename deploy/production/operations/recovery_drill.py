@@ -82,7 +82,9 @@ def materialize_pinned_supabase_runtime() -> SupabasePostgresRuntime:
         raise RuntimeError(
             f"materialized Supabase commit mismatch: {actual_commit} != {expected_commit}"
         )
-    if len(actual_commit) != 40 or any(character not in "0123456789abcdef" for character in actual_commit):
+    if len(actual_commit) != 40 or any(
+        character not in "0123456789abcdef" for character in actual_commit
+    ):
         raise RuntimeError(f"invalid pinned Supabase commit: {actual_commit}")
 
     image = parse_compose_service_image(compose_path, "db")
@@ -121,9 +123,13 @@ def materialize_pinned_supabase_runtime() -> SupabasePostgresRuntime:
     )
     missing = [str(source) for source, _ in init_mounts if not source.is_file()]
     if missing:
-        raise RuntimeError(f"materialized Supabase database initialization is incomplete: {missing}")
+        raise RuntimeError(
+            f"materialized Supabase database initialization is incomplete: {missing}"
+        )
     if not PRODUCTION_PG_HBA.is_file():
-        raise RuntimeError(f"production PostgreSQL HBA policy is missing: {PRODUCTION_PG_HBA}")
+        raise RuntimeError(
+            f"production PostgreSQL HBA policy is missing: {PRODUCTION_PG_HBA}"
+        )
 
     return SupabasePostgresRuntime(
         image=image,
@@ -166,6 +172,7 @@ def psql(
     sql: str,
     database: str = "postgres",
     *,
+    user: str = "postgres",
     check: bool = True,
 ) -> str:
     return docker(
@@ -177,7 +184,7 @@ def psql(
         "-h",
         "127.0.0.1",
         "-U",
-        "postgres",
+        user,
         "-d",
         database,
         "-v",
@@ -268,12 +275,32 @@ def verify_supabase_runtime_state(container: str, password: str) -> dict[str, An
     if not version_num.isdigit() or int(version_num) < 170000:
         raise RuntimeError(f"unexpected PostgreSQL version: {version_num}")
     if admin_super != "true":
-        raise RuntimeError(f"Supabase administrative role is missing or constrained: {admin_super}")
+        raise RuntimeError(
+            f"Supabase administrative role is missing or constrained: {admin_super}"
+        )
     return {
         "config_file": config_file,
         "hba_file": hba_file,
         "server_version_num": int(version_num),
         "supabase_admin_superuser": True,
+    }
+
+
+def verify_wal_switch_boundary(container: str, password: str) -> dict[str, bool]:
+    raw = psql(
+        container,
+        password,
+        "SELECT (SELECT rolsuper::text FROM pg_roles WHERE rolname='postgres'), "
+        "has_function_privilege('postgres', 'pg_catalog.pg_switch_wal()', 'EXECUTE')::text, "
+        "has_function_privilege('supabase_admin', 'pg_catalog.pg_switch_wal()', 'EXECUTE')::text;",
+        user="supabase_admin",
+    )
+    if raw != "false|false|true":
+        raise RuntimeError(f"unexpected WAL switch privilege boundary: {raw}")
+    return {
+        "postgres_superuser": False,
+        "postgres_can_switch_wal": False,
+        "supabase_admin_can_switch_wal": True,
     }
 
 
@@ -337,6 +364,7 @@ def postgres_drill(prefix: str, runtime: SupabasePostgresRuntime) -> dict[str, A
         "/archive",
     )
     source_runtime_state = verify_supabase_runtime_state(source, password)
+    wal_switch_boundary = verify_wal_switch_boundary(source, password)
     psql(
         source,
         password,
@@ -364,11 +392,21 @@ def postgres_drill(prefix: str, runtime: SupabasePostgresRuntime) -> dict[str, A
     )
     psql(source, password, "INSERT INTO recovery_probe VALUES (2, 'before-target');")
     target_time = psql(source, password, "SELECT clock_timestamp();")
-    psql(source, password, "SELECT pg_switch_wal();")
+    psql(
+        source,
+        password,
+        "SELECT pg_switch_wal();",
+        user="supabase_admin",
+    )
     wait_for_archive(archive_volume, runtime.image, 1)
     time.sleep(1.2)
     psql(source, password, "INSERT INTO recovery_probe VALUES (3, 'after-target');")
-    psql(source, password, "SELECT pg_switch_wal();")
+    psql(
+        source,
+        password,
+        "SELECT pg_switch_wal();",
+        user="supabase_admin",
+    )
     wait_for_archive(archive_volume, runtime.image, 2)
     docker("stop", source, capture=True)
 
@@ -469,6 +507,7 @@ def postgres_drill(prefix: str, runtime: SupabasePostgresRuntime) -> dict[str, A
         "upstream_commit": runtime.upstream_commit,
         "source_runtime": source_runtime_state,
         "restored_runtime": restored_runtime_state,
+        "wal_switch_boundary": wal_switch_boundary,
         "target_time": target_time,
         "restored_rows": rows,
         "failed_migration_rolled_back": True,
@@ -484,7 +523,9 @@ def http_json(
     body = json.dumps(payload).encode() if payload is not None else None
     request_headers = {"Content-Type": "application/json"} if body is not None else {}
     request_headers.update(headers or {})
-    request = urllib.request.Request(url, data=body, method=method, headers=request_headers)
+    request = urllib.request.Request(
+        url, data=body, method=method, headers=request_headers
+    )
     with urllib.request.urlopen(request, timeout=15) as response:
         return json.loads(response.read().decode())
 

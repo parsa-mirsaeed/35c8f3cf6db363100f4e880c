@@ -210,6 +210,38 @@ class WorkflowPrivilegeBoundaryTests(unittest.TestCase):
         )
 
 
+class FinalOperationsBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.script = OPERATIONS_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    def test_baseline_security_check_is_fail_fast(self) -> None:
+        step = self.workflow.split(
+            "      - name: Verify local security and monitoring baseline", 1
+        )[1].split("\n      - name: Start WAL reception", 1)[0]
+        self.assertIn("set -euo pipefail", step)
+        self.assertLess(step.index("security-check"), step.index("snapshot"))
+
+    def test_core_monitoring_uses_database_backed_readiness(self) -> None:
+        snapshot = self.script.split("collect_snapshot() {", 1)[1].split(
+            "\nevaluate_alerts() {", 1
+        )[0]
+        self.assertIn("http://127.0.0.1:8080/readyz", snapshot)
+        self.assertNotIn("http://127.0.0.1:8080/healthz", snapshot)
+
+    def test_sidecar_metadata_is_bound_to_requested_archive(self) -> None:
+        sidecar = self.script.split("verify_backup_sidecar() {", 1)[1].split(
+            "\nbackup_preflight() {", 1
+        )[0]
+        self.assertIn("metadata_archive=", sidecar)
+        self.assertIn('$(basename "${archive}")', sidecar)
+        self.assertIn("does not describe requested archive", sidecar)
+        self.assertLess(
+            sidecar.index("metadata_archive="),
+            sidecar.index("backup-metadata-verify"),
+        )
+
+
 class AlertTests(unittest.TestCase):
     def test_stale_backup_disk_and_service_raise_critical_alerts(self) -> None:
         snapshot = {

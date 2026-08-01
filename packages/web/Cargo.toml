@@ -26,8 +26,9 @@ wasm-bindgen = "0.2"
 chrono = { version = "0.4", features = ["serde", "wasmbind"] }
 parsidate = "1.7"
 gloo-storage = "0.3"
-# Tokio is server-only for WASM compatibility
+# Tokio and database readiness are server-only for WASM compatibility
 tokio = { version = "1.0", features = ["full"], optional = true }
+sqlx = { workspace = true, optional = true }
 # WASM-compatible timers for sleep functionality
 gloo-timers = { version = "0.3", features = ["futures"] }
 gloo-net = { version = "0.5", features = ["http"] }
@@ -46,12 +47,13 @@ getrandom = { version = "0.2.15", features = ["js"] }
 [features]
 default = []
 web = ["dioxus/web"]
-# UPDATE this feature to include "api/server" and enable tokio
+# UPDATE this feature to include "api/server" and enable server-only dependencies
 server = [
     "dioxus/server",
     "ui/server",
     "api/server",
     "dep:tokio",
+    "dep:sqlx",
     "dep:axum",
     "dep:axum-extra",
     "dep:tracing",

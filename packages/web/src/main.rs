@@ -55,6 +55,20 @@ const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 #[cfg(feature = "server")]
+async fn database_readiness(
+    axum::Extension(state): axum::Extension<api::app_state::AppState>,
+) -> Result<&'static str, axum::http::StatusCode> {
+    sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(state.services.pool.as_ref())
+        .await
+        .map(|_| "ready")
+        .map_err(|error| {
+            tracing::warn!(error = %error, "Database readiness probe failed");
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        })
+}
+
+#[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
     use axum::routing::post;
@@ -89,6 +103,7 @@ async fn main() {
 
     let router = axum::Router::new()
         .route("/healthz", axum::routing::get(|| async { "ok" }))
+        .route("/readyz", axum::routing::get(database_readiness))
         .route("/api/auth/login", post(api::handlers::login_handler))
         .route("/api/auth/logout", post(api::handlers::logout_handler))
         .serve_dioxus_application(ServeConfig::builder(), App)

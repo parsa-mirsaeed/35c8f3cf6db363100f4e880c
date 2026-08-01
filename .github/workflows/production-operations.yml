@@ -10,6 +10,7 @@ on:
       - unlabeled
     paths:
       - deploy/production/**
+      - packages/web/src/main.rs
       - docs/adr/0004-production-operations.md
       - docs/security/production-operations-threat-model.md
       - .github/workflows/production-operations.yml
@@ -19,6 +20,7 @@ on:
       - main
     paths:
       - deploy/production/**
+      - packages/web/src/main.rs
       - docs/adr/0004-production-operations.md
       - docs/security/production-operations-threat-model.md
       - .github/workflows/production-operations.yml
@@ -410,7 +412,7 @@ jobs:
           EDUTALENT_LOAD_CONCURRENCY=16 \
           EDUTALENT_LOAD_MAXIMUM_ERROR_RATE=0.25 \
           EDUTALENT_LOAD_MAXIMUM_P95_MS=3000 \
-            bash deploy/production/edutalent-operations load-test https://app.ops.internal/healthz \
+            bash deploy/production/edutalent-operations load-test https://app.ops.internal/readyz \
             >load-acceptance.log 2>&1 &
           load_pid=$!
           sleep 15

@@ -86,7 +86,6 @@ class BackupManifestTests(unittest.TestCase):
         self.assertIn("manifest-create", script)
 
 
-
 class ComposeSecurityTests(unittest.TestCase):
     def secure_config(self) -> dict:
         baseline = {"security_opt": ["no-new-privileges:true"], "networks": ["data"]}
@@ -163,17 +162,24 @@ class WorkflowPrivilegeBoundaryTests(unittest.TestCase):
         self.assertIn('if [[ "${receiver_active}" != true ]]; then', workflow)
         self.assertIn("docker logs --tail 100 edutalent-pitr-archive", workflow)
         self.assertIn("Active WAL receiver did not persist an archive file", workflow)
+        self.assertIn("test \"${receiver_network}\" = edutalent-data", workflow)
+        self.assertIn("Replication-only role unexpectedly opened a normal SQL session", workflow)
 
-    def test_wal_receiver_uses_database_loopback_namespace(self) -> None:
+    def test_wal_receiver_uses_dedicated_role_on_private_network(self) -> None:
         script = OPERATIONS_SCRIPT_PATH.read_text(encoding="utf-8")
-        pitr_start = script.split("pitr_start() {", 1)[1].split("\npitr_stop() {", 1)[0]
-        self.assertIn("--network container:${db_id}", pitr_start)
-        self.assertIn("127.0.0.1:5432:*:postgres", pitr_start)
-        self.assertIn("postgresql://postgres@127.0.0.1:5432/", pitr_start)
-        self.assertNotIn("--network edutalent-data", pitr_start)
-        self.assertNotIn("postgresql://postgres@db:5432/", pitr_start)
+        pitr_start = script.split("pitr_start() {", 1)[1].split("\npitr_verify() {", 1)[0]
+        self.assertIn("--network edutalent-data", pitr_start)
+        self.assertIn("supabase-db:5432:*:edutalent_backup", pitr_start)
+        self.assertIn(
+            "postgresql://edutalent_backup@supabase-db:5432/", pitr_start
+        )
+        self.assertIn("CREATE ROLE edutalent_backup", pitr_start)
+        self.assertIn("ALTER ROLE edutalent_backup", pitr_start)
+        self.assertIn("true|true|false|false|false|false|false", pitr_start)
+        self.assertNotIn("--network container:", pitr_start)
+        self.assertNotIn("postgresql://postgres@127.0.0.1:5432/", pitr_start)
 
-    def test_replication_hba_is_scram_and_loopback_only(self) -> None:
+    def test_replication_hba_rejects_normal_backup_role_sessions(self) -> None:
         records = [
             line.split()
             for line in HBA_PATH.read_text(encoding="utf-8").splitlines()
@@ -184,7 +190,18 @@ class WorkflowPrivilegeBoundaryTests(unittest.TestCase):
         ]
         self.assertEqual(
             replication_records,
-            [["host", "replication", "postgres", "127.0.0.1/32", "scram-sha-256"]],
+            [
+                ["host", "replication", "postgres", "127.0.0.1/32", "scram-sha-256"],
+                ["host", "replication", "edutalent_backup", "10.0.0.0/8", "scram-sha-256"],
+                ["host", "replication", "edutalent_backup", "172.16.0.0/12", "scram-sha-256"],
+                ["host", "replication", "edutalent_backup", "192.168.0.0/16", "scram-sha-256"],
+            ],
+        )
+        self.assertIn(
+            ["host", "all", "edutalent_backup", "0.0.0.0/0", "reject"], records
+        )
+        self.assertIn(
+            ["host", "all", "edutalent_backup", "::0/0", "reject"], records
         )
         compose = COMPOSE_PATH.read_text(encoding="utf-8")
         self.assertIn(

@@ -561,7 +561,25 @@ backup_create() {
   printf '%s\n' "${qdrant_output}" | tail -n +2 >"${qdrant_response}"
   if [[ "${qdrant_status}" == "200" ]]; then
     qdrant_snapshot_name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["result"]["name"])' "${qdrant_response}")"
-    compose cp "qdrant:/qdrant/storage/collections/${collection}/snapshots/${qdrant_snapshot_name}" "${payload}/qdrant/${qdrant_snapshot_name}" >/dev/null
+    [[ "${qdrant_snapshot_name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$ ]] || {
+      echo "Qdrant returned an unsafe snapshot name." >&2
+      exit 1
+    }
+    compose run --rm --no-deps --pull never --entrypoint sh \
+      --user "$(id -u):$(id -g)" \
+      --volume "${payload}/qdrant:/backup" \
+      -e "EDUTALENT_QDRANT_SNAPSHOT_NAME=${qdrant_snapshot_name}" app -eu -c '
+        destination="/backup/${EDUTALENT_QDRANT_SNAPSHOT_NAME}"
+        status="$(curl --silent --show-error --output "${destination}.partial" --write-out "%{http_code}" \
+          --header "api-key: ${QDRANT_API_KEY}" \
+          "http://qdrant:6333/collections/${QDRANT_COLLECTION}/snapshots/${EDUTALENT_QDRANT_SNAPSHOT_NAME}")"
+        if [ "${status}" != 200 ] || [ ! -s "${destination}.partial" ]; then
+          rm -f -- "${destination}.partial"
+          echo "Qdrant snapshot download failed with HTTP ${status}." >&2
+          exit 1
+        fi
+        mv "${destination}.partial" "${destination}"
+      '
     printf '%s\n' "${qdrant_snapshot_name}" >"${payload}/qdrant/snapshot-name.txt"
     delete_qdrant_snapshot "${qdrant_snapshot_name}"
     qdrant_snapshot_name=""
@@ -715,27 +733,58 @@ restore_drill() {
 
 pitr_start() {
   require_command docker
+  require_command openssl
   require_envs
   initialize_state
   if docker inspect edutalent-pitr-archive >/dev/null 2>&1; then
     echo "Continuous WAL receiver already exists." >&2
     exit 1
   fi
+  local db_id db_name db_password image slot slot_exists pgpass replication_password
+  local role_exists role_state
   db_id="$(compose ps --quiet db)"
   [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
   db_name="$(read_env "${SUPABASE_ENV}" POSTGRES_DB)"; db_name="${db_name:-postgres}"
   db_password="$(read_env "${SUPABASE_ENV}" POSTGRES_PASSWORD)"
   image="$(docker inspect --format '{{.Config.Image}}' "${db_id}")"
   slot="edutalent_backup"
-  slot_exists="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${db_name}" -Atc "SELECT count(*) FROM pg_replication_slots WHERE slot_name='${slot}'")"
+  replication_password="$(openssl rand -base64 48 | tr -d '\n')"
+
+  role_exists="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+    psql -h 127.0.0.1 -U supabase_admin -d "${db_name}" -At \
+      -c "SELECT count(*) FROM pg_roles WHERE rolname='edutalent_backup'")"
+  if [[ "${role_exists}" == "0" ]]; then
+    docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+      psql -h 127.0.0.1 -U supabase_admin -d "${db_name}" -v ON_ERROR_STOP=1 \
+        -c "CREATE ROLE edutalent_backup LOGIN REPLICATION NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS" >/dev/null
+  fi
+  docker exec -i -e "PGPASSWORD=${db_password}" \
+    -e "EDUTALENT_REPLICATION_PASSWORD=${replication_password}" "${db_id}" \
+    psql -h 127.0.0.1 -U supabase_admin -d "${db_name}" -v ON_ERROR_STOP=1 <<'SQL'
+\getenv replication_password EDUTALENT_REPLICATION_PASSWORD
+ALTER ROLE edutalent_backup WITH LOGIN REPLICATION NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD :'replication_password';
+SQL
+  role_state="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+    psql -h 127.0.0.1 -U supabase_admin -d "${db_name}" -AtF'|' -v ON_ERROR_STOP=1 \
+      -c "SELECT rolcanlogin::text, rolreplication::text, rolsuper::text, rolcreatedb::text, rolcreaterole::text, rolinherit::text, rolbypassrls::text FROM pg_roles WHERE rolname='edutalent_backup'")"
+  [[ "${role_state}" == 'true|true|false|false|false|false|false' ]] || {
+    echo "Unexpected continuous-replication role boundary: ${role_state}" >&2
+    exit 1
+  }
+
+  slot_exists="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+    psql -h 127.0.0.1 -U supabase_admin -d "${db_name}" -At \
+      -c "SELECT count(*) FROM pg_replication_slots WHERE slot_name='${slot}'")"
   if [[ "${slot_exists}" == "0" ]]; then
-    docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${db_name}" -v ON_ERROR_STOP=1 -c "SELECT pg_create_physical_replication_slot('${slot}', true)" >/dev/null
+    docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+      psql -h 127.0.0.1 -U supabase_admin -d "${db_name}" -v ON_ERROR_STOP=1 \
+        -c "SELECT pg_create_physical_replication_slot('${slot}', true)" >/dev/null
   fi
   pgpass="${PITR_DIR}/pgpass"
-  printf '127.0.0.1:5432:*:postgres:%s\n' "${db_password}" >"${pgpass}"
+  printf 'supabase-db:5432:*:edutalent_backup:%s\n' "${replication_password}" >"${pgpass}"
   chmod 0600 "${pgpass}"
-  docker run --detach --name edutalent-pitr-archive --restart unless-stopped \
-    --network container:${db_id} \
+  if ! docker run --detach --name edutalent-pitr-archive --restart unless-stopped \
+    --network edutalent-data \
     --user "$(id -u):$(id -g)" \
     --read-only --tmpfs /tmp \
     --cap-drop ALL --security-opt no-new-privileges \
@@ -744,8 +793,11 @@ pitr_start() {
     --mount "type=bind,source=${pgpass},target=/run/secrets/pgpass,readonly" \
     --entrypoint pg_receivewal \
     "${image}" \
-    --dbname="postgresql://postgres@127.0.0.1:5432/${db_name}?sslmode=disable" \
-    --directory=/archive --slot="${slot}" --synchronous --verbose >/dev/null
+    --dbname="postgresql://edutalent_backup@supabase-db:5432/${db_name}?sslmode=disable" \
+    --directory=/archive --slot="${slot}" --synchronous --verbose >/dev/null; then
+    rm -f -- "${pgpass}"
+    return 1
+  fi
   echo "Continuous WAL reception started in ${WAL_DIR}."
 }
 
@@ -802,6 +854,7 @@ pitr_verify() {
 pitr_stop() {
   require_command docker
   docker rm --force edutalent-pitr-archive >/dev/null 2>&1 || true
+  rm -f -- "${PITR_DIR}/pgpass"
   echo "Continuous WAL receiver stopped; archived WAL files were retained."
 }
 

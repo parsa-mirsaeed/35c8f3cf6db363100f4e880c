@@ -261,7 +261,9 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
         self.assertIn("delete_qdrant_snapshot()", backup)
         self.assertIn("--request DELETE", backup)
         self.assertIn("qdrant_snapshot_name", backup)
-        self.assertGreaterEqual(backup.count('delete_qdrant_snapshot "${qdrant_snapshot_name}"'), 2)
+        self.assertGreaterEqual(
+            backup.count('delete_qdrant_snapshot "${qdrant_snapshot_name}"'), 2
+        )
         self.assertIn('qdrant_snapshot_name=""', backup)
 
     def test_verified_full_backup_retires_only_included_wal_with_a_tail(self) -> None:
@@ -291,9 +293,13 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
 
     def test_restore_cleanup_removes_every_plaintext_copy(self) -> None:
         restore = self.function("restore_drill", "pitr_start")
-        self.assertEqual(restore.count("trap cleanup_drill RETURN"), 1)
+        exit_trap = "trap 'cleanup_drill \"$?\"; exit \"$?\"' EXIT"
+        self.assertEqual(restore.count(exit_trap), 1)
+        self.assertIn("trap - EXIT", restore)
+        self.assertIn("cleanup_drill 0", restore)
         self.assertIn('rm -f "${container_dump}"', restore)
-        self.assertIn('rm -rf "${temp}"', restore)
+        self.assertIn('rm -rf -- "${temp}"', restore)
+        self.assertNotIn("trap cleanup_drill RETURN", restore)
         self.assertNotIn("trap 'rm -rf", restore)
 
     def test_restore_replay_uses_only_the_protected_admin_identity(self) -> None:
@@ -309,7 +315,9 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
 
     def test_acceptance_creates_pitr_and_backup_before_alerts(self) -> None:
         acceptance = self.function("acceptance", "prune_backups")
-        self.assertLess(acceptance.index("pitr_verify"), acceptance.index("backup_create"))
+        self.assertLess(
+            acceptance.index("pitr_verify"), acceptance.index("backup_create")
+        )
         self.assertLess(
             acceptance.index("backup_create"), acceptance.index("collect_snapshot")
         )

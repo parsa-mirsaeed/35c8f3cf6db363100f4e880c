@@ -220,6 +220,17 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
         self.assertIn('rm -rf "${temp}"', restore)
         self.assertNotIn("trap 'rm -rf", restore)
 
+    def test_restore_replay_uses_only_the_protected_admin_identity(self) -> None:
+        restore = self.function("restore_drill", "pitr_start")
+        self.assertIn("restore_role=supabase_admin", restore)
+        self.assertIn("SELECT current_user, rolsuper::text", restore)
+        self.assertIn("supabase_admin|true", restore)
+        self.assertIn('-U "${restore_role}" -d "${drill_db}"', restore)
+        self.assertIn("--no-owner --no-acl --exit-on-error", restore)
+        self.assertIn('-U postgres "${drill_db}"', restore)
+        self.assertIn('-U postgres --if-exists "${drill_db}"', restore)
+        self.assertNotIn('pg_restore -h 127.0.0.1 -U postgres', restore)
+
     def test_acceptance_creates_pitr_and_backup_before_alerts(self) -> None:
         acceptance = self.function("acceptance", "prune_backups")
         self.assertLess(acceptance.index("pitr_verify"), acceptance.index("backup_create"))

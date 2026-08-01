@@ -538,6 +538,7 @@ restore_drill() {
   require_backup_configuration
   require_command docker
   local archive="$1" temp payload dump db_id db_password source_db drill_db container_dump migration_count
+  local restore_role restore_role_state
   [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
   db_id="$(compose ps --quiet db)"
   [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
@@ -564,12 +565,20 @@ restore_drill() {
   [[ -f "${dump}" ]] || { echo "Database dump is missing from backup." >&2; exit 1; }
   source_db="$(read_env "${SUPABASE_ENV}" POSTGRES_DB)"; source_db="${source_db:-postgres}"
   db_password="$(read_env "${SUPABASE_ENV}" POSTGRES_PASSWORD)"
+  restore_role=supabase_admin
+  restore_role_state="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
+    psql -h 127.0.0.1 -U "${restore_role}" -d "${source_db}" -AtF'|' -v ON_ERROR_STOP=1 \
+    -c "SELECT current_user, rolsuper::text, (SELECT rolsuper::text FROM pg_roles WHERE rolname='postgres') FROM pg_roles WHERE rolname=current_user")"
+  [[ "${restore_role_state}" == 'supabase_admin|true|false' ]] || {
+    echo "Unexpected restore privilege boundary: ${restore_role_state}" >&2
+    exit 1
+  }
   drill_db="edutalent_restore_$(date -u +%Y%m%d%H%M%S)_$RANDOM"
   container_dump="/tmp/edutalent-restore-${RANDOM}.dump"
   docker exec -e "PGPASSWORD=${db_password}" "${db_id}" createdb -h 127.0.0.1 -U postgres "${drill_db}"
   docker cp "${dump}" "${db_id}:${container_dump}"
   docker exec -e "PGPASSWORD=${db_password}" "${db_id}" \
-    pg_restore -h 127.0.0.1 -U postgres -d "${drill_db}" --no-owner --no-acl "${container_dump}"
+    pg_restore -h 127.0.0.1 -U "${restore_role}" -d "${drill_db}" --no-owner --no-acl --exit-on-error "${container_dump}"
   migration_count="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${drill_db}" -Atc 'SELECT count(*) FROM public.edutalent_migration_files')"
   [[ "${migration_count}" =~ ^[1-9][0-9]*$ ]] || { echo "Restored migration registry is empty." >&2; exit 1; }
   cleanup_drill

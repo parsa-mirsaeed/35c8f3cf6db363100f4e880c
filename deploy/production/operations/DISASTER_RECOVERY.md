@@ -53,6 +53,8 @@ Use `restore-drill` for routine validation. For disaster promotion:
 5. verify migration registry checksums, RLS, tenant boundaries, and durable queue constraints;
 6. switch the application only after validation.
 
+The Supabase dump contains protected schemas and functions that require the pinned image's existing `supabase_admin` superuser during replay. `restore-drill` verifies that exact role boundary and uses it only for `pg_restore --exit-on-error` into the temporary database. It does not elevate or grant privileges to the routine `postgres` role, and the temporary database, container copy, and decrypted payload are removed on every exit path.
+
 ## Supabase Storage
 
 Restore the Storage tree from the same backup generation into a new empty storage volume. Verify ownership and permissions against the pinned Storage image. Reconcile Storage metadata in PostgreSQL with physical files. Missing physical objects or unreferenced files are incident findings; do not silently discard them.

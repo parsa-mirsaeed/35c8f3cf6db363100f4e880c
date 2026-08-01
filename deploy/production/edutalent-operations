@@ -182,7 +182,7 @@ collect_snapshot() {
   else
     : >"${stats_json}"
   fi
-  if compose exec -T app curl --fail --silent --max-time 5 http://127.0.0.1:8080/healthz >/dev/null 2>&1; then core_health=true; fi
+  if compose exec -T app curl --fail --silent --max-time 5 http://127.0.0.1:8080/readyz >/dev/null 2>&1; then core_health=true; fi
   if compose exec -T app sh -eu -c 'curl --fail --silent --max-time 5 --header "api-key: ${QDRANT_API_KEY}" http://qdrant:6333/readyz >/dev/null' >/dev/null 2>&1; then qdrant_health=true; fi
   if compose exec -T app curl --fail --silent --max-time 5 http://ai-gateway:8090/healthz >/dev/null 2>&1; then ai_health=true; fi
   db_metrics="$(compose exec -T db psql -U postgres -d "$(read_env "${SUPABASE_ENV}" POSTGRES_DB || true)" -AtF'|' -c "SELECT count(*), current_setting('max_connections')::int, pg_database_size(current_database())" 2>/dev/null || true)"
@@ -344,7 +344,7 @@ verify_decrypted_payload() {
 }
 
 verify_backup_sidecar() {
-  local requested="$1" archive metadata
+  local requested="$1" archive metadata metadata_archive
   archive="$(canonical_path "${requested}")"
   if [[ "$(dirname "${archive}")" != "${BACKUP_ROOT}" ]]; then
     echo "Backup archive must be a direct file under the configured backup root: ${requested}" >&2
@@ -359,6 +359,11 @@ verify_backup_sidecar() {
     echo "Backup metadata sidecar not found or unsafe: ${metadata}" >&2
     return 1
   }
+  metadata_archive="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")).get("archive"); print(value if isinstance(value, str) else "")' "${metadata}")"
+  if [[ "${metadata_archive}" != "$(basename "${archive}")" ]]; then
+    echo "Backup metadata sidecar does not describe requested archive: ${requested}" >&2
+    return 1
+  fi
   python3 "${HELPER}" backup-metadata-verify \
     --metadata "${metadata}" --backup-dir "${BACKUP_ROOT}" >/dev/null
   printf '%s\n' "${archive}"

@@ -272,7 +272,7 @@ jobs:
       - name: Verify local security and monitoring baseline
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           bash deploy/production/edutalent-operations security-check 2>&1 | tee operations-acceptance.log
           bash deploy/production/edutalent-operations snapshot | tee snapshot-path.txt
 

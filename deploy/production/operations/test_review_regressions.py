@@ -208,6 +208,11 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
             f"\n{next_name}() {{", 1
         )[0]
 
+    def workflow_step(self, name: str, next_name: str) -> str:
+        return self.workflow.split(f"      - name: {name}", 1)[1].split(
+            f"\n      - name: {next_name}", 1
+        )[0]
+
     def test_backup_quiesces_and_resumes_exact_writer_containers(self) -> None:
         backup = self.function("backup_create", "backup_verify")
         self.assertIn("compose ps --services --filter status=running", backup)
@@ -256,7 +261,7 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
             backup.index("backup_committed=true"),
         )
 
-    def test_qdrant_snapshot_is_deleted_after_copy_and_on_failure(self) -> None:
+    def test_qdrant_snapshot_is_downloaded_authenticated_and_deleted(self) -> None:
         backup = self.function("backup_create", "backup_verify")
         self.assertIn("delete_qdrant_snapshot()", backup)
         self.assertIn("--request DELETE", backup)
@@ -265,6 +270,25 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
             backup.count('delete_qdrant_snapshot "${qdrant_snapshot_name}"'), 2
         )
         self.assertIn('qdrant_snapshot_name=""', backup)
+        self.assertIn(
+            'http://qdrant:6333/collections/${QDRANT_COLLECTION}/snapshots/${EDUTALENT_QDRANT_SNAPSHOT_NAME}',
+            backup,
+        )
+        self.assertIn('--header "api-key: ${QDRANT_API_KEY}"', backup)
+        self.assertIn('--volume "${payload}/qdrant:/backup"', backup)
+        self.assertIn('[ ! -s "${destination}.partial" ]', backup)
+        self.assertNotIn("compose cp \"qdrant:/qdrant/storage/collections/", backup)
+
+    def test_live_acceptance_exercises_existing_qdrant_collection(self) -> None:
+        step = self.workflow_step(
+            "Start WAL reception and create encrypted full backup",
+            "Run sustained load while exercising database and application recovery",
+        )
+        create_collection = 'http://qdrant:6333/collections/${QDRANT_COLLECTION}'
+        self.assertIn(create_collection, step)
+        self.assertIn('${QDRANT_VECTOR_SIZE}', step)
+        self.assertIn('--request PUT', step)
+        self.assertLess(step.index(create_collection), step.index("backup-create"))
 
     def test_verified_full_backup_retires_only_included_wal_with_a_tail(self) -> None:
         backup = self.function("backup_create", "backup_verify")
@@ -331,6 +355,21 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
             'bash deploy/production/edutalent-operations alerts "${snapshot}" 2>&1 | tee alerts-live.log',
             self.workflow,
         )
+
+    def test_final_production_boundaries_fail_fast(self) -> None:
+        step = self.workflow_step(
+            "Run final production boundaries and alert evaluation",
+            "Stop WAL receiver",
+        )
+        self.assertIn("set -euo pipefail", step)
+        for command in (
+            "production-database-check",
+            "production-gateway-check",
+            "production-qdrant-check",
+            "production-ai-check",
+        ):
+            self.assertIn(command, step)
+        self.assertNotIn("|| true", step)
 
     def test_snapshot_reads_the_gateway_prepared_certificate(self) -> None:
         snapshot = self.function("collect_snapshot", "evaluate_alerts")

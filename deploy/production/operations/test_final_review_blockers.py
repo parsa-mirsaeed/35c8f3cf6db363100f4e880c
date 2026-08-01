@@ -135,7 +135,7 @@ class PinnedSupabaseRecoveryTests(unittest.TestCase):
         for required in (
             "production-bootstrap",
             "SUPABASE_UPSTREAM",
-            "runtime/supabase",
+            'PRODUCTION_DIR / "runtime" / "supabase"',
             "supabase/postgres:",
             "volumes/db/roles.sql",
             "volumes/db/jwt.sql",

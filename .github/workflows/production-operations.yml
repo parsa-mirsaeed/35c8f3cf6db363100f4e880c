@@ -284,12 +284,54 @@ jobs:
           mkdir -p "${EDUTALENT_BACKUP_DIR}"
           printf '%s\n' 'ephemeral-ci-backup-passphrase-not-for-production' > "${EDUTALENT_BACKUP_PASSPHRASE_FILE}"
           chmod 600 "${EDUTALENT_BACKUP_PASSPHRASE_FILE}"
+
+          app_id="$(
+            docker ps \
+              --filter label=com.docker.compose.project=edutalent \
+              --filter label=com.docker.compose.service=app \
+              --format '{{.ID}}' | head -n1
+          )"
+          test -n "${app_id}"
+          docker exec "${app_id}" sh -eu -c '
+            response=/tmp/edutalent-qdrant-create.json
+            status="$(curl --silent --show-error --output "${response}" --write-out "%{http_code}" \
+              --request PUT --header "api-key: ${QDRANT_API_KEY}" \
+              --header "Content-Type: application/json" \
+              --data "{\"vectors\":{\"size\":${QDRANT_VECTOR_SIZE},\"distance\":\"Cosine\"}}" \
+              "http://qdrant:6333/collections/${QDRANT_COLLECTION}")"
+            if [ "${status}" != 200 ]; then
+              cat "${response}" >&2 || true
+              echo "Qdrant collection preparation failed with HTTP ${status}." >&2
+              exit 1
+            fi
+          '
+
           bash deploy/production/edutalent-operations pitr-start
 
           supabase_env=deploy/production/runtime/supabase/.env
           postgres_password="$(awk -F= '$1 == "POSTGRES_PASSWORD" { sub(/^[^=]*=/, ""); print; exit }' "${supabase_env}")"
           postgres_database="$(awk -F= '$1 == "POSTGRES_DB" { sub(/^[^=]*=/, ""); print; exit }' "${supabase_env}")"
           postgres_database="${postgres_database:-postgres}"
+
+          receiver_network="$(docker inspect --format '{{.HostConfig.NetworkMode}}' edutalent-pitr-archive)"
+          test "${receiver_network}" = edutalent-data
+          replication_role_state="$(
+            docker exec -e "PGPASSWORD=${postgres_password}" supabase-db \
+              psql -h 127.0.0.1 -U supabase_admin -d "${postgres_database}" \
+                -v ON_ERROR_STOP=1 -AtF'|' -c "
+                  SELECT rolcanlogin::text, rolreplication::text, rolsuper::text,
+                         rolcreatedb::text, rolcreaterole::text, rolinherit::text,
+                         rolbypassrls::text
+                    FROM pg_roles
+                   WHERE rolname = 'edutalent_backup'"
+          )"
+          test "${replication_role_state}" = 'true|true|false|false|false|false|false'
+          if docker exec -e PGPASSFILE=/run/secrets/pgpass edutalent-pitr-archive \
+            psql -h supabase-db -U edutalent_backup -d "${postgres_database}" -Atc 'SELECT 1' \
+            >/dev/null 2>&1; then
+            echo "Replication-only role unexpectedly opened a normal SQL session." >&2
+            exit 1
+          fi
 
           receiver_active=false
           for attempt in $(seq 1 30); do
@@ -382,7 +424,7 @@ jobs:
           EDUTALENT_BACKUP_DIR: ${{ runner.temp }}/backups
           EDUTALENT_BACKUP_PASSPHRASE_FILE: ${{ runner.temp }}/backup.passphrase
         run: |
-          set -o pipefail
+          set -euo pipefail
           bash edutalent production-database-check 2>&1 | tee -a operations-acceptance.log
           bash edutalent production-gateway-check 2>&1 | tee -a operations-acceptance.log
           bash edutalent production-qdrant-check 2>&1 | tee -a operations-acceptance.log

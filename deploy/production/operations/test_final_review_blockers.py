@@ -144,6 +144,9 @@ class PinnedSupabaseRecoveryTests(unittest.TestCase):
             "/etc/postgresql-custom",
             "config_file=/etc/postgresql/postgresql.conf",
             "hba_file=/etc/postgresql/pg_hba.conf",
+            "verify_wal_switch_boundary",
+            'user="supabase_admin"',
+            "false|false|true",
         ):
             self.assertIn(required, text)
 

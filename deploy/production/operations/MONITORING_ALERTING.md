@@ -52,12 +52,20 @@ Any integration must stay inside the approved management network unless the secu
 
 Thresholds live in `alert-policy.json`. Changes require review and regression tests. Lowering sensitivity to hide a recurring incident is not remediation. Capacity thresholds must account for database growth, WAL retention, Qdrant snapshots, Storage, and at least one complete backup staging cycle.
 
-
 ## Fail-closed integrity signals
 
 Monitoring verifies the newest backup sidecar against the referenced encrypted
 archive and its SHA-256 digest. A missing, truncated, replaced, or path-unsafe
-archive is critical even when the sidecar timestamp is recent. The backup disk
-has an independent free-space threshold, the WAL receiver must be running in
-addition to having a recent completed segment, and an unreadable or invalid TLS
-certificate is reported as an unknown critical state rather than ignored.
+archive is critical even when the sidecar timestamp is recent. Standalone
+`backup-verify` and `restore-drill` also require that adjacent sidecar to match
+before decrypting or creating a drill database.
+
+The TLS lifetime is derived from the prepared certificate mounted at
+`/etc/caddy/tls/fullchain.pem` in the running gateway, not from the host renewal
+source. Replacing `TLS_CERT_FILE` without restarting/reloading the gateway cannot
+therefore make monitoring report a certificate that Caddy has not loaded. A
+missing, unreadable, or invalid prepared certificate is an unknown critical
+state.
+
+The backup disk has an independent free-space threshold, and the WAL receiver
+must be running in addition to having a recent completed segment.

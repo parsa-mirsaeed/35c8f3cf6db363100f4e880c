@@ -165,7 +165,7 @@ collect_snapshot() {
   require_command openssl
   initialize_state
   local temp output now services_json stats_json db_metrics disk_free backup_disk_free tls_remaining
-  local latest_backup latest_wal latest_metadata tls_cert not_after expiry_epoch container_ids
+  local latest_backup latest_wal latest_metadata gateway_cert not_after expiry_epoch container_ids
   local core_health=false qdrant_health=false ai_health=false
   local backup_configured=false backup_verified=false wal_receiver_running=false
   temp="$(mktemp -d)"
@@ -205,8 +205,10 @@ collect_snapshot() {
     fi
   fi
   tls_remaining=-1
-  tls_cert="$(read_env "${APP_ENV}" TLS_CERT_FILE)"
-  if [[ -r "${tls_cert}" ]] && not_after="$(openssl x509 -in "${tls_cert}" -noout -enddate 2>/dev/null | cut -d= -f2-)" && expiry_epoch="$(date -d "${not_after}" +%s 2>/dev/null)"; then
+  gateway_cert="${temp}/gateway-fullchain.pem"
+  if compose cp gateway:/etc/caddy/tls/fullchain.pem "${gateway_cert}" >/dev/null 2>&1 \
+    && not_after="$(openssl x509 -in "${gateway_cert}" -noout -enddate 2>/dev/null | cut -d= -f2-)" \
+    && expiry_epoch="$(date -d "${not_after}" +%s 2>/dev/null)"; then
     tls_remaining="$(( expiry_epoch - $(date +%s) ))"
   fi
   if [[ "$(docker inspect --format '{{.State.Running}}' edutalent-pitr-archive 2>/dev/null || true)" == true ]]; then
@@ -339,6 +341,14 @@ decrypt_backup() {
 verify_decrypted_payload() {
   local payload="$1"
   python3 "${HELPER}" manifest-verify --root "${payload}" >/dev/null
+}
+
+verify_backup_sidecar() {
+  local archive="$1" metadata
+  metadata="${archive}.metadata.json"
+  [[ -f "${metadata}" ]] || { echo "Backup metadata sidecar not found: ${metadata}" >&2; exit 1; }
+  python3 "${HELPER}" backup-metadata-verify \
+    --metadata "${metadata}" --backup-dir "${BACKUP_ROOT}" >/dev/null
 }
 
 backup_preflight() {
@@ -611,7 +621,7 @@ PY
   chmod 0600 "${metadata_file}.partial"
   mv "${archive}.partial" "${archive}"
   mv "${metadata_file}.partial" "${metadata_file}"
-  python3 "${HELPER}" backup-metadata-verify --metadata "${metadata_file}" --backup-dir "${BACKUP_ROOT}" >/dev/null
+  verify_backup_sidecar "${archive}"
   backup_committed=true
   retire_included_wal_segments
   echo "Created and verified encrypted backup: ${archive}"
@@ -622,13 +632,14 @@ backup_verify() {
   require_backup_configuration
   local archive="$1" temp payload
   [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
+  verify_backup_sidecar "${archive}"
   temp="$(mktemp -d "${BACKUP_STAGING_ROOT}/edutalent-verify.XXXXXX")"
   trap 'rm -rf "${temp}"' RETURN
   decrypt_backup "${archive}" "${temp}"
   payload="$(find "${temp}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
   [[ -n "${payload}" ]] || { echo "Backup payload is missing." >&2; exit 1; }
   verify_decrypted_payload "${payload}"
-  echo "Encrypted backup verified: ${archive}"
+  echo "Encrypted backup and metadata sidecar verified: ${archive}"
 }
 
 restore_drill() {
@@ -638,6 +649,7 @@ restore_drill() {
   local archive="$1" temp payload dump db_id db_password source_db drill_db container_dump migration_count
   local restore_role restore_role_state
   [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
+  verify_backup_sidecar "${archive}"
   db_id="$(compose ps --quiet db)"
   [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
   temp="$(mktemp -d "${BACKUP_STAGING_ROOT}/edutalent-restore.XXXXXX")"

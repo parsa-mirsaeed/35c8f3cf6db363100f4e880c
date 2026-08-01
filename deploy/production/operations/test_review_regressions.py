@@ -275,6 +275,20 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
             backup.rindex("retire_included_wal_segments"),
         )
 
+    def test_backup_verify_and_restore_require_the_adjacent_sidecar_first(self) -> None:
+        sidecar = self.function("verify_backup_sidecar", "backup_preflight")
+        verify = self.function("backup_verify", "restore_drill")
+        restore = self.function("restore_drill", "pitr_start")
+        self.assertIn('metadata="${archive}.metadata.json"', sidecar)
+        self.assertIn("backup-metadata-verify", sidecar)
+        self.assertIn('--backup-dir "${BACKUP_ROOT}"', sidecar)
+        for body in (verify, restore):
+            self.assertIn('verify_backup_sidecar "${archive}"', body)
+            self.assertLess(
+                body.index('verify_backup_sidecar "${archive}"'),
+                body.index('decrypt_backup "${archive}"'),
+            )
+
     def test_restore_cleanup_removes_every_plaintext_copy(self) -> None:
         restore = self.function("restore_drill", "pitr_start")
         self.assertEqual(restore.count("trap cleanup_drill RETURN"), 1)
@@ -309,6 +323,15 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
             'bash deploy/production/edutalent-operations alerts "${snapshot}" 2>&1 | tee alerts-live.log',
             self.workflow,
         )
+
+    def test_snapshot_reads_the_gateway_prepared_certificate(self) -> None:
+        snapshot = self.function("collect_snapshot", "evaluate_alerts")
+        self.assertIn(
+            'compose cp gateway:/etc/caddy/tls/fullchain.pem "${gateway_cert}"',
+            snapshot,
+        )
+        self.assertIn('gateway_cert="${temp}/gateway-fullchain.pem"', snapshot)
+        self.assertNotIn('read_env "${APP_ENV}" TLS_CERT_FILE', snapshot)
 
     def test_snapshot_verifies_backup_disk_archive_and_receiver(self) -> None:
         snapshot = self.function("collect_snapshot", "evaluate_alerts")

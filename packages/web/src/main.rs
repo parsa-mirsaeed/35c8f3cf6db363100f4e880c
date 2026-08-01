@@ -58,6 +58,8 @@ const MAIN_CSS: Asset = asset!("/assets/main.css");
 async fn database_readiness(
     axum::Extension(state): axum::Extension<api::app_state::AppState>,
 ) -> Result<&'static str, axum::http::StatusCode> {
+    // The API-owned helper executes `sqlx::query_scalar::<_, i32>("SELECT 1")`
+    // through this application's configured pool.
     api::readiness::check_database(&state)
         .await
         .map(|_| "ready")

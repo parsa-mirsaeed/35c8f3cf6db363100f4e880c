@@ -38,6 +38,8 @@ SNAPSHOT_DIR="${OPERATIONS_STATE}/snapshots"
 ALERT_DIR="${OPERATIONS_STATE}/alerts"
 WAL_DIR="${OPERATIONS_STATE}/wal"
 PITR_DIR="${OPERATIONS_STATE}/pitr"
+BACKUP_ROOT=""
+BACKUP_STAGING_ROOT=""
 
 usage() {
   cat <<'USAGE'
@@ -67,11 +69,14 @@ Commands:
   help                          Show this help
 
 Backup environment:
-  EDUTALENT_BACKUP_DIR                 Absolute path on a separate protected disk
-  EDUTALENT_BACKUP_PASSPHRASE_FILE     Mode 0400/0600 passphrase file
-  EDUTALENT_BACKUP_MIN_FREE_BYTES      Default 10737418240 (10 GiB)
-  EDUTALENT_BACKUP_RETENTION_DAYS      Default 30
-  EDUTALENT_BACKUP_MINIMUM_COPIES      Default 7
+  EDUTALENT_BACKUP_DIR                         Absolute path on a separate protected disk
+  EDUTALENT_BACKUP_STAGING_DIR                 Optional absolute protected staging path
+  EDUTALENT_BACKUP_PASSPHRASE_FILE             Mode 0400/0600 passphrase file
+  EDUTALENT_BACKUP_MIN_FREE_BYTES              Default 10737418240 (10 GiB)
+  EDUTALENT_BACKUP_STAGING_MIN_FREE_BYTES      Default same as backup minimum
+  EDUTALENT_WAL_RETAIN_SEGMENTS                Default 2 completed local segments
+  EDUTALENT_BACKUP_RETENTION_DAYS              Default 30
+  EDUTALENT_BACKUP_MINIMUM_COPIES              Default 7
 USAGE
 }
 
@@ -271,6 +276,7 @@ evaluate_alerts() {
 require_backup_configuration() {
   require_command openssl
   require_command tar
+  local pass_mode staging_candidate wal_retain
   [[ -n "${EDUTALENT_BACKUP_DIR:-}" ]] || { echo "EDUTALENT_BACKUP_DIR is required." >&2; exit 1; }
   [[ "${EDUTALENT_BACKUP_DIR}" == /* ]] || { echo "EDUTALENT_BACKUP_DIR must be absolute." >&2; exit 1; }
   [[ -n "${EDUTALENT_BACKUP_PASSPHRASE_FILE:-}" && -f "${EDUTALENT_BACKUP_PASSPHRASE_FILE}" ]] || {
@@ -281,20 +287,45 @@ require_backup_configuration() {
   case "${pass_mode}" in 400|600) ;; *) echo "Backup passphrase file must have mode 0400 or 0600." >&2; exit 1 ;; esac
   mkdir -p "${EDUTALENT_BACKUP_DIR}"
   chmod 0700 "${EDUTALENT_BACKUP_DIR}"
-  backup_root="$(canonical_path "${EDUTALENT_BACKUP_DIR}")"
-  case "${backup_root}/" in
+  BACKUP_ROOT="$(canonical_path "${EDUTALENT_BACKUP_DIR}")"
+  case "${BACKUP_ROOT}/" in
     "${SCRIPT_DIR%/}/"*|"${ROOT_CANDIDATE%/}/"*)
       echo "Backup directory must remain outside the deployment and immutable release." >&2
       exit 1
       ;;
   esac
+  staging_candidate="${EDUTALENT_BACKUP_STAGING_DIR:-${BACKUP_ROOT}/.staging}"
+  [[ "${staging_candidate}" == /* ]] || { echo "EDUTALENT_BACKUP_STAGING_DIR must be absolute." >&2; exit 1; }
+  mkdir -p "${staging_candidate}"
+  chmod 0700 "${staging_candidate}"
+  BACKUP_STAGING_ROOT="$(canonical_path "${staging_candidate}")"
+  case "${BACKUP_STAGING_ROOT}/" in
+    "${SCRIPT_DIR%/}/"*|"${ROOT_CANDIDATE%/}/"*)
+      echo "Backup staging directory must remain outside the deployment and immutable release." >&2
+      exit 1
+      ;;
+  esac
+  wal_retain="${EDUTALENT_WAL_RETAIN_SEGMENTS:-2}"
+  [[ "${wal_retain}" =~ ^[0-9]+$ ]] || { echo "EDUTALENT_WAL_RETAIN_SEGMENTS must be a non-negative integer." >&2; exit 1; }
+}
+
+filesystem_available_bytes() {
+  df -Pk "$1" | awk 'NR==2 {print $4 * 1024}'
 }
 
 backup_available_bytes() {
   if [[ -n "${EDUTALENT_TEST_AVAILABLE_BYTES:-}" ]]; then
     printf '%s\n' "${EDUTALENT_TEST_AVAILABLE_BYTES}"
   else
-    df -Pk "${EDUTALENT_BACKUP_DIR}" | awk 'NR==2 {print $4 * 1024}'
+    filesystem_available_bytes "${BACKUP_ROOT}"
+  fi
+}
+
+staging_available_bytes() {
+  if [[ -n "${EDUTALENT_TEST_STAGING_AVAILABLE_BYTES:-}" ]]; then
+    printf '%s\n' "${EDUTALENT_TEST_STAGING_AVAILABLE_BYTES}"
+  else
+    filesystem_available_bytes "${BACKUP_STAGING_ROOT}"
   fi
 }
 
@@ -312,14 +343,28 @@ verify_decrypted_payload() {
 
 backup_preflight() {
   require_backup_configuration
-  local minimum_free available
+  local minimum_free available staging_minimum staging_available
   minimum_free="${EDUTALENT_BACKUP_MIN_FREE_BYTES:-10737418240}"
+  staging_minimum="${EDUTALENT_BACKUP_STAGING_MIN_FREE_BYTES:-${minimum_free}}"
+  [[ "${minimum_free}" =~ ^[0-9]+$ && "${staging_minimum}" =~ ^[0-9]+$ ]] || {
+    echo "Backup capacity thresholds must be non-negative integers." >&2
+    exit 1
+  }
   available="$(backup_available_bytes)"
+  staging_available="$(staging_available_bytes)"
+  [[ "${available}" =~ ^[0-9]+$ && "${staging_available}" =~ ^[0-9]+$ ]] || {
+    echo "Unable to determine backup or staging capacity." >&2
+    exit 1
+  }
   if (( available < minimum_free )); then
     echo "Insufficient backup capacity: ${available} bytes available; ${minimum_free} required." >&2
     exit 1
   fi
-  echo "Backup destination and capacity verified: ${available} bytes available."
+  if (( staging_available < staging_minimum )); then
+    echo "Insufficient backup staging capacity: ${staging_available} bytes available; ${staging_minimum} required." >&2
+    exit 1
+  fi
+  echo "Backup destination and staging capacity verified: ${available} and ${staging_available} bytes available."
 }
 
 backup_create() {
@@ -328,18 +373,39 @@ backup_create() {
   require_command docker
   require_envs
   local timestamp name archive temp payload metadata_file db_id db_name db_password collection
-  local qdrant_response qdrant_output qdrant_status snapshot_name service required_service id index state wal_file
-  local -a running_services=() quiesced_services=() quiesced_container_ids=()
-  local services_resumed=false
+  local qdrant_response qdrant_output qdrant_status service required_service id index state wal_file
+  local qdrant_snapshot_name="" archive_sha verify_temp wal_retain delete_count
+  local -a running_services=() quiesced_services=() quiesced_container_ids=() included_wal_files=()
+  local services_resumed=false backup_committed=false
   db_id="$(compose ps --quiet db)"
   [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   name="edutalent-backup-${timestamp}"
-  archive="${EDUTALENT_BACKUP_DIR}/${name}.tar.gz.enc"
+  archive="${BACKUP_ROOT}/${name}.tar.gz.enc"
   metadata_file="${archive}.metadata.json"
   [[ ! -e "${archive}" && ! -e "${metadata_file}" ]] || { echo "Backup already exists: ${archive}" >&2; exit 1; }
-  temp="$(mktemp -d)"
+  temp="$(mktemp -d "${BACKUP_STAGING_ROOT}/edutalent-backup.XXXXXX")"
   payload="${temp}/${name}"
+
+  delete_qdrant_snapshot() {
+    local snapshot="$1" output status
+    [[ -n "${snapshot}" ]] || return 0
+    output="$(compose run --rm --no-deps --pull never --entrypoint sh \
+      -e "EDUTALENT_QDRANT_SNAPSHOT_NAME=${snapshot}" app -eu -c '
+        response=/tmp/edutalent-qdrant-delete.json
+        status="$(curl --silent --show-error --output "${response}" --write-out "%{http_code}" --request DELETE --header "api-key: ${QDRANT_API_KEY}" "http://qdrant:6333/collections/${QDRANT_COLLECTION}/snapshots/${EDUTALENT_QDRANT_SNAPSHOT_NAME}")"
+        printf "%s\n" "${status}"
+        cat "${response}"
+      ' 2>"${temp}/qdrant-delete-client.log" || true)"
+    status="$(printf '%s\n' "${output}" | head -n1)"
+    if [[ "${status}" != "200" ]]; then
+      echo "Qdrant snapshot deletion failed with HTTP ${status:-unknown}: ${snapshot}" >&2
+      cat "${temp}/qdrant-delete-client.log" >&2 || true
+      printf '%s\n' "${output}" >&2
+      return 1
+    fi
+  }
+
   resume_quiesced_containers() {
     local attempt index service container_id state all_recovered
     (( ${#quiesced_container_ids[@]} > 0 )) || return 0
@@ -368,8 +434,27 @@ backup_create() {
     done
     return 1
   }
+
+  retire_included_wal_segments() {
+    local index
+    wal_retain="${EDUTALENT_WAL_RETAIN_SEGMENTS:-2}"
+    delete_count=$(( ${#included_wal_files[@]} - wal_retain ))
+    (( delete_count > 0 )) || return 0
+    for ((index = 0; index < delete_count; index++)); do
+      rm -f -- "${included_wal_files[$index]}"
+    done
+    echo "Retired ${delete_count} verified WAL segment(s); retained ${wal_retain} included segment(s)."
+  }
+
   cleanup_backup() {
     local status=$?
+    if [[ -n "${qdrant_snapshot_name}" ]]; then
+      if delete_qdrant_snapshot "${qdrant_snapshot_name}"; then
+        qdrant_snapshot_name=""
+      else
+        status=1
+      fi
+    fi
     if [[ "${services_resumed}" != true && ${#quiesced_container_ids[@]} -gt 0 ]]; then
       if resume_quiesced_containers; then
         services_resumed=true
@@ -378,7 +463,12 @@ backup_create() {
         status=1
       fi
     fi
-    rm -rf "${temp}" "${archive}.partial"
+    if [[ "${backup_committed}" != true ]]; then
+      rm -f -- "${archive}" "${metadata_file}" "${archive}.partial" "${metadata_file}.partial"
+    else
+      rm -f -- "${archive}.partial" "${metadata_file}.partial"
+    fi
+    rm -rf "${temp}"
     return "${status}"
   }
   trap cleanup_backup RETURN
@@ -442,9 +532,11 @@ backup_create() {
   qdrant_status="$(printf '%s\n' "${qdrant_output}" | head -n1)"
   printf '%s\n' "${qdrant_output}" | tail -n +2 >"${qdrant_response}"
   if [[ "${qdrant_status}" == "200" ]]; then
-    snapshot_name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["result"]["name"])' "${qdrant_response}")"
-    compose cp "qdrant:/qdrant/storage/collections/${collection}/snapshots/${snapshot_name}" "${payload}/qdrant/${snapshot_name}" >/dev/null
-    printf '%s\n' "${snapshot_name}" >"${payload}/qdrant/snapshot-name.txt"
+    qdrant_snapshot_name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["result"]["name"])' "${qdrant_response}")"
+    compose cp "qdrant:/qdrant/storage/collections/${collection}/snapshots/${qdrant_snapshot_name}" "${payload}/qdrant/${qdrant_snapshot_name}" >/dev/null
+    printf '%s\n' "${qdrant_snapshot_name}" >"${payload}/qdrant/snapshot-name.txt"
+    delete_qdrant_snapshot "${qdrant_snapshot_name}"
+    qdrant_snapshot_name=""
   elif [[ "${qdrant_status}" == "404" ]]; then
     printf '%s\n' "collection-not-created" >"${payload}/qdrant/status.txt"
   else
@@ -466,9 +558,13 @@ backup_create() {
   elif command -v git >/dev/null 2>&1 && git -C "${ROOT_CANDIDATE}" rev-parse HEAD >/dev/null 2>&1; then
     git -C "${ROOT_CANDIDATE}" rev-parse HEAD >"${payload}/configuration/public/git-head.txt"
   fi
-  while IFS= read -r wal_file; do
+  mapfile -t included_wal_files < <(
+    find "${WAL_DIR}" -maxdepth 1 -type f -regextype posix-extended \
+      -regex '.*/[0-9A-F]{24}' -printf '%T@ %p\n' | sort -n | cut -d' ' -f2-
+  )
+  for wal_file in "${included_wal_files[@]}"; do
     cp -a "${wal_file}" "${payload}/wal/"
-  done < <(find "${WAL_DIR}" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9A-F]{24}' -print | sort)
+  done
 
   resume_quiesced_containers
   services_resumed=true
@@ -491,12 +587,11 @@ PY
   tar -C "${temp}" -czf - "${name}" | openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000 \
     -pass "file:${EDUTALENT_BACKUP_PASSPHRASE_FILE}" -out "${archive}.partial"
   chmod 0600 "${archive}.partial"
-  mv "${archive}.partial" "${archive}"
   verify_temp="${temp}/verify"
   mkdir -p "${verify_temp}"
-  decrypt_backup "${archive}" "${verify_temp}"
+  decrypt_backup "${archive}.partial" "${verify_temp}"
   verify_decrypted_payload "${verify_temp}/${name}"
-  archive_sha="$(sha256sum "${archive}" | awk '{print $1}')"
+  archive_sha="$(sha256sum "${archive}.partial" | awk '{print $1}')"
   python3 - "${metadata_file}.partial" "${archive}" "${archive_sha}" <<'PY'
 import json, os, sys
 from datetime import datetime, timezone
@@ -514,8 +609,11 @@ Path(path).write_text(json.dumps({
 }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
   chmod 0600 "${metadata_file}.partial"
+  mv "${archive}.partial" "${archive}"
   mv "${metadata_file}.partial" "${metadata_file}"
-  python3 "${HELPER}" backup-metadata-verify --metadata "${metadata_file}" --backup-dir "${EDUTALENT_BACKUP_DIR}" >/dev/null
+  python3 "${HELPER}" backup-metadata-verify --metadata "${metadata_file}" --backup-dir "${BACKUP_ROOT}" >/dev/null
+  backup_committed=true
+  retire_included_wal_segments
   echo "Created and verified encrypted backup: ${archive}"
 }
 
@@ -524,7 +622,7 @@ backup_verify() {
   require_backup_configuration
   local archive="$1" temp payload
   [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
-  temp="$(mktemp -d)"
+  temp="$(mktemp -d "${BACKUP_STAGING_ROOT}/edutalent-verify.XXXXXX")"
   trap 'rm -rf "${temp}"' RETURN
   decrypt_backup "${archive}" "${temp}"
   payload="$(find "${temp}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
@@ -542,7 +640,7 @@ restore_drill() {
   [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
   db_id="$(compose ps --quiet db)"
   [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
-  temp="$(mktemp -d)"
+  temp="$(mktemp -d "${BACKUP_STAGING_ROOT}/edutalent-restore.XXXXXX")"
   drill_db=""
   container_dump=""
   cleanup_drill() {
@@ -622,7 +720,6 @@ pitr_start() {
   echo "Continuous WAL reception started in ${WAL_DIR}."
 }
 
-
 pitr_verify() {
   require_command docker
   require_envs
@@ -672,6 +769,7 @@ pitr_verify() {
   fi
   echo "Continuous WAL reception and forced archive verified."
 }
+
 pitr_stop() {
   require_command docker
   docker rm --force edutalent-pitr-archive >/dev/null 2>&1 || true
@@ -786,7 +884,7 @@ acceptance() {
 prune_backups() {
   require_backup_configuration
   local retention="${EDUTALENT_BACKUP_RETENTION_DAYS:-30}" minimum="${EDUTALENT_BACKUP_MINIMUM_COPIES:-7}"
-  mapfile -t archives < <(find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc' -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+  mapfile -t archives < <(find "${BACKUP_ROOT}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc' -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
   for index in "${!archives[@]}"; do
     archive="${archives[$index]}"
     if (( index < minimum )); then continue; fi

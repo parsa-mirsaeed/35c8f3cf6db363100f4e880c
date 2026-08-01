@@ -77,7 +77,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/backups"
+          mkdir -p "${RUNNER_TEMP}/backups" "${RUNNER_TEMP}/backup-staging"
           printf '%s\n' 'validation-only-passphrase' > "${RUNNER_TEMP}/backup.passphrase"
           chmod 600 "${RUNNER_TEMP}/backup.passphrase"
           if EDUTALENT_BACKUP_DIR="${RUNNER_TEMP}/backups" \
@@ -91,6 +91,20 @@ jobs:
           fi
           grep -Fq 'Insufficient backup capacity' backup-capacity.log
 
+          if EDUTALENT_BACKUP_DIR="${RUNNER_TEMP}/backups" \
+             EDUTALENT_BACKUP_STAGING_DIR="${RUNNER_TEMP}/backup-staging" \
+             EDUTALENT_BACKUP_PASSPHRASE_FILE="${RUNNER_TEMP}/backup.passphrase" \
+             EDUTALENT_BACKUP_MIN_FREE_BYTES=1 \
+             EDUTALENT_BACKUP_STAGING_MIN_FREE_BYTES=1 \
+             EDUTALENT_TEST_AVAILABLE_BYTES=2 \
+             EDUTALENT_TEST_STAGING_AVAILABLE_BYTES=0 \
+             bash deploy/production/edutalent-operations backup-preflight \
+             >backup-staging-capacity.log 2>&1; then
+            echo "Backup preflight unexpectedly accepted a full staging filesystem." >&2
+            exit 1
+          fi
+          grep -Fq 'Insufficient backup staging capacity' backup-staging-capacity.log
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -99,6 +113,7 @@ jobs:
             operations-definitions.log
             load-regression.json
             backup-capacity.log
+            backup-staging-capacity.log
             local-http.log
           if-no-files-found: warn
           retention-days: 14
@@ -373,9 +388,9 @@ jobs:
           bash edutalent production-qdrant-check 2>&1 | tee -a operations-acceptance.log
           bash edutalent production-ai-check 2>&1 | tee -a operations-acceptance.log
           snapshot="$(bash deploy/production/edutalent-operations snapshot | tail -n1)"
-          # CI verifies alert evaluation mechanics separately. The live snapshot may
-          # legitimately warn that the default empty Qdrant collection is absent.
-          bash deploy/production/edutalent-operations alerts "${snapshot}" 2>&1 | tee alerts-live.log || test $? -eq 2
+          # Warning-only degraded dependencies return zero; every critical alert
+          # must fail the exact-head production acceptance job.
+          bash deploy/production/edutalent-operations alerts "${snapshot}" 2>&1 | tee alerts-live.log
 
       - name: Stop WAL receiver
         if: always()

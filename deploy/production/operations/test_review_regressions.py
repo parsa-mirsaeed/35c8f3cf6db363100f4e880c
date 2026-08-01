@@ -13,6 +13,7 @@ PRODUCTION_DIR = Path(__file__).resolve().parent.parent
 REPOSITORY_ROOT = PRODUCTION_DIR.parent.parent
 SCRIPT_PATH = PRODUCTION_DIR / "edutalent-operations"
 POLICY_PATH = Path(__file__).with_name("alert-policy.json")
+WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/production-operations.yml"
 spec = importlib.util.spec_from_file_location("edutalent_ops_review", MODULE_PATH)
 assert spec and spec.loader
 ops = importlib.util.module_from_spec(spec)
@@ -152,18 +153,16 @@ class FailClosedMonitoringTests(unittest.TestCase):
             {(alert["code"], alert["severity"]) for alert in pressure_alerts},
         )
 
-    def test_ai_gateway_outage_is_warning_only(self) -> None:
-        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
-        self.assertNotIn("ai-gateway", policy["required_services"])
-        snapshot = {
+    def degraded_snapshot(self, policy: dict[str, object]) -> dict[str, object]:
+        return {
             "collected_epoch": 0,
             "services": [
                 {"Service": service, "State": "running", "Health": "healthy"}
                 for service in policy["required_services"]
             ],
-            "disk_free_bytes": policy["minimum_disk_free_bytes"] + 1,
+            "disk_free_bytes": int(policy["minimum_disk_free_bytes"]) + 1,
             "backup_configured": False,
-            "tls_seconds_remaining": policy["minimum_tls_seconds_remaining"] + 1,
+            "tls_seconds_remaining": int(policy["minimum_tls_seconds_remaining"]) + 1,
             "database_connections": 1,
             "database_connection_limit": 100,
             "latest_backup_created_at": "1970-01-01T00:00:00Z",
@@ -171,11 +170,29 @@ class FailClosedMonitoringTests(unittest.TestCase):
             "wal_receiver_running": True,
             "core_health": True,
             "qdrant_health": True,
-            "ai_gateway_health": False,
+            "ai_gateway_health": True,
         }
+
+    def test_ai_gateway_outage_is_warning_only(self) -> None:
+        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+        self.assertNotIn("ai-gateway", policy["required_services"])
+        snapshot = self.degraded_snapshot(policy)
+        snapshot["ai_gateway_health"] = False
         alerts = ops.evaluate_alerts(snapshot, policy)
         self.assertIn(
             ("ai_gateway_unavailable", "warning"),
+            {(alert["code"], alert["severity"]) for alert in alerts},
+        )
+        self.assertFalse(any(alert["severity"] == "critical" for alert in alerts))
+
+    def test_qdrant_outage_is_warning_only(self) -> None:
+        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+        self.assertNotIn("qdrant", policy["required_services"])
+        snapshot = self.degraded_snapshot(policy)
+        snapshot["qdrant_health"] = False
+        alerts = ops.evaluate_alerts(snapshot, policy)
+        self.assertIn(
+            ("qdrant_unavailable", "warning"),
             {(alert["code"], alert["severity"]) for alert in alerts},
         )
         self.assertFalse(any(alert["severity"] == "critical" for alert in alerts))
@@ -184,6 +201,7 @@ class FailClosedMonitoringTests(unittest.TestCase):
 class OperationsScriptBoundaryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.script = SCRIPT_PATH.read_text(encoding="utf-8")
+        self.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     def function(self, name: str, next_name: str) -> str:
         return self.script.split(f"{name}() {{", 1)[1].split(
@@ -213,6 +231,50 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
         self.assertNotIn("db|", quiesce_case)
         self.assertNotIn("qdrant", quiesce_case)
 
+    def test_backup_stages_only_on_a_capacity_checked_protected_path(self) -> None:
+        preflight = self.function("backup_preflight", "backup_create")
+        backup = self.function("backup_create", "backup_verify")
+        self.assertIn("EDUTALENT_BACKUP_STAGING_DIR", self.script)
+        self.assertIn("EDUTALENT_TEST_STAGING_AVAILABLE_BYTES", self.script)
+        self.assertIn("Insufficient backup staging capacity", preflight)
+        self.assertIn(
+            'mktemp -d "${BACKUP_STAGING_ROOT}/edutalent-backup.XXXXXX"', backup
+        )
+        self.assertNotIn('temp="$(mktemp -d)"', backup)
+
+    def test_backup_verifies_partial_before_publishing_final_names(self) -> None:
+        backup = self.function("backup_create", "backup_verify")
+        verify_partial = 'decrypt_backup "${archive}.partial" "${verify_temp}"'
+        publish_archive = 'mv "${archive}.partial" "${archive}"'
+        self.assertIn("backup_committed=false", backup)
+        self.assertIn(verify_partial, backup)
+        self.assertIn(publish_archive, backup)
+        self.assertLess(backup.index(verify_partial), backup.index(publish_archive))
+        self.assertIn('rm -f -- "${archive}" "${metadata_file}"', backup)
+        self.assertLess(
+            backup.index(publish_archive),
+            backup.index("backup_committed=true"),
+        )
+
+    def test_qdrant_snapshot_is_deleted_after_copy_and_on_failure(self) -> None:
+        backup = self.function("backup_create", "backup_verify")
+        self.assertIn("delete_qdrant_snapshot()", backup)
+        self.assertIn("--request DELETE", backup)
+        self.assertIn("qdrant_snapshot_name", backup)
+        self.assertGreaterEqual(backup.count('delete_qdrant_snapshot "${qdrant_snapshot_name}"'), 2)
+        self.assertIn('qdrant_snapshot_name=""', backup)
+
+    def test_verified_full_backup_retires_only_included_wal_with_a_tail(self) -> None:
+        backup = self.function("backup_create", "backup_verify")
+        self.assertIn("included_wal_files=()", backup)
+        self.assertIn("EDUTALENT_WAL_RETAIN_SEGMENTS", self.script)
+        self.assertIn("retire_included_wal_segments()", backup)
+        self.assertIn('rm -f -- "${included_wal_files[$index]}"', backup)
+        self.assertLess(
+            backup.index("backup_committed=true"),
+            backup.rindex("retire_included_wal_segments"),
+        )
+
     def test_restore_cleanup_removes_every_plaintext_copy(self) -> None:
         restore = self.function("restore_drill", "pitr_start")
         self.assertEqual(restore.count("trap cleanup_drill RETURN"), 1)
@@ -224,7 +286,7 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
         restore = self.function("restore_drill", "pitr_start")
         self.assertIn("restore_role=supabase_admin", restore)
         self.assertIn("SELECT current_user, rolsuper::text", restore)
-        self.assertIn("supabase_admin|true", restore)
+        self.assertIn("supabase_admin|true|false", restore)
         self.assertIn('-U "${restore_role}" -d "${drill_db}"', restore)
         self.assertIn("--no-owner --no-acl --exit-on-error", restore)
         self.assertIn('-U postgres "${drill_db}"', restore)
@@ -241,6 +303,13 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
             acceptance.index("collect_snapshot"), acceptance.index("evaluate_alerts")
         )
 
+    def test_workflow_rejects_every_critical_alert_status(self) -> None:
+        self.assertNotIn("|| test $? -eq 2", self.workflow)
+        self.assertIn(
+            'bash deploy/production/edutalent-operations alerts "${snapshot}" 2>&1 | tee alerts-live.log',
+            self.workflow,
+        )
+
     def test_snapshot_verifies_backup_disk_archive_and_receiver(self) -> None:
         snapshot = self.function("collect_snapshot", "evaluate_alerts")
         self.assertIn("backup-metadata-verify", snapshot)
@@ -248,10 +317,12 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
         self.assertIn("wal_receiver_running", snapshot)
         self.assertIn("tls_remaining=-1", snapshot)
 
-    def test_temporary_patch_workflow_is_absent(self) -> None:
-        self.assertFalse(
-            (REPOSITORY_ROOT / ".github/workflows/apply-backup-resume-fix.yml").exists()
-        )
+    def test_temporary_patch_workflows_are_absent(self) -> None:
+        for name in (
+            "apply-backup-resume-fix.yml",
+            "apply-backup-mode-fix.yml",
+        ):
+            self.assertFalse((REPOSITORY_ROOT / ".github/workflows" / name).exists())
 
 
 if __name__ == "__main__":

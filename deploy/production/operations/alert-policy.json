@@ -6,8 +6,7 @@
     "kong",
     "auth",
     "rest",
-    "storage",
-    "qdrant"
+    "storage"
   ],
   "minimum_disk_free_bytes": 10737418240,
   "minimum_tls_seconds_remaining": 1209600,

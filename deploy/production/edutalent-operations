@@ -344,11 +344,24 @@ verify_decrypted_payload() {
 }
 
 verify_backup_sidecar() {
-  local archive="$1" metadata
+  local requested="$1" archive metadata
+  archive="$(canonical_path "${requested}")"
+  if [[ "$(dirname "${archive}")" != "${BACKUP_ROOT}" ]]; then
+    echo "Backup archive must be a direct file under the configured backup root: ${requested}" >&2
+    return 1
+  fi
+  [[ -f "${archive}" && ! -L "${archive}" ]] || {
+    echo "Backup archive is missing or unsafe: ${requested}" >&2
+    return 1
+  }
   metadata="${archive}.metadata.json"
-  [[ -f "${metadata}" ]] || { echo "Backup metadata sidecar not found: ${metadata}" >&2; exit 1; }
+  [[ -f "${metadata}" && ! -L "${metadata}" ]] || {
+    echo "Backup metadata sidecar not found or unsafe: ${metadata}" >&2
+    return 1
+  }
   python3 "${HELPER}" backup-metadata-verify \
     --metadata "${metadata}" --backup-dir "${BACKUP_ROOT}" >/dev/null
+  printf '%s\n' "${archive}"
 }
 
 backup_preflight() {
@@ -457,7 +470,8 @@ backup_create() {
   }
 
   cleanup_backup() {
-    local status=$?
+    local status="${1:-$?}"
+    trap - EXIT
     if [[ -n "${qdrant_snapshot_name}" ]]; then
       if delete_qdrant_snapshot "${qdrant_snapshot_name}"; then
         qdrant_snapshot_name=""
@@ -474,14 +488,18 @@ backup_create() {
       fi
     fi
     if [[ "${backup_committed}" != true ]]; then
-      rm -f -- "${archive}" "${metadata_file}" "${archive}.partial" "${metadata_file}.partial"
-    else
-      rm -f -- "${archive}.partial" "${metadata_file}.partial"
+      if ! rm -f -- "${archive}" "${metadata_file}" "${archive}.partial" "${metadata_file}.partial"; then
+        status=1
+      fi
+    elif ! rm -f -- "${archive}.partial" "${metadata_file}.partial"; then
+      status=1
     fi
-    rm -rf "${temp}"
+    if ! rm -rf -- "${temp}"; then
+      status=1
+    fi
     return "${status}"
   }
-  trap cleanup_backup RETURN
+  trap 'cleanup_backup "$?"; exit "$?"' EXIT
   mkdir -p "${payload}/database" "${payload}/storage" "${payload}/qdrant" "${payload}/configuration/public" "${payload}/configuration/secret-escrow" "${payload}/wal"
   chmod 0700 "${payload}" "${payload}/configuration/secret-escrow"
 
@@ -621,9 +639,10 @@ PY
   chmod 0600 "${metadata_file}.partial"
   mv "${archive}.partial" "${archive}"
   mv "${metadata_file}.partial" "${metadata_file}"
-  verify_backup_sidecar "${archive}"
+  archive="$(verify_backup_sidecar "${archive}")"
   backup_committed=true
   retire_included_wal_segments
+  cleanup_backup 0
   echo "Created and verified encrypted backup: ${archive}"
 }
 
@@ -631,8 +650,7 @@ backup_verify() {
   require_definitions
   require_backup_configuration
   local archive="$1" temp payload
-  [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
-  verify_backup_sidecar "${archive}"
+  archive="$(verify_backup_sidecar "${archive}")"
   temp="$(mktemp -d "${BACKUP_STAGING_ROOT}/edutalent-verify.XXXXXX")"
   trap 'rm -rf "${temp}"' RETURN
   decrypt_backup "${archive}" "${temp}"
@@ -648,25 +666,25 @@ restore_drill() {
   require_command docker
   local archive="$1" temp payload dump db_id db_password source_db drill_db container_dump migration_count
   local restore_role restore_role_state
-  [[ -f "${archive}" ]] || { echo "Backup archive not found: ${archive}" >&2; exit 1; }
-  verify_backup_sidecar "${archive}"
+  archive="$(verify_backup_sidecar "${archive}")"
   db_id="$(compose ps --quiet db)"
   [[ -n "${db_id}" ]] || { echo "Database container is not running." >&2; exit 1; }
   temp="$(mktemp -d "${BACKUP_STAGING_ROOT}/edutalent-restore.XXXXXX")"
   drill_db=""
   container_dump=""
   cleanup_drill() {
-    local status=$?
+    local status="${1:-$?}"
+    trap - EXIT
     if [[ -n "${db_id:-}" && -n "${container_dump:-}" ]]; then
-      docker exec "${db_id}" rm -f "${container_dump}" >/dev/null 2>&1 || true
+      docker exec "${db_id}" rm -f "${container_dump}" >/dev/null 2>&1 || status=1
     fi
     if [[ -n "${db_id:-}" && -n "${db_password:-}" && -n "${drill_db:-}" ]]; then
-      docker exec -e "PGPASSWORD=${db_password}" "${db_id}" dropdb -h 127.0.0.1 -U postgres --if-exists "${drill_db}" >/dev/null 2>&1 || true
+      docker exec -e "PGPASSWORD=${db_password}" "${db_id}" dropdb -h 127.0.0.1 -U postgres --if-exists "${drill_db}" >/dev/null 2>&1 || status=1
     fi
-    rm -rf "${temp}"
+    rm -rf -- "${temp}" || status=1
     return "${status}"
   }
-  trap cleanup_drill RETURN
+  trap 'cleanup_drill "$?"; exit "$?"' EXIT
   decrypt_backup "${archive}" "${temp}"
   payload="$(find "${temp}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
   [[ -n "${payload}" ]] || { echo "Backup payload is missing." >&2; exit 1; }
@@ -691,8 +709,7 @@ restore_drill() {
     pg_restore -h 127.0.0.1 -U "${restore_role}" -d "${drill_db}" --no-owner --no-acl --exit-on-error "${container_dump}"
   migration_count="$(docker exec -e "PGPASSWORD=${db_password}" "${db_id}" psql -h 127.0.0.1 -U postgres -d "${drill_db}" -Atc 'SELECT count(*) FROM public.edutalent_migration_files')"
   [[ "${migration_count}" =~ ^[1-9][0-9]*$ ]] || { echo "Restored migration registry is empty." >&2; exit 1; }
-  cleanup_drill
-  trap - RETURN
+  cleanup_drill 0
   echo "Database restore drill succeeded in temporary database ${drill_db}; source ${source_db} was not modified."
 }
 

@@ -264,8 +264,24 @@ def evaluate_alerts(snapshot: dict[str, Any], policy: dict[str, Any]) -> list[di
     connections = int(snapshot.get("database_connections", -1))
     connection_limit = int(snapshot.get("database_connection_limit", -1))
     max_ratio = float(policy.get("maximum_database_connection_ratio", 0.85))
-    if connections >= 0 and connection_limit > 0 and connections / connection_limit >= max_ratio:
-        alerts.append({"severity": "warning", "code": "database_connections_high", "observed": connections, "limit": connection_limit})
+    if connections < 0 or connection_limit <= 0:
+        alerts.append(
+            {
+                "severity": "critical",
+                "code": "database_metrics_unknown",
+                "observed": connections,
+                "limit": connection_limit,
+            }
+        )
+    elif connections / connection_limit >= max_ratio:
+        alerts.append(
+            {
+                "severity": "critical",
+                "code": "database_connections_high",
+                "observed": connections,
+                "limit": connection_limit,
+            }
+        )
 
     for key, code, max_age_key in (
         ("latest_backup_created_at", "backup_stale", "maximum_backup_age_seconds"),
@@ -285,6 +301,7 @@ def evaluate_alerts(snapshot: dict[str, Any], policy: dict[str, Any]) -> list[di
     if snapshot.get("ai_gateway_health") is False:
         alerts.append({"severity": "warning", "code": "ai_gateway_unavailable"})
     return alerts
+
 
 @dataclass(frozen=True)
 class LoadResult:

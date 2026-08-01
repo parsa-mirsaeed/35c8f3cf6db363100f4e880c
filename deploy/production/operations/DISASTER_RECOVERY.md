@@ -40,7 +40,7 @@ recovery_target_action = 'promote'
 8. Run consistency queries, migration checksum verification, RLS/security invariants, and an application-role privilege check.
 9. Do not reuse the original physical replication slot blindly. Recreate the WAL receiver against the promoted timeline after the restored database becomes authoritative.
 
-The CI `recovery_drill.py` proves a base backup taken before a transaction can replay archived WAL to a target after that transaction while excluding a later transaction.
+The CI `recovery_drill.py` materializes the exact commit in `SUPABASE_UPSTREAM`, resolves the database image from that materialized Compose definition, and rejects floating or non-Supabase PostgreSQL images. Both the source and restored instances use that same image, the pinned Supabase database initialization scripts, the production `pg_hba.conf`, `/etc/postgresql/postgresql.conf`, and the persistent `/etc/postgresql-custom` configuration volume. The evidence records the upstream commit, exact image, PostgreSQL version, HBA/config paths, and `supabase_admin` role state before and after recovery. The drill proves that a base backup taken before a transaction can replay archived WAL to a target after that transaction while excluding a later transaction.
 
 ## Logical database restore
 
@@ -53,7 +53,11 @@ Use `restore-drill` for routine validation. For disaster promotion:
 5. verify migration registry checksums, RLS, tenant boundaries, and durable queue constraints;
 6. switch the application only after validation.
 
-The Supabase dump contains protected schemas and functions that require the pinned image's existing `supabase_admin` superuser during replay. `restore-drill` verifies that exact role boundary and uses it only for `pg_restore --exit-on-error` into the temporary database. It does not elevate or grant privileges to the routine `postgres` role, and the temporary database, container copy, and decrypted payload are removed on every exit path.
+The Supabase dump contains protected schemas and functions that require the pinned image's existing `supabase_admin` superuser during replay. `restore-drill` verifies that exact role boundary and uses it only for `pg_restore --exit-on-error` into the temporary database. It does not elevate or grant privileges to the routine `postgres` role.
+
+`backup-verify` and `restore-drill` accept only a canonical direct file under the configured backup root. The adjacent sidecar must name that same generation and its recorded SHA-256 must match before any decryption or temporary database creation begins. This prevents a caller-supplied archive from being paired with a same-named but different archive under the backup root.
+
+Restore cleanup is registered on shell `EXIT`, not only normal function return. The temporary database, container dump, and decrypted plaintext payload are therefore removed for successful completion, command failure, and explicit error exits.
 
 ## Supabase Storage
 
@@ -93,18 +97,14 @@ Then execute the tenant/document/final security acceptance cases in `SECURITY_AC
 
 ## Scheduled drills
 
-- every backup: decrypt and manifest verify;
+- every backup: decrypt, adjacent-sidecar SHA-256, and manifest verification;
 - weekly: temporary logical database restore;
-- monthly: isolated PostgreSQL PITR and Qdrant snapshot recovery;
+- monthly: isolated PostgreSQL PITR on the pinned Supabase database image and Qdrant snapshot recovery;
 - quarterly: full replacement-host restore including Storage, secrets, TLS, load, and controlled failback;
 - after every database, Supabase, Qdrant, storage, or release-format upgrade: full recovery drill before deployment.
 
-
 ## Coordinated backup boundary
 
-`backup-create` stops the running application and Supabase writer-facing
-services before capturing PostgreSQL, Storage, and the Qdrant snapshot. A
-capability-free one-off application image performs only the Qdrant snapshot
-request. Writer services are restarted after capture and on every error path.
-This creates a documented write-quiesced cross-service recovery point instead
-of three independently timed copies.
+`backup-create` stops the running application and Supabase writer-facing services before capturing PostgreSQL, Storage, and the Qdrant snapshot. A capability-free one-off application image performs only the Qdrant snapshot request. An `EXIT` cleanup handler is registered before quiescence and remains active until explicit successful cleanup. It resumes the exact stopped containers, deletes any server-side Qdrant snapshot, removes plaintext staging and partial/final uncommitted artifacts, and preserves the original failure status. This applies to normal completion, `set -e` termination, and explicit error exits.
+
+This creates a documented write-quiesced cross-service recovery point instead of three independently timed copies without allowing a failed backup command to leave production partially stopped or plaintext material behind.

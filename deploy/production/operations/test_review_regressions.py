@@ -14,6 +14,7 @@ REPOSITORY_ROOT = PRODUCTION_DIR.parent.parent
 SCRIPT_PATH = PRODUCTION_DIR / "edutalent-operations"
 POLICY_PATH = Path(__file__).with_name("alert-policy.json")
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/production-operations.yml"
+WEB_MAIN_PATH = REPOSITORY_ROOT / "packages/web/src/main.rs"
 spec = importlib.util.spec_from_file_location("edutalent_ops_review", MODULE_PATH)
 assert spec and spec.loader
 ops = importlib.util.module_from_spec(spec)
@@ -202,6 +203,7 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.script = SCRIPT_PATH.read_text(encoding="utf-8")
         self.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.web_main = WEB_MAIN_PATH.read_text(encoding="utf-8")
 
     def function(self, name: str, next_name: str) -> str:
         return self.script.split(f"{name}() {{", 1)[1].split(
@@ -289,6 +291,17 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
         self.assertIn('${QDRANT_VECTOR_SIZE}', step)
         self.assertIn('--request PUT', step)
         self.assertLess(step.index(create_collection), step.index("backup-create"))
+
+    def test_recovery_load_uses_database_backed_readiness(self) -> None:
+        step = self.workflow_step(
+            "Run sustained load while exercising database and application recovery",
+            "Run final production boundaries and alert evaluation",
+        )
+        self.assertIn("https://app.ops.internal/readyz", step)
+        self.assertNotIn("https://app.ops.internal/healthz", step)
+        self.assertIn('.route("/readyz", axum::routing::get(database_readiness))', self.web_main)
+        self.assertIn('sqlx::query_scalar::<_, i32>("SELECT 1")', self.web_main)
+        self.assertIn("StatusCode::SERVICE_UNAVAILABLE", self.web_main)
 
     def test_verified_full_backup_retires_only_included_wal_with_a_tail(self) -> None:
         backup = self.function("backup_create", "backup_verify")

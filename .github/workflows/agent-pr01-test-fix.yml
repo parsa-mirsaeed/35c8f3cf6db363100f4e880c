@@ -38,15 +38,15 @@ jobs:
 
           path = Path("packages/api/src/server_functions/assignment_functions.rs")
           source = path.read_text()
-          old = '''            "AssignmentRepository::new",
-                      "CustomAssignmentRepository::new",
-          '''
-          new = '''            "let assignment_repo = AssignmentRepository::new",
-                      "let custom_repo = CustomAssignmentRepository::new",
-          '''
-          if source.count(old) != 1:
-              raise SystemExit("expected regression assertion block not found exactly once")
-          path.write_text(source.replace(old, new))
+          replacements = {
+              '"AssignmentRepository::new"': '"let assignment_repo = AssignmentRepository::new"',
+              '"CustomAssignmentRepository::new"': '"let custom_repo = CustomAssignmentRepository::new"',
+          }
+          for old, new in replacements.items():
+              if source.count(old) != 1:
+                  raise SystemExit(f"expected {old} exactly once")
+              source = source.replace(old, new)
+          path.write_text(source)
           PY
           rustfmt --edition 2021 --config skip_children=true \
             packages/api/src/server_functions/assignment_functions.rs
@@ -65,4 +65,4 @@ jobs:
           git commit -m 'test: match legacy assignment repository calls exactly'
           git push origin HEAD:${HEAD_BRANCH}
 
-# Retrigger after the workflow is registered on the feature branch.
+# Deterministic individual-token replacement.

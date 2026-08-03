@@ -17,9 +17,10 @@ The production `assignment_functions` module resolves an active canonical
 
 Teacher creation verifies that the class belongs to the teacher's school, the
 teacher is assigned to the class, the subject matches the class, any lecture
-belongs to that class, and attached knowledge assets are published in the same
-school. Read, update, delete, publish, list-custom, and personalization paths do
-not call the legacy identifier-only repository mutations.
+belongs to that class, and every attached `class_materials` record belongs to
+that exact class and teaching assignment. Read, update, delete, publish,
+list-custom, and personalization paths do not call the legacy identifier-only
+repository mutations.
 
 Publication locks the authorized assignment row and uses the database unique
 index on `(assignment_id, student_id)` so retries and concurrent publication do

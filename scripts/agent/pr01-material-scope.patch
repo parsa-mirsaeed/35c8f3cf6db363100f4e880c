@@ -1,0 +1,49 @@
+diff --git a/packages/api/src/repositories/authorized_assignment_repository.rs b/packages/api/src/repositories/authorized_assignment_repository.rs
+--- a/packages/api/src/repositories/authorized_assignment_repository.rs
++++ b/packages/api/src/repositories/authorized_assignment_repository.rs
+@@ -184,7 +184,12 @@ impl AuthorizedAssignmentRepository {
+         actor: AuthorizedTeacher,
+         request: CreateAssignmentRequest,
+     ) -> RepositoryResult<AssignmentWithDetails> {
+         let material_ids = parse_material_ids(request.material_ids.as_deref())?;
+-        self.verify_material_scope(actor, &material_ids).await?;
++        self.verify_material_scope(
++            actor,
++            request.class_section_id,
++            &material_ids,
++        )
++        .await?;
+ 
+         let row = sqlx::query(
+@@ -667,6 +672,7 @@ impl AuthorizedAssignmentRepository {
+     async fn verify_material_scope(
+         &self,
+         actor: AuthorizedTeacher,
++        class_section_id: ClassSectionId,
+         material_ids: &[Uuid],
+     ) -> RepositoryResult<()> {
+         if material_ids.is_empty() {
+@@ -676,16 +682,22 @@ impl AuthorizedAssignmentRepository {
+         let authorized_count: i64 = sqlx::query_scalar(
+             r#"
+             SELECT COUNT(*)
+-            FROM knowledge_assets ka
+-            WHERE ka.id = ANY($1::uuid[])
+-              AND ka.school_id = $2
+-              AND ka.status::text = 'published'
++            FROM class_materials cm
++            JOIN class_sections cs ON cs.id = cm.class_section_id
++            JOIN teaching_assignments ta
++              ON ta.class_section_id = cm.class_section_id
++             AND ta.teacher_id = $4
++            WHERE cm.id = ANY($1::uuid[])
++              AND cm.class_section_id = $2
++              AND cs.school_id = $3
+             "#,
+         )
+         .bind(material_ids)
++        .bind::<Uuid>(class_section_id.into())
+         .bind(actor.school_id)
++        .bind::<Uuid>(actor.teacher_id.into())
+         .fetch_one(&*self.pool)
+         .await?;

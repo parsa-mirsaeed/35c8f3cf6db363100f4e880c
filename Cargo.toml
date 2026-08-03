@@ -33,10 +33,12 @@ base64 = "0.22.0"
 ipnetwork = "0.21"
 
 # HTTP & Networking
-reqwest = { version = "0.11.23", default-features = false, features = [
+# Keep the 0.11 API used by the application, but use the system TLS backend so
+# the unmaintained rustls 0.21/webpki 0.101 branch is not in the runtime graph.
+reqwest = { version = "0.11.27", default-features = false, features = [
     "json",
     "stream",
-    "rustls-tls-native-roots",
+    "native-tls",
 ] }
 
 # Async helpers

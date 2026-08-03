@@ -34,6 +34,8 @@ pub mod handlers; // Your middleware needs this
 #[cfg(feature = "server")]
 pub mod middleware;
 #[cfg(feature = "server")]
+pub mod readiness;
+#[cfg(feature = "server")]
 pub mod repositories;
 #[cfg(feature = "server")]
 pub mod rls_context;

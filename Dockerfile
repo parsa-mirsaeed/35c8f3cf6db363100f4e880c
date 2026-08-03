@@ -64,15 +64,17 @@ RUN set -eux; \
 
 FROM debian:trixie-slim AS runtime
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates curl postgresql-client \
+    && apt-get install --yes --no-install-recommends ca-certificates curl postgresql-client passwd \
+    && groupadd --gid 65532 edutalent \
+    && useradd --uid 65532 --gid 65532 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin edutalent \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/edutalent
-COPY --from=builder /opt/edutalent-bundle/ /opt/edutalent/
-COPY packages/api/migration/migrations/ /opt/edutalent/packages/api/migration/migrations/
-COPY migrations/ /opt/edutalent/migrations/
-COPY scripts/ci/apply_migrations.sh /opt/edutalent/scripts/ci/apply_migrations.sh
-COPY scripts/ci/configure_database_role.sh /opt/edutalent/scripts/ci/configure_database_role.sh
+COPY --from=builder --chown=65532:65532 /opt/edutalent-bundle/ /opt/edutalent/
+COPY --chown=65532:65532 packages/api/migration/migrations/ /opt/edutalent/packages/api/migration/migrations/
+COPY --chown=65532:65532 migrations/ /opt/edutalent/migrations/
+COPY --chown=65532:65532 scripts/ci/apply_migrations.sh /opt/edutalent/scripts/ci/apply_migrations.sh
+COPY --chown=65532:65532 scripts/ci/configure_database_role.sh /opt/edutalent/scripts/ci/configure_database_role.sh
 COPY docker/entrypoint.sh /usr/local/bin/edutalent-entrypoint
 RUN chmod +x \
     /usr/local/bin/edutalent-entrypoint \
@@ -80,6 +82,8 @@ RUN chmod +x \
     /opt/edutalent/ai_gateway \
     /opt/edutalent/scripts/ci/apply_migrations.sh \
     /opt/edutalent/scripts/ci/configure_database_role.sh
+
+USER 65532:65532
 
 ENV IP=0.0.0.0 \
     PORT=8080 \

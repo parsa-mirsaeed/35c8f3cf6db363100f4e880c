@@ -52,3 +52,5 @@ jobs:
             packages/api/src/server_functions/assignment_functions.rs
           git commit -m 'style: format assignment authorization implementation'
           git push origin HEAD:${GITHUB_REF_NAME}
+
+# Explicit retrigger after workflow registration on the feature branch.

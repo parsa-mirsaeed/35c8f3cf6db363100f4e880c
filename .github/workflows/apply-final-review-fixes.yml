@@ -1,0 +1,154 @@
+name: Apply final production operations review fixes
+
+on:
+  push:
+    branches:
+      - feature/production-operations
+    paths:
+      - .github/workflows/apply-final-review-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/production-operations
+          fetch-depth: 0
+
+      - name: Apply reviewed fixes and regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          operations = Path("deploy/production/edutalent-operations")
+          text = operations.read_text(encoding="utf-8")
+          old = '''backup_create() {
+            require_definitions
+            backup_preflight >/dev/null
+            require_command docker
+          '''
+          new = '''backup_create() {
+            require_definitions
+            require_command flock
+            initialize_state
+            local backup_lock_file="${OPERATIONS_STATE}/backup-create.lock"
+            local backup_lock_fd
+            backup_lock_file="$(canonical_path "${backup_lock_file}")"
+            exec {backup_lock_fd}>"${backup_lock_file}"
+            chmod 0600 "${backup_lock_file}"
+            if ! flock --exclusive --nonblock "${backup_lock_fd}"; then
+              echo "Another backup-create or acceptance operation is already running." >&2
+              exit 1
+            fi
+            backup_preflight >/dev/null
+            require_command docker
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("backup_create entry marker did not match exactly once")
+          text = text.replace(old, new, 1)
+          old_success = '''  cleanup_backup 0
+            echo "Created and verified encrypted backup: ${archive}"
+          '''
+          new_success = '''  cleanup_backup 0
+            flock --unlock "${backup_lock_fd}"
+            exec {backup_lock_fd}>&-
+            echo "Created and verified encrypted backup: ${archive}"
+          '''
+          if text.count(old_success) != 1:
+              raise SystemExit("backup_create success marker did not match exactly once")
+          operations.write_text(text.replace(old_success, new_success, 1), encoding="utf-8")
+
+          workflow = Path(".github/workflows/production-operations.yml")
+          text = workflow.read_text(encoding="utf-8")
+          marker = "      - packages/web/src/main.rs\n"
+          addition = marker + "      - packages/api/src/readiness.rs\n"
+          if text.count(marker) != 2:
+              raise SystemExit("workflow readiness marker did not match both path filters")
+          workflow.write_text(text.replace(marker, addition), encoding="utf-8")
+
+          tests = Path("deploy/production/operations/test_final_review_blockers.py")
+          text = tests.read_text(encoding="utf-8")
+          import_marker = "import hashlib\n"
+          if text.count(import_marker) != 1:
+              raise SystemExit("test import marker did not match")
+          text = text.replace(import_marker, import_marker + "import fcntl\n", 1)
+          constant_marker = 'RECOVERY_PATH = OPERATIONS_DIR / "recovery_drill.py"\n'
+          if text.count(constant_marker) != 1:
+              raise SystemExit("test constant marker did not match")
+          text = text.replace(
+              constant_marker,
+              constant_marker
+              + 'WORKFLOW_PATH = PRODUCTION_DIR.parent.parent / ".github/workflows/production-operations.yml"\n',
+              1,
+          )
+          class_marker = "\n\nclass PinnedSupabaseRecoveryTests(unittest.TestCase):\n"
+          methods = r'''
+
+    def test_backup_creation_holds_an_exclusive_lock_through_cleanup(self) -> None:
+        backup = self.function("backup_create", "backup_verify")
+        acquire = 'flock --exclusive --nonblock "${backup_lock_fd}"'
+        release = 'flock --unlock "${backup_lock_fd}"'
+        self.assertIn("require_command flock", backup)
+        self.assertIn('backup_lock_file="${OPERATIONS_STATE}/backup-create.lock"', backup)
+        self.assertIn('chmod 0600 "${backup_lock_file}"', backup)
+        self.assertIn(acquire, backup)
+        self.assertIn("Another backup-create or acceptance operation is already running", backup)
+        self.assertLess(backup.index(acquire), backup.index("backup_preflight"))
+        self.assertLess(backup.index(acquire), backup.index("compose stop --timeout 30"))
+        self.assertLess(backup.index("cleanup_backup 0"), backup.index(release))
+        self.assertLess(backup.index(release), backup.index('echo "Created and verified encrypted backup'))
+
+    def test_backup_creation_rejects_a_concurrent_process_before_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "operations"
+            state.mkdir()
+            lock_path = state / "backup-create.lock"
+            with lock_path.open("w", encoding="utf-8") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                env = os.environ.copy()
+                env["EDUTALENT_OPERATIONS_STATE_DIR"] = str(state)
+                completed = subprocess.run(
+                    ["bash", str(SCRIPT_PATH), "backup-create"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout)
+            self.assertIn(
+                "Another backup-create or acceptance operation is already running",
+                completed.stderr,
+            )
+            self.assertNotIn("EDUTALENT_BACKUP_DIR is required", completed.stderr)
+
+    def test_operations_workflow_tracks_the_api_readiness_helper(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        readiness_path = "      - packages/api/src/readiness.rs"
+        self.assertEqual(workflow.count(readiness_path), 2)
+        pull_request_paths, push_paths = workflow.split("  push:", 1)
+        self.assertIn(readiness_path, pull_request_paths)
+        self.assertIn(readiness_path, push_paths)
+'''
+          if text.count(class_marker) != 1:
+              raise SystemExit("test class marker did not match")
+          tests.write_text(text.replace(class_marker, methods + class_marker, 1), encoding="utf-8")
+          PY
+
+          bash -n deploy/production/edutalent-operations
+          python3 -m unittest discover -s deploy/production/operations -p 'test_*.py' -v
+
+          rm .github/workflows/apply-final-review-fixes.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/production/edutalent-operations \
+            deploy/production/operations/test_final_review_blockers.py \
+            .github/workflows/production-operations.yml \
+            .github/workflows/apply-final-review-fixes.yml
+          git commit -m "fix: serialize production backups and readiness proof"
+          git push origin HEAD:feature/production-operations

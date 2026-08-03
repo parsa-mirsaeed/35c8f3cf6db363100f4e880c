@@ -224,11 +224,12 @@ pub async fn personalize_for_student(
             .map_err(repository_error)?;
 
         let state = extract_server_state()?;
-        let service = AssignmentPersonalizationService::new(state.services.pool.clone())
-            .map_err(|error| {
+        let service = AssignmentPersonalizationService::new(state.services.pool.clone()).map_err(
+            |error| {
                 tracing::error!(error = %error, "failed to initialize personalization service");
                 ServerFnError::new("Personalization service is unavailable")
-            })?;
+            },
+        )?;
 
         let result = service
             .personalize_for_student(assignment_id, student_id, None)
@@ -317,8 +318,7 @@ pub async fn list_custom_assignments(
 }
 
 #[server(endpoint = "assignments/my_assignments")]
-pub async fn get_my_assignments(
-) -> Result<Vec<PersonalizedAssignmentResponse>, ServerFnError> {
+pub async fn get_my_assignments() -> Result<Vec<PersonalizedAssignmentResponse>, ServerFnError> {
     #[cfg(feature = "server")]
     {
         let (repository, actor) = authorized_student().await?;
@@ -426,16 +426,13 @@ fn parse_assignment_id(value: &str) -> Result<AssignmentId, ServerFnError> {
 
 #[cfg(feature = "server")]
 fn parse_uuid(value: &str, field: &str) -> Result<Uuid, ServerFnError> {
-    Uuid::parse_str(value)
-        .map_err(|_| ServerFnError::new(format!("Invalid {field} ID")))
+    Uuid::parse_str(value).map_err(|_| ServerFnError::new(format!("Invalid {field} ID")))
 }
 
 #[cfg(feature = "server")]
 fn repository_error(error: RepositoryError) -> ServerFnError {
     match error {
-        RepositoryError::Unauthorized => {
-            ServerFnError::new("Forbidden: insufficient privileges")
-        }
+        RepositoryError::Unauthorized => ServerFnError::new("Forbidden: insufficient privileges"),
         RepositoryError::NotFound { .. } => ServerFnError::new("Not found"),
         RepositoryError::Validation(message) => {
             ServerFnError::new(format!("Validation error: {message}"))

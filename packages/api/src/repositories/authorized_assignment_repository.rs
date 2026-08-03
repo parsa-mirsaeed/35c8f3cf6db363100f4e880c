@@ -202,7 +202,8 @@ impl AuthorizedAssignmentRepository {
         request: CreateAssignmentRequest,
     ) -> RepositoryResult<AssignmentWithDetails> {
         let material_ids = parse_material_ids(request.material_ids.as_deref())?;
-        self.verify_material_scope(actor, &material_ids).await?;
+        self.verify_material_scope(actor, request.class_section_id, &material_ids)
+            .await?;
 
         let row = sqlx::query(
             r#"
@@ -636,6 +637,7 @@ impl AuthorizedAssignmentRepository {
     async fn verify_material_scope(
         &self,
         actor: AuthorizedTeacher,
+        class_section_id: ClassSectionId,
         material_ids: &[Uuid],
     ) -> RepositoryResult<()> {
         if material_ids.is_empty() {
@@ -645,14 +647,20 @@ impl AuthorizedAssignmentRepository {
         let authorized_count: i64 = sqlx::query_scalar(
             r#"
             SELECT COUNT(*)
-            FROM knowledge_assets ka
-            WHERE ka.id = ANY($1::uuid[])
-              AND ka.school_id = $2
-              AND ka.status::text = 'published'
+            FROM class_materials cm
+            JOIN class_sections cs ON cs.id = cm.class_section_id
+            JOIN teaching_assignments ta
+              ON ta.class_section_id = cm.class_section_id
+             AND ta.teacher_id = $4
+            WHERE cm.id = ANY($1::uuid[])
+              AND cm.class_section_id = $2
+              AND cs.school_id = $3
             "#,
         )
         .bind(material_ids)
+        .bind::<Uuid>(class_section_id.into())
         .bind(actor.school_id)
+        .bind::<Uuid>(actor.teacher_id.into())
         .fetch_one(&*self.pool)
         .await?;
 
@@ -774,9 +782,7 @@ fn row_to_assignment_details(row: &PgRow) -> RepositoryResult<AssignmentWithDeta
     })
 }
 
-fn row_to_custom_assignment_details(
-    row: &PgRow,
-) -> RepositoryResult<CustomAssignmentWithDetails> {
+fn row_to_custom_assignment_details(row: &PgRow) -> RepositoryResult<CustomAssignmentWithDetails> {
     let status_text: String = row.get("status");
     Ok(CustomAssignmentWithDetails {
         id: row.get::<Uuid, _>("id").into(),
@@ -841,7 +847,10 @@ mod tests {
             "u.is_active = TRUE",
             "ON CONFLICT (assignment_id, student_id) DO NOTHING",
         ] {
-            assert!(source.contains(required), "missing authorization predicate: {required}");
+            assert!(
+                source.contains(required),
+                "missing authorization predicate: {required}"
+            );
         }
     }
 
@@ -884,18 +893,16 @@ mod tests {
         let class_a2 = Uuid::new_v4();
         let class_b = Uuid::new_v4();
 
-        let teacher_role: Uuid = sqlx::query_scalar(
-            "SELECT id FROM roles WHERE name::text = 'Teacher' LIMIT 1",
-        )
-        .fetch_one(&*pool)
-        .await
-        .expect("Teacher role fixture");
-        let student_role: Uuid = sqlx::query_scalar(
-            "SELECT id FROM roles WHERE name::text = 'Student' LIMIT 1",
-        )
-        .fetch_one(&*pool)
-        .await
-        .expect("Student role fixture");
+        let teacher_role: Uuid =
+            sqlx::query_scalar("SELECT id FROM roles WHERE name::text = 'Teacher' LIMIT 1")
+                .fetch_one(&*pool)
+                .await
+                .expect("Teacher role fixture");
+        let student_role: Uuid =
+            sqlx::query_scalar("SELECT id FROM roles WHERE name::text = 'Student' LIMIT 1")
+                .fetch_one(&*pool)
+                .await
+                .expect("Student role fixture");
 
         sqlx::query("INSERT INTO schools (id, name) VALUES ($1, $2), ($3, $4)")
             .bind(school_a)
@@ -907,13 +914,62 @@ mod tests {
             .expect("insert schools");
 
         for (id, name, email, role_id, school_id, active) in [
-            (teacher_a_user, "Teacher A", format!("teacher-a-{suffix}@example.test"), teacher_role, school_a, true),
-            (teacher_a2_user, "Teacher A2", format!("teacher-a2-{suffix}@example.test"), teacher_role, school_a, true),
-            (teacher_b_user, "Teacher B", format!("teacher-b-{suffix}@example.test"), teacher_role, school_b, true),
-            (inactive_teacher_user, "Inactive Teacher", format!("teacher-inactive-{suffix}@example.test"), teacher_role, school_a, false),
-            (student_a_user, "Student A", format!("student-a-{suffix}@example.test"), student_role, school_a, true),
-            (student_a2_user, "Student A2", format!("student-a2-{suffix}@example.test"), student_role, school_a, true),
-            (student_b_user, "Student B", format!("student-b-{suffix}@example.test"), student_role, school_b, true),
+            (
+                teacher_a_user,
+                "Teacher A",
+                format!("teacher-a-{suffix}@example.test"),
+                teacher_role,
+                school_a,
+                true,
+            ),
+            (
+                teacher_a2_user,
+                "Teacher A2",
+                format!("teacher-a2-{suffix}@example.test"),
+                teacher_role,
+                school_a,
+                true,
+            ),
+            (
+                teacher_b_user,
+                "Teacher B",
+                format!("teacher-b-{suffix}@example.test"),
+                teacher_role,
+                school_b,
+                true,
+            ),
+            (
+                inactive_teacher_user,
+                "Inactive Teacher",
+                format!("teacher-inactive-{suffix}@example.test"),
+                teacher_role,
+                school_a,
+                false,
+            ),
+            (
+                student_a_user,
+                "Student A",
+                format!("student-a-{suffix}@example.test"),
+                student_role,
+                school_a,
+                true,
+            ),
+            (
+                student_a2_user,
+                "Student A2",
+                format!("student-a2-{suffix}@example.test"),
+                student_role,
+                school_a,
+                true,
+            ),
+            (
+                student_b_user,
+                "Student B",
+                format!("student-b-{suffix}@example.test"),
+                student_role,
+                school_b,
+                true,
+            ),
         ] {
             sqlx::query(
                 r#"
@@ -1060,7 +1116,10 @@ mod tests {
             .await
             .expect("Teacher A creates own assignment");
 
-        assert!(repository.find_for_teacher(actor_a, assignment.id).await.is_ok());
+        assert!(repository
+            .find_for_teacher(actor_a, assignment.id)
+            .await
+            .is_ok());
         assert!(matches!(
             repository.find_for_teacher(actor_a2, assignment.id).await,
             Err(RepositoryError::NotFound { .. })
@@ -1128,7 +1187,10 @@ mod tests {
         .fetch_one(&*pool)
         .await
         .expect("insert cross-school assignment");
-        for id in [AssignmentId::from(random_existing_id), AssignmentId::from(Uuid::new_v4())] {
+        for id in [
+            AssignmentId::from(random_existing_id),
+            AssignmentId::from(Uuid::new_v4()),
+        ] {
             assert!(matches!(
                 repository.find_for_teacher(actor_a, id).await,
                 Err(RepositoryError::NotFound { .. })

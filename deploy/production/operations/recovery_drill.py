@@ -197,16 +197,21 @@ def psql(
     )
 
 
-def wait_for_archive(
+def wait_for_archive_file(
     volume: str,
     image: str,
-    minimum_files: int,
+    wal_file: str,
     timeout: float = 60.0,
 ) -> None:
+    if len(wal_file) != 24 or any(
+        character not in "0123456789ABCDEF" for character in wal_file
+    ):
+        raise RuntimeError(f"invalid WAL archive filename: {wal_file!r}")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        count = int(
-            docker(
+        result = subprocess.run(
+            [
+                "docker",
                 "run",
                 "--rm",
                 "-v",
@@ -214,15 +219,51 @@ def wait_for_archive(
                 "--entrypoint",
                 "sh",
                 image,
+                "-eu",
                 "-c",
-                "find /archive -maxdepth 1 -type f | wc -l",
-                capture=True,
-            )
+                'test -f "/archive/$1"',
+                "archive-check",
+                wal_file,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        if count >= minimum_files:
+        if result.returncode == 0:
             return
         time.sleep(1)
-    raise RuntimeError("PostgreSQL WAL archive did not receive the required segments")
+    inventory = docker(
+        "run",
+        "--rm",
+        "-v",
+        f"{volume}:/archive:ro",
+        "--entrypoint",
+        "sh",
+        image,
+        "-c",
+        "find /archive -maxdepth 1 -type f -printf '%f\\n' | sort",
+        capture=True,
+        check=False,
+    )
+    raise RuntimeError(
+        f"PostgreSQL WAL archive did not receive switched segment {wal_file}; "
+        f"observed={inventory!r}"
+    )
+
+
+def switch_wal_and_wait(
+    container: str,
+    password: str,
+    archive_volume: str,
+    image: str,
+) -> str:
+    wal_file = psql(
+        container,
+        password,
+        "SELECT pg_walfile_name(pg_switch_wal());",
+        user="supabase_admin",
+    )
+    wait_for_archive_file(archive_volume, image, wal_file)
+    return wal_file
 
 
 def postgres_environment(password: str, jwt_secret: str) -> list[str]:
@@ -392,22 +433,18 @@ def postgres_drill(prefix: str, runtime: SupabasePostgresRuntime) -> dict[str, A
     )
     psql(source, password, "INSERT INTO recovery_probe VALUES (2, 'before-target');")
     target_time = psql(source, password, "SELECT clock_timestamp();")
-    psql(
-        source,
-        password,
-        "SELECT pg_switch_wal();",
-        user="supabase_admin",
+    before_target_wal = switch_wal_and_wait(
+        source, password, archive_volume, runtime.image
     )
-    wait_for_archive(archive_volume, runtime.image, 1)
     time.sleep(1.2)
     psql(source, password, "INSERT INTO recovery_probe VALUES (3, 'after-target');")
-    psql(
-        source,
-        password,
-        "SELECT pg_switch_wal();",
-        user="supabase_admin",
+    after_target_wal = switch_wal_and_wait(
+        source, password, archive_volume, runtime.image
     )
-    wait_for_archive(archive_volume, runtime.image, 2)
+    if after_target_wal == before_target_wal:
+        raise RuntimeError(
+            f"forced WAL switches returned the same archive segment: {after_target_wal}"
+        )
     docker("stop", source, capture=True)
 
     config = (
@@ -508,6 +545,10 @@ def postgres_drill(prefix: str, runtime: SupabasePostgresRuntime) -> dict[str, A
         "source_runtime": source_runtime_state,
         "restored_runtime": restored_runtime_state,
         "wal_switch_boundary": wal_switch_boundary,
+        "archived_wal_segments": {
+            "before_target": before_target_wal,
+            "after_target": after_target_wal,
+        },
         "target_time": target_time,
         "restored_rows": rows,
         "failed_migration_rolled_back": True,

@@ -11,6 +11,7 @@ on:
     paths:
       - deploy/production/**
       - packages/web/src/main.rs
+      - packages/api/src/readiness.rs
       - docs/adr/0004-production-operations.md
       - docs/security/production-operations-threat-model.md
       - .github/workflows/production-operations.yml
@@ -21,6 +22,7 @@ on:
     paths:
       - deploy/production/**
       - packages/web/src/main.rs
+      - packages/api/src/readiness.rs
       - docs/adr/0004-production-operations.md
       - docs/security/production-operations-threat-model.md
       - .github/workflows/production-operations.yml

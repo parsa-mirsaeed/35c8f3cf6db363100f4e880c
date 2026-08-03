@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -14,6 +15,7 @@ OPERATIONS_DIR = Path(__file__).resolve().parent
 PRODUCTION_DIR = OPERATIONS_DIR.parent
 SCRIPT_PATH = PRODUCTION_DIR / "edutalent-operations"
 RECOVERY_PATH = OPERATIONS_DIR / "recovery_drill.py"
+WORKFLOW_PATH = PRODUCTION_DIR.parent.parent / ".github/workflows/production-operations.yml"
 
 spec = importlib.util.spec_from_file_location(
     "edutalent_recovery_final_review", RECOVERY_PATH
@@ -106,6 +108,52 @@ class FinalBackupBoundaryTests(unittest.TestCase):
             self.assertIn(
                 "direct file under the configured backup root", completed.stderr
             )
+
+    def test_backup_creation_holds_a_process_scoped_exclusive_lock(self) -> None:
+        backup = self.function("backup_create", "backup_verify")
+        acquire = "flock --exclusive --nonblock 9"
+        self.assertIn("require_command flock", backup)
+        self.assertIn('exec 9<"${OPERATIONS_STATE}"', backup)
+        self.assertIn(acquire, backup)
+        self.assertIn(
+            "Another backup-create or acceptance operation is already running", backup
+        )
+        self.assertLess(backup.index(acquire), backup.index("backup_preflight"))
+        self.assertLess(backup.index(acquire), backup.index("compose stop --timeout 30"))
+        self.assertNotIn("flock --unlock", backup)
+
+    def test_backup_creation_rejects_a_concurrent_process_before_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "operations"
+            state.mkdir()
+            lock_fd = os.open(state, os.O_RDONLY)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                env = os.environ.copy()
+                env["EDUTALENT_OPERATIONS_STATE_DIR"] = str(state)
+                completed = subprocess.run(
+                    ["bash", str(SCRIPT_PATH), "backup-create"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                )
+            finally:
+                os.close(lock_fd)
+            self.assertNotEqual(completed.returncode, 0, completed.stdout)
+            self.assertIn(
+                "Another backup-create or acceptance operation is already running",
+                completed.stderr,
+            )
+            self.assertNotIn("EDUTALENT_BACKUP_DIR is required", completed.stderr)
+
+    def test_operations_workflow_tracks_the_api_readiness_helper(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        readiness_path = "      - packages/api/src/readiness.rs"
+        self.assertEqual(workflow.count(readiness_path), 2)
+        pull_request_paths, push_paths = workflow.split("  push:", 1)
+        self.assertIn(readiness_path, pull_request_paths)
+        self.assertIn(readiness_path, push_paths)
 
 
 class PinnedSupabaseRecoveryTests(unittest.TestCase):

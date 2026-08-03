@@ -397,6 +397,13 @@ backup_preflight() {
 
 backup_create() {
   require_definitions
+  require_command flock
+  initialize_state
+  exec 9<"${OPERATIONS_STATE}"
+  if ! flock --exclusive --nonblock 9; then
+    echo "Another backup-create or acceptance operation is already running." >&2
+    exit 1
+  fi
   backup_preflight >/dev/null
   require_command docker
   require_envs

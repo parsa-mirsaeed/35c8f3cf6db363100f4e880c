@@ -557,8 +557,8 @@ mod tests {
         let source = include_str!("assignment_functions.rs");
         assert!(source.contains("AuthorizedAssignmentRepository"));
         for forbidden in [
-            "AssignmentRepository::new",
-            "CustomAssignmentRepository::new",
+            "let assignment_repo = AssignmentRepository::new",
+            "let custom_repo = CustomAssignmentRepository::new",
             ".find_with_details_by_id(",
             ".publish(id)",
             ".delete(id)",

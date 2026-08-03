@@ -1,9 +1,9 @@
 name: PR-01 one-shot patch and format
 
 on:
-  push:
-    branches:
-      - agent/pr-01-assignment-authorization
+  pull_request:
+    types:
+      - synchronize
     paths:
       - .github/workflows/agent-pr01-format.yml
 
@@ -16,12 +16,13 @@ concurrency:
 
 jobs:
   apply:
+    if: github.head_ref == 'agent/pr-01-assignment-authorization'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
@@ -43,6 +44,8 @@ jobs:
 
       - name: Commit formatted PR-01 implementation
         shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -51,6 +54,4 @@ jobs:
             packages/api/src/repositories/mod.rs \
             packages/api/src/server_functions/assignment_functions.rs
           git commit -m 'style: format assignment authorization implementation'
-          git push origin HEAD:${GITHUB_REF_NAME}
-
-# Explicit retrigger after workflow registration on the feature branch.
+          git push origin HEAD:${HEAD_BRANCH}

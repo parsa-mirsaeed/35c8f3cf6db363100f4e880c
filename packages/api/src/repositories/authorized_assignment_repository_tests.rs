@@ -30,7 +30,10 @@ async fn insert_user(
     )
     .bind(id)
     .bind(label)
-    .bind(format!("{}-{suffix}@example.test", label.to_lowercase().replace(' ', "-")))
+    .bind(format!(
+        "{}-{suffix}@example.test",
+        label.to_lowercase().replace(' ', "-")
+    ))
     .bind(role_id)
     .bind(school_id)
     .bind(active)
@@ -134,33 +137,12 @@ async fn required_teacher_mutation_matrix_is_enforced() {
     let parent_role = role_id(&pool, "Parent").await;
     let manager_role = role_id(&pool, "SchoolManager").await;
 
-    let teacher_a_user = insert_user(
-        &pool,
-        &suffix,
-        "Teacher A",
-        teacher_role,
-        school_a,
-        true,
-    )
-    .await;
-    let teacher_a2_user = insert_user(
-        &pool,
-        &suffix,
-        "Teacher A2",
-        teacher_role,
-        school_a,
-        true,
-    )
-    .await;
-    let teacher_b_user = insert_user(
-        &pool,
-        &suffix,
-        "Teacher B",
-        teacher_role,
-        school_b,
-        true,
-    )
-    .await;
+    let teacher_a_user =
+        insert_user(&pool, &suffix, "Teacher A", teacher_role, school_a, true).await;
+    let teacher_a2_user =
+        insert_user(&pool, &suffix, "Teacher A2", teacher_role, school_a, true).await;
+    let teacher_b_user =
+        insert_user(&pool, &suffix, "Teacher B", teacher_role, school_b, true).await;
     let inactive_teacher_user = insert_user(
         &pool,
         &suffix,
@@ -179,15 +161,8 @@ async fn required_teacher_mutation_matrix_is_enforced() {
         true,
     )
     .await;
-    let parent_user = insert_user(
-        &pool,
-        &suffix,
-        "Parent Actor",
-        parent_role,
-        school_a,
-        true,
-    )
-    .await;
+    let parent_user =
+        insert_user(&pool, &suffix, "Parent Actor", parent_role, school_a, true).await;
     let manager_user = insert_user(
         &pool,
         &suffix,
@@ -216,9 +191,7 @@ async fn required_teacher_mutation_matrix_is_enforced() {
 
     let class_a = insert_class(&pool, school_a, subject_id, &suffix, "Class A").await;
     let class_b = insert_class(&pool, school_b, subject_id, &suffix, "Class B").await;
-    for (class_section_id, teacher_id) in
-        [(class_a, teacher_a_id), (class_b, teacher_b_id)]
-    {
+    for (class_section_id, teacher_id) in [(class_a, teacher_a_id), (class_b, teacher_b_id)] {
         sqlx::query(
             "INSERT INTO teaching_assignments (id, class_section_id, teacher_id) VALUES ($1, $2, $3)",
         )

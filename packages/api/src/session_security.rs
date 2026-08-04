@@ -228,6 +228,15 @@ mod tests {
             assert_eq!(cookie.secure(), Some(true));
             assert_eq!(cookie.same_site(), Some(SameSite::Strict));
         }
+        assert_eq!(
+            access_cookie("access".to_string()).max_age(),
+            Some(ACCESS_COOKIE_MAX_AGE)
+        );
+        assert_eq!(
+            refresh_cookie("refresh".to_string()).max_age(),
+            Some(REFRESH_COOKIE_MAX_AGE)
+        );
+        assert!(ACCESS_COOKIE_MAX_AGE < REFRESH_COOKIE_MAX_AGE);
         assert_eq!(access_removal_cookie().max_age(), Some(Duration::ZERO));
         assert_eq!(refresh_removal_cookie().max_age(), Some(Duration::ZERO));
     }

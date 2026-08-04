@@ -1,0 +1,48 @@
+name: PR-02 Final Rustfmt
+
+on:
+  push:
+    branches:
+      - agent/pr-02-session-lifecycle-api-cleanup
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr-02-final-rustfmt
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/pr-02-session-lifecycle-api-cleanup
+          fetch-depth: 0
+          show-progress: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format exact lifecycle test
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=packages/api/src/session_lifecycle_integration_tests.rs
+          rustfmt --edition 2021 --config skip_children=true "$target"
+          git diff --check
+          mapfile -t changed < <(git diff --name-only)
+          [[ ${#changed[@]} -eq 1 && "${changed[0]}" == "$target" ]]
+      - name: Commit formatting and remove applicator
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/pr-02-final-rustfmt.yml
+          git add packages/api/src/session_lifecycle_integration_tests.rs .github/workflows/pr-02-final-rustfmt.yml
+          git diff --cached --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'PR-02: apply final canonical rustfmt'
+          git push origin HEAD:agent/pr-02-session-lifecycle-api-cleanup

@@ -39,9 +39,9 @@ Access tokens use a 15-minute maximum age. Refresh tokens use seven days. Logout
 
 ## Authentication throttling
 
-Login failures are limited per normalized email and remote address. Refresh failures are limited per remote address and a SHA-256-derived token fingerprint; raw refresh tokens are never stored in limiter keys or logs. The current limiter is process-local, bounded to 10,000 keys, permits five failures in five minutes, and clears a key after success.
+Login failures are limited per normalized email in an unknown-address bucket. The application deliberately does not trust forwarded client-address headers until the gateway and trusted-proxy chain are explicitly configured and tested. Refresh failures are limited per available connection address and a SHA-256-derived token fingerprint; raw refresh tokens are never stored in limiter keys or logs. The current limiter is process-local, bounded to 10,000 keys, permits five failures in five minutes, and clears a key after success.
 
-This control limits routine abuse on the single-node appliance. A future multi-instance deployment must replace it with a shared local rate-limit store or enforce an equivalent trusted-gateway policy. Proxy-derived client addresses must not be trusted until the gateway and trusted-proxy chain are explicitly configured and tested.
+This control limits routine abuse on the supported single-node appliance. A future multi-instance deployment must replace it with a shared local rate-limit store or enforce an equivalent trusted-gateway policy. A future trusted-proxy implementation may add verified client-address scoping without accepting browser-supplied forwarding headers.
 
 ## Production API cleanup
 

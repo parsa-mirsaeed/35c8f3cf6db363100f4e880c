@@ -22,11 +22,11 @@ use uuid::Uuid;
 static AUTH_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 const TEST_KEY_ID: &str = "edutalent-pr02-test-key";
-const TEST_PRIVATE_KEY: &str = r#"-----BEGIN EC PRIVATE KEY-----
-MHcCAQEEIIHsHI5JpNZ4JzFIbDmQLU/NREgKCigydmMGMBI8LG41oAoGCCqGSM49
-AwEHoUQDQgAERmN9bzzGoFt23cp90k59tV5ym6/i/13EtP2HrZfzi787gHwSl/Q0
-0dvZfmBdT5+alm4mGDA/DnVSNcU/NTCBzw==
------END EC PRIVATE KEY-----
+const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggewcjkmk1ngnMUhs
+OZAtT81ESAoKKDJ2YwYwEjwsbjWhRANCAARGY31vPMagW3bdyn3STn21XnKbr+L/
+XcS0/Yetl/OLvzuAfBKX9DTR29l+YF1Pn5qWbiYYMD8OdVI1xT81MIHP
+-----END PRIVATE KEY-----
 "#;
 const TEST_JWK_X: &str = "RmN9bzzGoFt23cp90k59tV5ym6_i_13EtP2HrZfzi78";
 const TEST_JWK_Y: &str = "O4B8Epf0NNHb2X5gXU-fmpZuJhgwPw51UjXFPzUwgc8";

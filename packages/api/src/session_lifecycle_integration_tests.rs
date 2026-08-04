@@ -5,14 +5,14 @@ use crate::config::{
 use crate::domain::UserInfo;
 use crate::handlers::{login_handler, logout_handler};
 use crate::middleware::auth_guard::auth_middleware;
-use axum::body::Body;
 use axum::extract::{Query, Request, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::StatusCode as AxumStatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use once_cell::sync::Lazy;
+use reqwest::header::{HeaderMap as ReqwestHeaderMap, COOKIE, SET_COOKIE};
 use serde_json::{json, Value};
 use sqlx::Row;
 use std::collections::HashMap;
@@ -39,6 +39,8 @@ struct MockAuthState {
     active_user_id: Uuid,
     inactive_user_id: Uuid,
     deleted_user_id: Uuid,
+    active_email: String,
+    inactive_email: String,
 }
 
 async fn mock_jwks() -> Json<Value> {
@@ -62,31 +64,31 @@ async fn mock_token(
 ) -> Response {
     match query.get("grant_type").map(String::as_str) {
         Some("password") => match payload.get("email").and_then(Value::as_str) {
-            Some("active@example.test") => token_grant(
-                issue_token(&state, state.active_user_id, "active@example.test", 3_600),
+            Some(email) if email == state.active_email => token_grant(
+                issue_token(&state, state.active_user_id, &state.active_email, 3_600),
                 "active-refresh",
             ),
-            Some("inactive@example.test") => token_grant(
+            Some(email) if email == state.inactive_email => token_grant(
                 issue_token(
                     &state,
                     state.inactive_user_id,
-                    "inactive@example.test",
+                    &state.inactive_email,
                     3_600,
                 ),
                 "inactive-refresh",
             ),
-            _ => (StatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),
+            _ => (AxumStatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),
         },
         Some("refresh_token") => match payload.get("refresh_token").and_then(Value::as_str) {
             Some("active-refresh") => token_grant(
-                issue_token(&state, state.active_user_id, "active@example.test", 3_600),
+                issue_token(&state, state.active_user_id, &state.active_email, 3_600),
                 "active-refresh-rotated",
             ),
             Some("inactive-refresh") => token_grant(
                 issue_token(
                     &state,
                     state.inactive_user_id,
-                    "inactive@example.test",
+                    &state.inactive_email,
                     3_600,
                 ),
                 "inactive-refresh-rotated",
@@ -100,15 +102,15 @@ async fn mock_token(
                 ),
                 "deleted-refresh-rotated",
             ),
-            _ => (StatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),
+            _ => (AxumStatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),
         },
-        _ => (StatusCode::BAD_REQUEST, "unsupported grant").into_response(),
+        _ => (AxumStatusCode::BAD_REQUEST, "unsupported grant").into_response(),
     }
 }
 
 fn token_grant(access_token: String, refresh_token: &str) -> Response {
     (
-        StatusCode::OK,
+        AxumStatusCode::OK,
         Json(json!({
             "access_token": access_token,
             "refresh_token": refresh_token,
@@ -139,11 +141,11 @@ fn issue_token(state: &MockAuthState, user_id: Uuid, email: &str, lifetime_secon
     .expect("issue test token")
 }
 
-async fn protected(request: Request<Body>) -> StatusCode {
+async fn protected(request: Request) -> AxumStatusCode {
     if request.extensions().get::<UserInfo>().is_some() {
-        StatusCode::OK
+        AxumStatusCode::OK
     } else {
-        StatusCode::UNAUTHORIZED
+        AxumStatusCode::UNAUTHORIZED
     }
 }
 
@@ -152,7 +154,9 @@ async fn session_lifecycle_is_enforced_end_to_end() {
     let _guard = AUTH_TEST_LOCK.lock().await;
     let database_url = std::env::var("DATABASE_URL")
         .expect("DATABASE_URL is required for session lifecycle integration tests");
-
+    let suffix = Uuid::new_v4().simple().to_string();
+    let active_email = format!("active-{suffix}@example.test");
+    let inactive_email = format!("inactive-{suffix}@example.test");
     let active_user_id = Uuid::new_v4();
     let inactive_user_id = Uuid::new_v4();
     let deleted_user_id = Uuid::new_v4();
@@ -168,6 +172,8 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         active_user_id,
         inactive_user_id,
         deleted_user_id,
+        active_email: active_email.clone(),
+        inactive_email: inactive_email.clone(),
     };
     let mock_router = Router::new()
         .route("/auth/v1/.well-known/jwks.json", get(mock_jwks))
@@ -215,7 +221,6 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         supabase_config: config.supabase,
     };
 
-    let suffix = Uuid::new_v4().simple().to_string();
     let school_id = Uuid::new_v4();
     sqlx::query("INSERT INTO schools (id, name) VALUES ($1, $2)")
         .bind(school_id)
@@ -229,8 +234,8 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         .expect("fetch Student role")
         .get("id");
     for (user_id, email, active) in [
-        (active_user_id, "active@example.test", true),
-        (inactive_user_id, "inactive@example.test", false),
+        (active_user_id, active_email.as_str(), true),
+        (inactive_user_id, inactive_email.as_str(), false),
     ] {
         sqlx::query(
             r#"
@@ -277,30 +282,30 @@ async fn session_lifecycle_is_enforced_end_to_end() {
 
     let active_login = client
         .post(format!("{base_url}/api/auth/login"))
-        .json(&json!({"email": "active@example.test", "password": "correct-password"}))
+        .json(&json!({"email": active_email, "password": "correct-password"}))
         .send()
         .await
         .expect("active login request");
-    assert_eq!(active_login.status(), StatusCode::OK);
+    assert_eq!(active_login.status().as_u16(), 200);
     let active_set_cookies = set_cookie_headers(active_login.headers());
     assert_session_cookie_policy(&active_set_cookies, false);
     let active_cookie_header = cookie_request_header(&active_set_cookies);
 
     let active_request = client
         .get(format!("{base_url}/protected"))
-        .header(header::COOKIE, &active_cookie_header)
+        .header(COOKIE, &active_cookie_header)
         .send()
         .await
         .expect("active protected request");
-    assert_eq!(active_request.status(), StatusCode::OK);
+    assert_eq!(active_request.status().as_u16(), 200);
 
     let inactive_login = client
         .post(format!("{base_url}/api/auth/login"))
-        .json(&json!({"email": "inactive@example.test", "password": "correct-password"}))
+        .json(&json!({"email": inactive_email, "password": "correct-password"}))
         .send()
         .await
         .expect("inactive login request");
-    assert_eq!(inactive_login.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(inactive_login.status().as_u16(), 401);
     assert!(set_cookie_headers(inactive_login.headers()).is_empty());
 
     sqlx::query("UPDATE users SET is_active = FALSE WHERE id = $1")
@@ -310,11 +315,11 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         .expect("disable active user");
     let disabled_request = client
         .get(format!("{base_url}/protected"))
-        .header(header::COOKIE, &active_cookie_header)
+        .header(COOKIE, &active_cookie_header)
         .send()
         .await
         .expect("disabled protected request");
-    assert_eq!(disabled_request.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(disabled_request.status().as_u16(), 401);
     assert_session_cookie_policy(&set_cookie_headers(disabled_request.headers()), true);
 
     sqlx::query("UPDATE users SET is_active = TRUE WHERE id = $1")
@@ -322,17 +327,17 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         .execute(&*app_state.services.pool)
         .await
         .expect("reactivate user for refresh proof");
-    let expired_access = issue_token(&mock_state, active_user_id, "active@example.test", -3_600);
+    let expired_access = issue_token(&mock_state, active_user_id, &mock_state.active_email, -3_600);
     let refreshed_request = client
         .get(format!("{base_url}/protected"))
         .header(
-            header::COOKIE,
+            COOKIE,
             format!("access_token={expired_access}; refresh_token=active-refresh"),
         )
         .send()
         .await
         .expect("active refresh request");
-    assert_eq!(refreshed_request.status(), StatusCode::OK);
+    assert_eq!(refreshed_request.status().as_u16(), 200);
     assert_session_cookie_policy(&set_cookie_headers(refreshed_request.headers()), false);
 
     for (refresh_token, label) in [
@@ -342,23 +347,23 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         let denied_refresh = client
             .get(format!("{base_url}/protected"))
             .header(
-                header::COOKIE,
+                COOKIE,
                 format!("access_token={expired_access}; refresh_token={refresh_token}"),
             )
             .send()
             .await
             .unwrap_or_else(|error| panic!("{label} refresh request failed: {error}"));
-        assert_eq!(denied_refresh.status(), StatusCode::UNAUTHORIZED, "{label}");
+        assert_eq!(denied_refresh.status().as_u16(), 401, "{label}");
         assert_session_cookie_policy(&set_cookie_headers(denied_refresh.headers()), true);
     }
 
     let rejected_login = client
         .post(format!("{base_url}/api/auth/login"))
-        .json(&json!({"email": "rejected@example.test", "password": "wrong-password"}))
+        .json(&json!({"email": format!("rejected-{suffix}@example.test"), "password": "wrong-password"}))
         .send()
         .await
         .expect("rejected login request");
-    assert_eq!(rejected_login.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(rejected_login.status().as_u16(), 401);
     let rejected_body = rejected_login.text().await.expect("read rejected login body");
     assert!(!rejected_body.contains(PROVIDER_SECRET_BODY));
     assert!(rejected_body.contains("Invalid email or password"));
@@ -368,7 +373,7 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         .send()
         .await
         .expect("logout request");
-    assert_eq!(logout.status(), StatusCode::OK);
+    assert_eq!(logout.status().as_u16(), 200);
     assert_session_cookie_policy(&set_cookie_headers(logout.headers()), true);
 
     std::env::remove_var("SUPABASE_JWT_ISSUER");
@@ -376,9 +381,9 @@ async fn session_lifecycle_is_enforced_end_to_end() {
     mock_task.abort();
 }
 
-fn set_cookie_headers(headers: &HeaderMap) -> Vec<String> {
+fn set_cookie_headers(headers: &ReqwestHeaderMap) -> Vec<String> {
     headers
-        .get_all(header::SET_COOKIE)
+        .get_all(SET_COOKIE)
         .iter()
         .map(|value| value.to_str().expect("UTF-8 Set-Cookie").to_string())
         .collect()

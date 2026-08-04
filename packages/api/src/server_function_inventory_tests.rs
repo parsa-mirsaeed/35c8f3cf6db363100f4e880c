@@ -58,6 +58,7 @@ fn module_authorization_manifest() -> BTreeMap<&'static str, AuthorizationClass>
             "submission_functions.rs",
             AuthorizationClass::StudentObjectScoped,
         ),
+        ("teacher_functions.rs", AuthorizationClass::SchoolRoleScoped),
         ("user_creation.rs", AuthorizationClass::SchoolManager),
         ("user_functions.rs", AuthorizationClass::SessionRoleScoped),
         ("user_management.rs", AuthorizationClass::SchoolManager),

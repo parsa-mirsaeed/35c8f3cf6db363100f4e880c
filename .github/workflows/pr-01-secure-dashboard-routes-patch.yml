@@ -1,65 +1,86 @@
-name: PR-01 Secure Dashboard Routes Patch Retry
+name: PR-01 Secure Dashboard Routes Patch Bootstrap
 
 on:
-  pull_request:
-    types:
-      - synchronize
+  push:
+    branches:
+      - agent/pr-01-assignment-authorization
 
 permissions:
   contents: write
 
 jobs:
   restore-narrow-patch:
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'agent/pr-01-assignment-authorization'
+    if: github.ref == 'refs/heads/agent/pr-01-assignment-authorization'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-      HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+      EXPECTED_HEAD: ${{ github.sha }}
+      HEAD_BRANCH: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Restore patch with narrow formatting
+      - name: Restore exact patch with reliable triggers
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD}"
           path=.github/workflows/pr-01-secure-dashboard-routes-patch.yml
-          git show "${EXPECTED_HEAD}^:${path}" > "${path}"
+          git show f9b99b76c1889416a22c9d0ea8cfed739b7c74d7:"${path}" > "${path}"
           python3 <<'PY'
           from pathlib import Path
 
           path = Path(".github/workflows/pr-01-secure-dashboard-routes-patch.yml")
           source = path.read_text(encoding="utf-8")
-          old = """          cargo fmt --all
+
+          old_trigger = """name: PR-01 Secure Dashboard Routes Patch
+
+          on:
+            pull_request:
+              types:
+                - synchronize
+"""
+          new_trigger = """name: PR-01 Secure Dashboard Routes Patch
+
+          on:
+            push:
+              branches:
+                - agent/pr-01-assignment-authorization
+            pull_request:
+              types:
+                - synchronize
+"""
+          if source.count(old_trigger) != 1:
+              raise SystemExit(f"expected one trigger block, found {source.count(old_trigger)}")
+          source = source.replace(old_trigger, new_trigger, 1)
+
+          old_format = """          cargo fmt --all
           cargo fmt --all -- --check
           git diff --check
 """
-          new = """          rustfmt --edition 2021 \\
+          new_format = """          rustfmt --edition 2021 \\
             packages/api/src/server_functions/dashboard_functions.rs \\
             packages/api/src/repositories/authorized_assignment_repository_tests.rs
           git diff --check
 """
-          if source.count(old) != 1:
-              raise SystemExit(f"expected one formatting block, found {source.count(old)}")
-          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+          if source.count(old_format) != 1:
+              raise SystemExit(f"expected one formatting block, found {source.count(old_format)}")
+          path.write_text(source.replace(old_format, new_format, 1), encoding="utf-8")
           PY
           grep -Fq 'rustfmt --edition 2021' "${path}"
+          grep -Fq 'push:' "${path}"
           ! grep -Fq 'cargo fmt --all' "${path}"
           git diff --check
 
-      - name: Commit retry workflow
+      - name: Commit restored patch workflow
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/pr-01-secure-dashboard-routes-patch.yml
-          git commit -m "ci: retry dashboard route patch narrowly"
+          git commit -m "ci: restore exact dashboard route patch"
           test "$(git rev-parse HEAD^)" = "${EXPECTED_HEAD}"
           git push origin "HEAD:${HEAD_BRANCH}"

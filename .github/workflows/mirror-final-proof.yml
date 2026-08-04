@@ -33,23 +33,176 @@ jobs:
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
+      - name: Prepare resilient Actions API helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/actions-run-utils.sh" <<'BASH'
+          retry_gh() {
+            local max_attempts="${GH_API_RETRY_ATTEMPTS:-10}"
+            local base_delay="${GH_API_RETRY_BASE_SECONDS:-3}"
+            local max_delay="${GH_API_RETRY_MAX_SECONDS:-30}"
+            local attempt delay rc error_text
+            local stdout_file stderr_file
+            stdout_file="$(mktemp)"
+            stderr_file="$(mktemp)"
+
+            for attempt in $(seq 1 "$max_attempts"); do
+              : > "$stdout_file"
+              : > "$stderr_file"
+              if "$@" >"$stdout_file" 2>"$stderr_file"; then
+                cat "$stdout_file"
+                rm -f "$stdout_file" "$stderr_file"
+                return 0
+              else
+                rc=$?
+              fi
+              error_text="$(cat "$stderr_file")"
+              if ! grep -Eqi \
+                'HTTP (408|409|425|429|5[0-9]{2})|Server Error|Bad Gateway|Service Unavailable|Gateway Timeout|rate limit|timed out|timeout|connection reset|connection refused|TLS handshake|unexpected EOF|EOF' \
+                "$stderr_file"; then
+                cat "$stdout_file"
+                printf '%s\n' "$error_text" >&2
+                rm -f "$stdout_file" "$stderr_file"
+                return "$rc"
+              fi
+              if (( attempt == max_attempts )); then
+                echo "GitHub API command failed after ${attempt} attempts: $*" >&2
+                printf '%s\n' "$error_text" >&2
+                rm -f "$stdout_file" "$stderr_file"
+                return "$rc"
+              fi
+              delay=$(( base_delay * attempt ))
+              if (( delay > max_delay )); then
+                delay="$max_delay"
+              fi
+              echo "Transient GitHub API failure (${attempt}/${max_attempts}); retrying in ${delay}s: ${error_text}" >&2
+              sleep "$delay"
+            done
+          }
+
+          find_run_id() {
+            local workflow="$1"
+            local event="$2"
+            retry_gh gh run list \
+              --repo "$REPOSITORY" \
+              --workflow "$workflow" \
+              --branch "$HEAD_REF" \
+              --event "$event" \
+              --limit 50 \
+              --json databaseId,headSha \
+              --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end"
+          }
+
+          wait_for_run() {
+            local run_id="$1"
+            local timeout_seconds="${2:-21000}"
+            local poll_seconds="${3:-15}"
+            local started_at now status conclusion run_file
+            started_at="$(date +%s)"
+            run_file="$(mktemp)"
+
+            while true; do
+              retry_gh gh api \
+                --method GET \
+                "/repos/${REPOSITORY}/actions/runs/${run_id}" > "$run_file"
+              status="$(jq -r '.status' "$run_file")"
+              conclusion="$(jq -r '.conclusion // ""' "$run_file")"
+              echo "Run ${run_id}: status=${status}${conclusion:+ conclusion=${conclusion}}"
+
+              if [[ "$status" == "completed" ]]; then
+                rm -f "$run_file"
+                if [[ "$conclusion" == "success" ]]; then
+                  return 0
+                fi
+                echo "Run ${run_id} completed with conclusion '${conclusion}'." >&2
+                return 1
+              fi
+
+              now="$(date +%s)"
+              if (( now - started_at >= timeout_seconds )); then
+                rm -f "$run_file"
+                echo "Timed out waiting for run ${run_id} after ${timeout_seconds}s." >&2
+                return 1
+              fi
+              sleep "$poll_seconds"
+            done
+          }
+
+          write_run_evidence() {
+            local run_id="$1"
+            local output_path="$2"
+            local run_file jobs_file
+            run_file="$(mktemp)"
+            jobs_file="$(mktemp)"
+
+            retry_gh gh api \
+              --method GET \
+              "/repos/${REPOSITORY}/actions/runs/${run_id}" > "$run_file"
+            retry_gh gh api \
+              --method GET \
+              "/repos/${REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$jobs_file"
+
+            jq -n \
+              --slurpfile run "$run_file" \
+              --slurpfile jobs "$jobs_file" \
+              '($run[0]) as $r
+               | ($jobs[0]) as $j
+               | {
+                   id: $r.id,
+                   headSha: $r.head_sha,
+                   event: $r.event,
+                   status: $r.status,
+                   conclusion: $r.conclusion,
+                   url: $r.html_url,
+                   jobs: [
+                     $j.jobs[]
+                     | {
+                         name: .name,
+                         status: .status,
+                         conclusion: .conclusion
+                       }
+                   ]
+                 }' > "$output_path"
+
+            rm -f "$run_file" "$jobs_file"
+          }
+          BASH
+
+          bash -n "${RUNNER_TEMP}/actions-run-utils.sh"
+
+          # Regression check: a transient 502 must be retried instead of failing the proof.
+          source "${RUNNER_TEMP}/actions-run-utils.sh"
+          retry_counter="${RUNNER_TEMP}/retry-counter"
+          printf '0\n' > "$retry_counter"
+          flaky_command() {
+            local count
+            count="$(cat "$retry_counter")"
+            count=$((count + 1))
+            printf '%s\n' "$count" > "$retry_counter"
+            if (( count < 3 )); then
+              echo "failed to get jobs: HTTP 502: Server Error" >&2
+              return 1
+            fi
+            printf 'recovered\n'
+          }
+          GH_API_RETRY_ATTEMPTS=3 \
+          GH_API_RETRY_BASE_SECONDS=0 \
+          GH_API_RETRY_MAX_SECONDS=0 \
+            retry_gh flaky_command | grep -Fx 'recovered'
+          [[ "$(cat "$retry_counter")" == "3" ]]
+
       - name: Resolve exact-head pull-request gates
         id: pr-runs
         shell: bash
         run: |
           set -euo pipefail
+          source "${RUNNER_TEMP}/actions-run-utils.sh"
 
           find_pr_run() {
             local workflow="$1" attempt run_id
             for attempt in $(seq 1 180); do
-              run_id="$(gh run list \
-                --repo "$REPOSITORY" \
-                --workflow "$workflow" \
-                --branch "$HEAD_REF" \
-                --event pull_request \
-                --limit 50 \
-                --json databaseId,headSha \
-                --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end")"
+              run_id="$(find_run_id "$workflow" pull_request)"
               if [[ -n "$run_id" ]]; then
                 printf '%s\n' "$run_id"
                 return 0
@@ -73,21 +226,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh run watch '${{ steps.pr-runs.outputs.ai_run_id }}' \
-            --repo "$REPOSITORY" --exit-status
-          gh run watch '${{ steps.pr-runs.outputs.full_run_id }}' \
-            --repo "$REPOSITORY" --exit-status
+          source "${RUNNER_TEMP}/actions-run-utils.sh"
+          wait_for_run '${{ steps.pr-runs.outputs.ai_run_id }}'
+          wait_for_run '${{ steps.pr-runs.outputs.full_run_id }}'
 
       - name: Enforce AI and full-validation jobs
         shell: bash
         run: |
           set -euo pipefail
-          gh run view '${{ steps.pr-runs.outputs.ai_run_id }}' \
-            --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > ai-run.json
-          gh run view '${{ steps.pr-runs.outputs.full_run_id }}' \
-            --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > full-validation-run.json
+          source "${RUNNER_TEMP}/actions-run-utils.sh"
+          write_run_evidence '${{ steps.pr-runs.outputs.ai_run_id }}' ai-run.json
+          write_run_evidence '${{ steps.pr-runs.outputs.full_run_id }}' full-validation-run.json
 
           python3 - "$HEAD_SHA" ai-run.json full-validation-run.json <<'PY'
           import json
@@ -124,31 +273,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source "${RUNNER_TEMP}/actions-run-utils.sh"
 
-          pr_run_id="$(gh run list \
-            --repo "$REPOSITORY" \
-            --workflow 'Production Foundation' \
-            --branch "$HEAD_REF" \
-            --event pull_request \
-            --limit 50 \
-            --json databaseId,headSha \
-            --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end")"
-
-          if [[ -n "$pr_run_id" ]]; then
-            gh run watch "$pr_run_id" --repo "$REPOSITORY" --exit-status
-            gh run view "$pr_run_id" \
-              --repo "$REPOSITORY" \
-              --json headSha,event,status,conclusion,jobs,url > production-pr-run.json
-
-            set +e
-            python3 - "$HEAD_SHA" production-pr-run.json <<'PY'
+          classify_production_run() {
+            local path="$1"
+            python3 - "$HEAD_SHA" "$path" <<'PY'
           import json
           import sys
 
           expected_sha, path = sys.argv[1:]
           run = json.load(open(path, encoding="utf-8"))
           assert run["headSha"] == expected_sha, (run["headSha"], expected_sha)
-          assert run["event"] == "pull_request", run["event"]
           assert run["status"] == "completed", run["status"]
           assert run["conclusion"] == "success", run["conclusion"]
           jobs = {job["name"]: job["conclusion"] for job in run["jobs"]}
@@ -167,6 +302,15 @@ jobs:
               raise SystemExit(10)
           raise AssertionError({name: jobs.get(name) for name in required})
           PY
+          }
+
+          pr_run_id="$(find_run_id 'Production Foundation' pull_request)"
+          if [[ -n "$pr_run_id" ]]; then
+            wait_for_run "$pr_run_id"
+            write_run_evidence "$pr_run_id" production-pr-run.json
+
+            set +e
+            classify_production_run production-pr-run.json
             pr_status=$?
             set -e
 
@@ -183,34 +327,50 @@ jobs:
               echo "Exact-head Production Foundation PR run failed required-job enforcement." >&2
               exit "$pr_status"
             fi
-            echo "Exact-head PR run was focused-only; dispatching complete Production Foundation."
+            echo "Exact-head PR run was focused-only; checking for a reusable complete dispatch."
           else
-            echo "No exact-head Production Foundation PR run exists; dispatching complete proof."
+            echo "No exact-head Production Foundation PR run exists; checking dispatch history."
           fi
 
-          previous="$(gh run list \
+          dispatch_run_id="$(find_run_id 'Production Foundation' workflow_dispatch)"
+          if [[ -n "$dispatch_run_id" ]]; then
+            echo "Found exact-head Production Foundation dispatch: $dispatch_run_id"
+            set +e
+            wait_for_run "$dispatch_run_id"
+            dispatch_wait_status=$?
+            set -e
+            if [[ "$dispatch_wait_status" -eq 0 ]]; then
+              write_run_evidence "$dispatch_run_id" production-dispatch-run.json
+              set +e
+              classify_production_run production-dispatch-run.json
+              dispatch_status=$?
+              set -e
+              if [[ "$dispatch_status" -eq 0 ]]; then
+                {
+                  echo "run_id=$dispatch_run_id"
+                  echo "expected_event=workflow_dispatch"
+                  echo "source=existing-workflow-dispatch"
+                } >> "$GITHUB_OUTPUT"
+                echo "Reusing complete Production Foundation dispatch: $dispatch_run_id"
+                exit 0
+              fi
+              echo "Existing exact-head dispatch was not a complete Production Foundation proof." >&2
+            else
+              echo "Existing exact-head dispatch failed; creating a new proof." >&2
+            fi
+          fi
+
+          previous="${dispatch_run_id:-0}"
+          gh workflow run production-foundation.yml \
             --repo "$REPOSITORY" \
-            --workflow 'Production Foundation' \
-            --branch "$HEAD_REF" \
-            --event workflow_dispatch \
-            --limit 50 \
-            --json databaseId,headSha \
-            --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
-          gh workflow run production-foundation.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
+            --ref "$HEAD_REF"
           for attempt in $(seq 1 120); do
-            run_id="$(gh run list \
-              --repo "$REPOSITORY" \
-              --workflow 'Production Foundation' \
-              --branch "$HEAD_REF" \
-              --event workflow_dispatch \
-              --limit 50 \
-              --json databaseId,headSha \
-              --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
-            if (( run_id > previous )); then
+            run_id="$(find_run_id 'Production Foundation' workflow_dispatch)"
+            if [[ -n "$run_id" ]] && (( run_id > previous )); then
               {
                 echo "run_id=$run_id"
                 echo "expected_event=workflow_dispatch"
-                echo "source=workflow-dispatch"
+                echo "source=new-workflow-dispatch"
               } >> "$GITHUB_OUTPUT"
               echo "Production Foundation dispatch: $run_id"
               exit 0
@@ -224,11 +384,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh run watch '${{ steps.production.outputs.run_id }}' \
-            --repo "$REPOSITORY" --exit-status
-          gh run view '${{ steps.production.outputs.run_id }}' \
-            --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > production-run.json
+          source "${RUNNER_TEMP}/actions-run-utils.sh"
+          wait_for_run '${{ steps.production.outputs.run_id }}'
+          write_run_evidence '${{ steps.production.outputs.run_id }}' production-run.json
           python3 - \
             "$HEAD_SHA" \
             '${{ steps.production.outputs.expected_event }}' \
@@ -252,31 +410,69 @@ jobs:
           PY
           echo "Production proof source: ${{ steps.production.outputs.source }}"
 
-      - name: Dispatch exact-head Package after Production Foundation
+      - name: Reuse or dispatch exact-head Package after Production Foundation
         id: package
         shell: bash
         run: |
           set -euo pipefail
-          previous="$(gh run list \
+          source "${RUNNER_TEMP}/actions-run-utils.sh"
+
+          validate_package_run() {
+            local path="$1"
+            python3 - "$HEAD_SHA" "$path" <<'PY'
+          import json
+          import sys
+
+          expected_sha, path = sys.argv[1:]
+          run = json.load(open(path, encoding="utf-8"))
+          assert run["headSha"] == expected_sha, (run["headSha"], expected_sha)
+          assert run["event"] == "workflow_dispatch", run["event"]
+          assert run["status"] == "completed", run["status"]
+          assert run["conclusion"] == "success", run["conclusion"]
+          jobs = {job["name"]: job["conclusion"] for job in run["jobs"]}
+          for job_name in ("Validate package definitions", "Docker image and release bundle"):
+              assert jobs.get(job_name) == "success", (job_name, jobs.get(job_name))
+          PY
+          }
+
+          dispatch_run_id="$(find_run_id 'Package' workflow_dispatch)"
+          if [[ -n "$dispatch_run_id" ]]; then
+            echo "Found exact-head Package dispatch: $dispatch_run_id"
+            set +e
+            wait_for_run "$dispatch_run_id"
+            dispatch_wait_status=$?
+            set -e
+            if [[ "$dispatch_wait_status" -eq 0 ]]; then
+              write_run_evidence "$dispatch_run_id" package-existing-run.json
+              set +e
+              validate_package_run package-existing-run.json
+              dispatch_status=$?
+              set -e
+              if [[ "$dispatch_status" -eq 0 ]]; then
+                {
+                  echo "run_id=$dispatch_run_id"
+                  echo "source=existing-workflow-dispatch"
+                } >> "$GITHUB_OUTPUT"
+                echo "Reusing complete Package dispatch: $dispatch_run_id"
+                exit 0
+              fi
+              echo "Existing exact-head Package dispatch was not a complete package proof." >&2
+            else
+              echo "Existing exact-head Package dispatch failed; creating a new proof." >&2
+            fi
+          fi
+
+          previous="${dispatch_run_id:-0}"
+          gh workflow run package.yml \
             --repo "$REPOSITORY" \
-            --workflow 'Package' \
-            --branch "$HEAD_REF" \
-            --event workflow_dispatch \
-            --limit 50 \
-            --json databaseId,headSha \
-            --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
-          gh workflow run package.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
+            --ref "$HEAD_REF"
           for attempt in $(seq 1 120); do
-            run_id="$(gh run list \
-              --repo "$REPOSITORY" \
-              --workflow 'Package' \
-              --branch "$HEAD_REF" \
-              --event workflow_dispatch \
-              --limit 50 \
-              --json databaseId,headSha \
-              --jq "[.[] | select(.headSha == \"$HEAD_SHA\") | .databaseId] | if length == 0 then 0 else max end")"
-            if (( run_id > previous )); then
-              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            run_id="$(find_run_id 'Package' workflow_dispatch)"
+            if [[ -n "$run_id" ]] && (( run_id > previous )); then
+              {
+                echo "run_id=$run_id"
+                echo "source=new-workflow-dispatch"
+              } >> "$GITHUB_OUTPUT"
               echo "Package run: $run_id"
               exit 0
             fi
@@ -289,11 +485,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh run watch '${{ steps.package.outputs.run_id }}' \
-            --repo "$REPOSITORY" --exit-status
-          gh run view '${{ steps.package.outputs.run_id }}' \
-            --repo "$REPOSITORY" \
-            --json headSha,event,status,conclusion,jobs,url > package-run.json
+          source "${RUNNER_TEMP}/actions-run-utils.sh"
+          wait_for_run '${{ steps.package.outputs.run_id }}'
+          write_run_evidence '${{ steps.package.outputs.run_id }}' package-run.json
           python3 - "$HEAD_SHA" package-run.json <<'PY'
           import json
           import sys
@@ -308,6 +502,7 @@ jobs:
           for job_name in ("Validate package definitions", "Docker image and release bundle"):
               assert jobs.get(job_name) == "success", (job_name, jobs.get(job_name))
           PY
+          echo "Package proof source: ${{ steps.package.outputs.source }}"
 
       - name: Upload pre-appliance exact-head evidence
         uses: actions/upload-artifact@v6
@@ -317,7 +512,9 @@ jobs:
             ai-run.json
             full-validation-run.json
             production-pr-run.json
+            production-dispatch-run.json
             production-run.json
+            package-existing-run.json
             package-run.json
           if-no-files-found: error
           retention-days: 7

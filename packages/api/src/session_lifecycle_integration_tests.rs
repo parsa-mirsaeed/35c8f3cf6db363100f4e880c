@@ -69,12 +69,7 @@ async fn mock_token(
                 "active-refresh",
             ),
             Some(email) if email == state.inactive_email => token_grant(
-                issue_token(
-                    &state,
-                    state.inactive_user_id,
-                    &state.inactive_email,
-                    3_600,
-                ),
+                issue_token(&state, state.inactive_user_id, &state.inactive_email, 3_600),
                 "inactive-refresh",
             ),
             _ => (AxumStatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),
@@ -85,21 +80,11 @@ async fn mock_token(
                 "active-refresh-rotated",
             ),
             Some("inactive-refresh") => token_grant(
-                issue_token(
-                    &state,
-                    state.inactive_user_id,
-                    &state.inactive_email,
-                    3_600,
-                ),
+                issue_token(&state, state.inactive_user_id, &state.inactive_email, 3_600),
                 "inactive-refresh-rotated",
             ),
             Some("deleted-refresh") => token_grant(
-                issue_token(
-                    &state,
-                    state.deleted_user_id,
-                    "deleted@example.test",
-                    3_600,
-                ),
+                issue_token(&state, state.deleted_user_id, "deleted@example.test", 3_600),
                 "deleted-refresh-rotated",
             ),
             _ => (AxumStatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),
@@ -327,7 +312,12 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         .execute(&*app_state.services.pool)
         .await
         .expect("reactivate user for refresh proof");
-    let expired_access = issue_token(&mock_state, active_user_id, &mock_state.active_email, -3_600);
+    let expired_access = issue_token(
+        &mock_state,
+        active_user_id,
+        &mock_state.active_email,
+        -3_600,
+    );
     let refreshed_request = client
         .get(format!("{base_url}/protected"))
         .header(
@@ -364,7 +354,10 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         .await
         .expect("rejected login request");
     assert_eq!(rejected_login.status().as_u16(), 401);
-    let rejected_body = rejected_login.text().await.expect("read rejected login body");
+    let rejected_body = rejected_login
+        .text()
+        .await
+        .expect("read rejected login body");
     assert!(!rejected_body.contains(PROVIDER_SECRET_BODY));
     assert!(rejected_body.contains("Invalid email or password"));
 

@@ -14,9 +14,9 @@ use tracing::{debug, error, warn};
 use crate::app_state::AppState;
 use crate::error::AppError;
 use crate::session_security::{
-    access_cookie, append_cookie, append_session_removals, refresh_cookie,
-    refresh_rate_limit_key, resolve_active_session, AuthRateLimiter, SessionValidationError,
-    ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME,
+    access_cookie, append_cookie, append_session_removals, refresh_cookie, refresh_rate_limit_key,
+    resolve_active_session, AuthRateLimiter, SessionValidationError, ACCESS_COOKIE_NAME,
+    REFRESH_COOKIE_NAME,
 };
 
 static REFRESH_RATE_LIMITER: Lazy<AuthRateLimiter> = Lazy::new(AuthRateLimiter::default);
@@ -147,11 +147,8 @@ pub async fn auth_middleware(
                 let mut response = next.run(request).await;
                 append_cookie(response.headers_mut(), &access_cookie(grant.access_token))
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                append_cookie(
-                    response.headers_mut(),
-                    &refresh_cookie(new_refresh_token),
-                )
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                append_cookie(response.headers_mut(), &refresh_cookie(new_refresh_token))
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                 return Ok(response);
             }
             Err(SessionValidationError::AccountUnavailable) => {
@@ -170,10 +167,7 @@ pub async fn auth_middleware(
     run_without_session(request, next, clear_invalid_cookies).await
 }
 
-async fn token_user_id(
-    state: &AppState,
-    token: &str,
-) -> Result<String, SessionValidationError> {
+async fn token_user_id(state: &AppState, token: &str) -> Result<String, SessionValidationError> {
     let claims = state
         .services
         .supabase_service

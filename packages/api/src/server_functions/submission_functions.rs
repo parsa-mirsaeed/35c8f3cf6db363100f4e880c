@@ -43,8 +43,7 @@ pub async fn submit_student_assignment(
         }
 
         let state = extract_server_state().map_err(map_state_error)?;
-        let user_id = Uuid::parse_str(&user.id)
-            .map_err(|_| ServerFnError::new("Unauthorized"))?;
+        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Unauthorized"))?;
         let custom_assignment_id = Uuid::parse_str(&assignment_id)
             .map_err(|_| ServerFnError::new("Invalid assignment ID"))?;
 
@@ -154,7 +153,9 @@ pub async fn submit_student_assignment(
 
     #[cfg(not(feature = "server"))]
     {
-        Err(ServerFnError::new("This function can only be called on the server"))
+        Err(ServerFnError::new(
+            "This function can only be called on the server",
+        ))
     }
 }
 
@@ -170,8 +171,7 @@ pub async fn get_submission_for_assignment(
         require_student(&user)?;
 
         let state = extract_server_state().map_err(map_state_error)?;
-        let user_id = Uuid::parse_str(&user.id)
-            .map_err(|_| ServerFnError::new("Unauthorized"))?;
+        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Unauthorized"))?;
         let custom_assignment_id = Uuid::parse_str(&assignment_id)
             .map_err(|_| ServerFnError::new("Invalid assignment ID"))?;
 
@@ -230,7 +230,9 @@ pub async fn get_submission_for_assignment(
 
     #[cfg(not(feature = "server"))]
     {
-        Err(ServerFnError::new("This function can only be called on the server"))
+        Err(ServerFnError::new(
+            "This function can only be called on the server",
+        ))
     }
 }
 

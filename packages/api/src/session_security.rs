@@ -120,8 +120,8 @@ pub async fn resolve_active_session(
     state: &AppState,
     user_id: &str,
 ) -> Result<UserInfo, SessionValidationError> {
-    let user_uuid = Uuid::parse_str(user_id)
-        .map_err(|_| SessionValidationError::AccountUnavailable)?;
+    let user_uuid =
+        Uuid::parse_str(user_id).map_err(|_| SessionValidationError::AccountUnavailable)?;
     let user = state
         .services
         .user
@@ -195,7 +195,8 @@ fn apply_session_cookie_policy(cookie: &mut Cookie<'static>) {
 }
 
 pub fn append_cookie(headers: &mut HeaderMap, cookie: &Cookie<'_>) -> Result<(), HeaderValue> {
-    let value = HeaderValue::from_str(&cookie.to_string()).map_err(|_| HeaderValue::from_static(""))?;
+    let value =
+        HeaderValue::from_str(&cookie.to_string()).map_err(|_| HeaderValue::from_static(""))?;
     headers.append(SET_COOKIE, value);
     Ok(())
 }

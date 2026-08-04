@@ -53,7 +53,9 @@ pub async fn get_notifications(
 
     #[cfg(not(feature = "server"))]
     {
-        Err(ServerFnError::new("This function can only be called on the server"))
+        Err(ServerFnError::new(
+            "This function can only be called on the server",
+        ))
     }
 }
 
@@ -82,7 +84,9 @@ pub async fn get_unread_notifications(
 
     #[cfg(not(feature = "server"))]
     {
-        Err(ServerFnError::new("This function can only be called on the server"))
+        Err(ServerFnError::new(
+            "This function can only be called on the server",
+        ))
     }
 }
 
@@ -99,7 +103,9 @@ pub async fn get_notification_summary() -> Result<NotificationSummary, ServerFnE
 
     #[cfg(not(feature = "server"))]
     {
-        Err(ServerFnError::new("This function can only be called on the server"))
+        Err(ServerFnError::new(
+            "This function can only be called on the server",
+        ))
     }
 }
 
@@ -118,7 +124,9 @@ pub async fn mark_notification_as_read(notification_id: String) -> Result<(), Se
 
     #[cfg(not(feature = "server"))]
     {
-        Err(ServerFnError::new("This function can only be called on the server"))
+        Err(ServerFnError::new(
+            "This function can only be called on the server",
+        ))
     }
 }
 
@@ -135,7 +143,9 @@ pub async fn mark_all_notifications_as_read() -> Result<u64, ServerFnError> {
 
     #[cfg(not(feature = "server"))]
     {
-        Err(ServerFnError::new("This function can only be called on the server"))
+        Err(ServerFnError::new(
+            "This function can only be called on the server",
+        ))
     }
 }
 

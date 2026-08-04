@@ -17,24 +17,54 @@ enum AuthorizationClass {
 fn module_authorization_manifest() -> BTreeMap<&'static str, AuthorizationClass> {
     BTreeMap::from([
         ("admin_functions.rs", AuthorizationClass::PlatformAdmin),
-        ("assignment_functions.rs", AuthorizationClass::TeacherOrStudentObjectScoped),
+        (
+            "assignment_functions.rs",
+            AuthorizationClass::TeacherOrStudentObjectScoped,
+        ),
         ("auth_functions.rs", AuthorizationClass::SessionOwner),
         ("class_functions.rs", AuthorizationClass::SchoolRoleScoped),
-        ("class_section_functions.rs", AuthorizationClass::SchoolRoleScoped),
-        ("dashboard_functions.rs", AuthorizationClass::SessionRoleScoped),
+        (
+            "class_section_functions.rs",
+            AuthorizationClass::SchoolRoleScoped,
+        ),
+        (
+            "dashboard_functions.rs",
+            AuthorizationClass::SessionRoleScoped,
+        ),
         ("invite_functions.rs", AuthorizationClass::SchoolManager),
-        ("knowledge_audit_functions.rs", AuthorizationClass::PlatformAdmin),
-        ("knowledge_functions.rs", AuthorizationClass::GovernedKnowledge),
-        ("notification_functions.rs", AuthorizationClass::SessionOwner),
-        ("profile_change_requests.rs", AuthorizationClass::SessionRoleScoped),
+        (
+            "knowledge_audit_functions.rs",
+            AuthorizationClass::PlatformAdmin,
+        ),
+        (
+            "knowledge_functions.rs",
+            AuthorizationClass::GovernedKnowledge,
+        ),
+        (
+            "notification_functions.rs",
+            AuthorizationClass::SessionOwner,
+        ),
+        (
+            "profile_change_requests.rs",
+            AuthorizationClass::SessionRoleScoped,
+        ),
         ("school_functions.rs", AuthorizationClass::SchoolRoleScoped),
-        ("student_functions.rs", AuthorizationClass::StudentObjectScoped),
+        (
+            "student_functions.rs",
+            AuthorizationClass::StudentObjectScoped,
+        ),
         ("subject_functions.rs", AuthorizationClass::SchoolRoleScoped),
-        ("submission_functions.rs", AuthorizationClass::StudentObjectScoped),
+        (
+            "submission_functions.rs",
+            AuthorizationClass::StudentObjectScoped,
+        ),
         ("user_creation.rs", AuthorizationClass::SchoolManager),
         ("user_functions.rs", AuthorizationClass::SessionRoleScoped),
         ("user_management.rs", AuthorizationClass::SchoolManager),
-        ("user_preferences_functions.rs", AuthorizationClass::SessionOwner),
+        (
+            "user_preferences_functions.rs",
+            AuthorizationClass::SessionOwner,
+        ),
     ])
 }
 
@@ -57,12 +87,8 @@ fn discover_endpoints(source: &str) -> Vec<String> {
 fn every_production_server_function_module_has_an_authorization_class() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server_functions");
     let manifest = module_authorization_manifest();
-    let ignored_non_endpoint_modules = BTreeSet::from([
-        "form_data.rs",
-        "mod.rs",
-        "rls_helpers.rs",
-        "validation.rs",
-    ]);
+    let ignored_non_endpoint_modules =
+        BTreeSet::from(["form_data.rs", "mod.rs", "rls_helpers.rs", "validation.rs"]);
     let forbidden_endpoints = BTreeSet::from([
         "auth/refresh",
         "auth/verify",
@@ -108,7 +134,10 @@ fn every_production_server_function_module_has_an_authorization_class() {
         }
     }
 
-    assert!(!discovered.is_empty(), "no production server endpoints discovered");
+    assert!(
+        !discovered.is_empty(),
+        "no production server endpoints discovered"
+    );
     discovered.sort_by(|left, right| left.1.cmp(&right.1));
     let mut names = BTreeSet::new();
     for (_, endpoint, _) in &discovered {
@@ -143,10 +172,9 @@ fn session_identity_cannot_be_supplied_by_browser_arguments() {
 #[test]
 fn fake_submission_success_and_provider_body_logging_cannot_return() {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let submission_source = fs::read_to_string(
-        crate_root.join("server_functions/submission_functions.rs"),
-    )
-    .expect("read submission server functions");
+    let submission_source =
+        fs::read_to_string(crate_root.join("server_functions/submission_functions.rs"))
+            .expect("read submission server functions");
     let auth_handler_source =
         fs::read_to_string(crate_root.join("handlers/auth.rs")).expect("read auth handlers");
 

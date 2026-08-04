@@ -555,7 +555,10 @@ mod tests {
     #[test]
     fn production_assignment_module_uses_only_authorized_repository() {
         let source = include_str!("assignment_functions.rs");
-        assert!(source.contains("AuthorizedAssignmentRepository"));
+        let (production_source, _) = source
+            .split_once("\n#[cfg(test)]\n")
+            .expect("assignment server module must keep tests separated from production code");
+        assert!(production_source.contains("AuthorizedAssignmentRepository"));
         for forbidden in [
             "let assignment_repo = AssignmentRepository::new",
             "let custom_repo = CustomAssignmentRepository::new",
@@ -566,7 +569,7 @@ mod tests {
             ".list_by_assignment(",
         ] {
             assert!(
-                !source.contains(forbidden),
+                !production_source.contains(forbidden),
                 "identifier-only repository call is reachable: {forbidden}"
             );
         }

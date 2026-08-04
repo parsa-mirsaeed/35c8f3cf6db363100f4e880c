@@ -29,7 +29,10 @@ fn live_assignment_dashboard_routes_are_actor_scoped() {
         "JOIN enrollments enrollment",
         "a.status = 'Published'::assignment_status",
     ] {
-        assert!(student.contains(required), "missing student guard: {required}");
+        assert!(
+            student.contains(required),
+            "missing student guard: {required}"
+        );
     }
     assert!(!student.contains("SELECT id FROM students WHERE user_id = $1"));
 
@@ -41,7 +44,10 @@ fn live_assignment_dashboard_routes_are_actor_scoped() {
         "JOIN teaching_assignments teaching_assignment",
         "cs.school_id = teacher_user.school_id",
     ] {
-        assert!(teacher.contains(required), "missing teacher guard: {required}");
+        assert!(
+            teacher.contains(required),
+            "missing teacher guard: {required}"
+        );
     }
     assert!(!teacher.contains("SELECT id FROM teachers WHERE user_id = $1"));
 }

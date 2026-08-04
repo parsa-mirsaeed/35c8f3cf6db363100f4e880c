@@ -1,5 +1,5 @@
 -- PR-01 assignment authorization: make publication fan-out idempotent.
--- Exact-head validation replays this migration with the live-route authorization contract.
+-- Exact-head validation replays this migration with the formatted live-route authorization contract.
 --
 -- The authorized publish path can be retried or executed concurrently. A
 -- database uniqueness boundary is required so one student receives at most one

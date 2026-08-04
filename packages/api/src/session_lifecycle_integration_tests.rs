@@ -68,12 +68,7 @@ async fn mock_token(
                 "active-refresh",
             ),
             Some(email) if email == state.inactive_email => token_grant(
-                issue_token(
-                    &state,
-                    state.inactive_user_id,
-                    &state.inactive_email,
-                    3_600,
-                ),
+                issue_token(&state, state.inactive_user_id, &state.inactive_email, 3_600),
                 "inactive-refresh",
             ),
             _ => (AxumStatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),
@@ -84,21 +79,11 @@ async fn mock_token(
                 "active-refresh-rotated",
             ),
             Some("inactive-refresh") => token_grant(
-                issue_token(
-                    &state,
-                    state.inactive_user_id,
-                    &state.inactive_email,
-                    3_600,
-                ),
+                issue_token(&state, state.inactive_user_id, &state.inactive_email, 3_600),
                 "inactive-refresh-rotated",
             ),
             Some("deleted-refresh") => token_grant(
-                issue_token(
-                    &state,
-                    state.deleted_user_id,
-                    "deleted@example.test",
-                    3_600,
-                ),
+                issue_token(&state, state.deleted_user_id, "deleted@example.test", 3_600),
                 "deleted-refresh-rotated",
             ),
             _ => (AxumStatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),

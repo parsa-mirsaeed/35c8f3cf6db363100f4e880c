@@ -40,24 +40,32 @@ pub async fn auth_middleware(
         return Ok(next.run(request).await);
     }
 
-    let mut access_cookie_was_invalid = false;
+    let mut clear_invalid_cookies = false;
     if let Some(access_token) = jar.get(ACCESS_COOKIE_NAME) {
-        match validate_token_session(&state, access_token.value()).await {
-            Ok(user) => {
-                request.extensions_mut().insert(user);
-                return Ok(next.run(request).await);
-            }
+        match token_user_id(&state, access_token.value()).await {
+            Ok(user_id) => match resolve_active_session(&state, &user_id).await {
+                Ok(user) => {
+                    request.extensions_mut().insert(user);
+                    return Ok(next.run(request).await);
+                }
+                Err(SessionValidationError::AccountUnavailable) => {
+                    warn!("Access token belongs to a disabled, deleted, or invalid account");
+                    return run_without_session(request, next, true).await;
+                }
+                Err(SessionValidationError::DependencyUnavailable) => {
+                    error!("Session validation dependency unavailable");
+                    return run_without_session(request, next, false).await;
+                }
+            },
             Err(SessionValidationError::AccountUnavailable) => {
-                warn!("Valid access session no longer maps to an active account");
-                return run_without_session(request, next, true).await;
+                debug!("Access token is invalid or expired; attempting refresh");
+                clear_invalid_cookies = true;
             }
             Err(SessionValidationError::DependencyUnavailable) => {
-                error!("Session validation dependency unavailable");
-                return run_without_session(request, next, true).await;
+                error!("Access-token validation dependency unavailable");
+                return run_without_session(request, next, false).await;
             }
         }
-    } else {
-        access_cookie_was_invalid = true;
     }
 
     if let Some(refresh_token) = jar.get(REFRESH_COOKIE_NAME) {
@@ -79,7 +87,7 @@ pub async fn auth_middleware(
             "{}/auth/v1/token?grant_type=refresh_token",
             config.url.trim_end_matches('/')
         );
-        let response = state
+        let provider_response = state
             .services
             .http_client
             .post(&url)
@@ -89,7 +97,7 @@ pub async fn auth_middleware(
             .send()
             .await;
 
-        let response = match response {
+        let provider_response = match provider_response {
             Ok(response) => response,
             Err(error) => {
                 REFRESH_RATE_LIMITER.record_failure(rate_key).await;
@@ -98,14 +106,14 @@ pub async fn auth_middleware(
             }
         };
 
-        if !response.status().is_success() {
-            let status = response.status();
+        if !provider_response.status().is_success() {
+            let status = provider_response.status();
             REFRESH_RATE_LIMITER.record_failure(rate_key).await;
             warn!(%status, "Refresh token was rejected");
             return run_without_session(request, next, true).await;
         }
 
-        let grant = match response.json::<RefreshGrantResponse>().await {
+        let grant = match provider_response.json::<RefreshGrantResponse>().await {
             Ok(grant) => grant,
             Err(error) => {
                 REFRESH_RATE_LIMITER.record_failure(rate_key).await;
@@ -119,7 +127,20 @@ pub async fn auth_middleware(
             return run_without_session(request, next, true).await;
         };
 
-        match validate_token_session(&state, &grant.access_token).await {
+        let user_id = match token_user_id(&state, &grant.access_token).await {
+            Ok(user_id) => user_id,
+            Err(SessionValidationError::AccountUnavailable) => {
+                REFRESH_RATE_LIMITER.record_failure(rate_key).await;
+                warn!("Refresh provider returned an invalid access token");
+                return run_without_session(request, next, true).await;
+            }
+            Err(SessionValidationError::DependencyUnavailable) => {
+                error!("Refreshed-token validation dependency unavailable");
+                return run_without_session(request, next, false).await;
+            }
+        };
+
+        match resolve_active_session(&state, &user_id).await {
             Ok(user) => {
                 REFRESH_RATE_LIMITER.clear(&rate_key).await;
                 request.extensions_mut().insert(user);
@@ -135,36 +156,36 @@ pub async fn auth_middleware(
             }
             Err(SessionValidationError::AccountUnavailable) => {
                 REFRESH_RATE_LIMITER.record_failure(rate_key).await;
-                warn!("Refreshed token no longer maps to an active account");
+                warn!("Refresh token belongs to a disabled, deleted, or invalid account");
                 return run_without_session(request, next, true).await;
             }
             Err(SessionValidationError::DependencyUnavailable) => {
                 error!("Refreshed session validation dependency unavailable");
-                return run_without_session(request, next, true).await;
+                return run_without_session(request, next, false).await;
             }
         }
     }
 
     debug!("No valid authenticated session found");
-    run_without_session(request, next, access_cookie_was_invalid).await
+    run_without_session(request, next, clear_invalid_cookies).await
 }
 
-async fn validate_token_session(
+async fn token_user_id(
     state: &AppState,
     token: &str,
-) -> Result<crate::domain::UserInfo, SessionValidationError> {
+) -> Result<String, SessionValidationError> {
     let claims = state
         .services
         .supabase_service
         .validate_jwt_token(token)
         .await
         .map_err(map_token_validation_error)?;
-    let (user_id, _) = state
+    state
         .services
         .supabase_service
         .extract_user_from_token(&claims)
-        .map_err(map_token_validation_error)?;
-    resolve_active_session(state, &user_id).await
+        .map(|(user_id, _)| user_id)
+        .map_err(map_token_validation_error)
 }
 
 fn map_token_validation_error(error: AppError) -> SessionValidationError {

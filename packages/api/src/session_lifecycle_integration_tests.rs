@@ -16,7 +16,6 @@ use reqwest::header::{HeaderMap as ReqwestHeaderMap, COOKIE, SET_COOKIE};
 use serde_json::{json, Value};
 use sqlx::Row;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -69,7 +68,12 @@ async fn mock_token(
                 "active-refresh",
             ),
             Some(email) if email == state.inactive_email => token_grant(
-                issue_token(&state, state.inactive_user_id, &state.inactive_email, 3_600),
+                issue_token(
+                    &state,
+                    state.inactive_user_id,
+                    &state.inactive_email,
+                    3_600,
+                ),
                 "inactive-refresh",
             ),
             _ => (AxumStatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),
@@ -80,11 +84,21 @@ async fn mock_token(
                 "active-refresh-rotated",
             ),
             Some("inactive-refresh") => token_grant(
-                issue_token(&state, state.inactive_user_id, &state.inactive_email, 3_600),
+                issue_token(
+                    &state,
+                    state.inactive_user_id,
+                    &state.inactive_email,
+                    3_600,
+                ),
                 "inactive-refresh-rotated",
             ),
             Some("deleted-refresh") => token_grant(
-                issue_token(&state, state.deleted_user_id, "deleted@example.test", 3_600),
+                issue_token(
+                    &state,
+                    state.deleted_user_id,
+                    "deleted@example.test",
+                    3_600,
+                ),
                 "deleted-refresh-rotated",
             ),
             _ => (AxumStatusCode::UNAUTHORIZED, PROVIDER_SECRET_BODY).into_response(),
@@ -252,12 +266,9 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         .local_addr()
         .expect("application test address");
     let application_task = tokio::spawn(async move {
-        axum::serve(
-            application_listener,
-            application.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .expect("serve application test router");
+        axum::serve(application_listener, application)
+            .await
+            .expect("serve application test router");
     });
 
     let client = reqwest::Client::builder()
@@ -349,7 +360,10 @@ async fn session_lifecycle_is_enforced_end_to_end() {
 
     let rejected_login = client
         .post(format!("{base_url}/api/auth/login"))
-        .json(&json!({"email": format!("rejected-{suffix}@example.test"), "password": "wrong-password"}))
+        .json(&json!({
+            "email": format!("rejected-{suffix}@example.test"),
+            "password": "wrong-password"
+        }))
         .send()
         .await
         .expect("rejected login request");

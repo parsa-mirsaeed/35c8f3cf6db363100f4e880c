@@ -310,3 +310,57 @@ async fn required_teacher_mutation_matrix_is_enforced() {
 
     assert_ne!(teacher_a2_id, teacher_a_id);
 }
+
+#[test]
+fn production_dashboard_assignment_routes_use_actor_scoped_repository() {
+    let source = include_str!("../server_functions/dashboard_functions.rs");
+
+    let student_start = source
+        .find("pub async fn get_student_assignments()")
+        .expect("student assignment dashboard handler");
+    let student_end = source[student_start..]
+        .find("// ==================== Teacher Dashboard Functions")
+        .map(|offset| student_start + offset)
+        .expect("student assignment dashboard handler end");
+    let student_handler = &source[student_start..student_end];
+    for required in [
+        "AuthorizedAssignmentRepository::new",
+        "resolve_active_student",
+        "list_for_student",
+        "student_user.is_active = TRUE",
+        "student_role.name::text = 'Student'",
+        "JOIN enrollments enrollment",
+        "a.status = 'Published'::assignment_status",
+    ] {
+        assert!(
+            student_handler.contains(required),
+            "student dashboard handler must contain {required}"
+        );
+    }
+    assert!(!student_handler.contains("SELECT id FROM students WHERE user_id = $1"));
+
+    let teacher_start = source
+        .find("pub async fn get_teacher_assignments()")
+        .expect("teacher assignment dashboard handler");
+    let teacher_end = source[teacher_start..]
+        .find("// ==================== Parent Dashboard Functions")
+        .map(|offset| teacher_start + offset)
+        .expect("teacher assignment dashboard handler end");
+    let teacher_handler = &source[teacher_start..teacher_end];
+    for required in [
+        "AuthorizedAssignmentRepository::new",
+        "resolve_active_teacher",
+        "list_for_teacher",
+        "teacher_user.is_active = TRUE",
+        "teacher_role.name::text = 'Teacher'",
+        "JOIN teaching_assignments teaching_assignment",
+        "cs.school_id = teacher_user.school_id",
+    ] {
+        assert!(
+            teacher_handler.contains(required),
+            "teacher dashboard handler must contain {required}"
+        );
+    }
+    assert!(!teacher_handler.contains("SELECT id FROM teachers WHERE user_id = $1"));
+}
+

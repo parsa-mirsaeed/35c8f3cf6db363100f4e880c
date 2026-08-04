@@ -19,7 +19,13 @@ use uuid::Uuid;
 #[cfg(feature = "server")]
 use std::time::Instant;
 #[cfg(feature = "server")]
+use crate::repositories::{AuthorizedAssignmentRepository, RepositoryError};
+#[cfg(feature = "server")]
 use crate::rls_context::RlsContext;
+#[cfg(feature = "server")]
+use sqlx::Row;
+#[cfg(feature = "server")]
+use std::collections::HashMap;
 
 // ==================== RLS Context Helper ====================
 
@@ -264,6 +270,20 @@ fn grade_to_letter_with_scale(grade: f64, grade_scale: i16) -> String {
     percentage_to_letter_grade(percentage)
 }
 
+#[cfg(feature = "server")]
+fn map_assignment_dashboard_error(error: RepositoryError) -> ServerFnError {
+    match error {
+        RepositoryError::Unauthorized | RepositoryError::NotFound { .. } => {
+            ServerFnError::new("Unauthorized")
+        }
+        RepositoryError::Validation(_) => ServerFnError::new("Invalid assignment query"),
+        error => {
+            tracing::error!(?error, "authorized assignment dashboard query failed");
+            ServerFnError::new("Unable to load assignments")
+        }
+    }
+}
+
 // ==================== Student Dashboard Functions ====================
 
 #[server(endpoint = "dashboard/student/stats")]
@@ -429,75 +449,120 @@ pub async fn get_student_classes() -> Result<Vec<StudentClassInfo>, ServerFnErro
 pub async fn get_student_assignments() -> Result<Vec<StudentAssignmentInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
         let state = extract_server_state()?;
-        let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
-        // Get student ID
-        let student_row = sqlx::query!(
-            r#"SELECT id FROM students WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Student record not found"))?;
-        
-        let student_id = student_row.id;
-        
-        // Get assignments with status
-        let rows = sqlx::query!(
+        let pool = state.services.pool.clone();
+        let user_id = Uuid::parse_str(&user.id)
+            .map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
+        let repository = AuthorizedAssignmentRepository::new(pool.clone());
+        let actor = repository
+            .resolve_active_student(user_id, &user.role)
+            .await
+            .map_err(map_assignment_dashboard_error)?;
+        let mut assignments = repository
+            .list_for_student(actor, 100, 0)
+            .await
+            .map_err(map_assignment_dashboard_error)?;
+        assignments.sort_by(|left, right| right.due_at.cmp(&left.due_at));
+        assignments.truncate(10);
+
+        if assignments.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let assignment_ids: Vec<Uuid> = assignments
+            .iter()
+            .map(|assignment| assignment.id.into())
+            .collect();
+        let rows = sqlx::query(
             r#"
-            SELECT 
+            SELECT
                 ca.id,
-                a.title,
-                cs.name as class_name,
-                ca.due_at,
-                ca.status::text as "status!",
-                CAST(s.grade AS DOUBLE PRECISION) as grade,
-                ca.submitted_at
+                cs.name AS class_name,
+                latest_submission.grade
             FROM custom_assignments ca
-            JOIN assignments a ON ca.assignment_id = a.id
-            JOIN class_sections cs ON a.class_section_id = cs.id
-            LEFT JOIN submissions s ON s.custom_assignment_id = ca.id AND s.student_id = ca.student_id
-            WHERE ca.student_id = $1
-            ORDER BY ca.due_at DESC
-            LIMIT 10
+            JOIN assignments a ON a.id = ca.assignment_id
+            JOIN class_sections cs ON cs.id = a.class_section_id
+            JOIN students student ON student.id = ca.student_id
+            JOIN users student_user ON student_user.id = student.user_id
+            JOIN roles student_role ON student_role.id = student_user.role_id
+            JOIN enrollments enrollment
+              ON enrollment.student_id = student.id
+             AND enrollment.class_section_id = a.class_section_id
+            LEFT JOIN LATERAL (
+                SELECT CAST(submission.grade AS DOUBLE PRECISION) AS grade
+                FROM submissions submission
+                WHERE submission.custom_assignment_id = ca.id
+                  AND submission.student_id = ca.student_id
+                ORDER BY submission.submitted_at DESC
+                LIMIT 1
+            ) latest_submission ON TRUE
+            WHERE ca.id = ANY($1::uuid[])
+              AND student.user_id = $2
+              AND student_user.is_active = TRUE
+              AND student_role.name::text = 'Student'
+              AND student.school_id = student_user.school_id
+              AND cs.school_id = student_user.school_id
+              AND a.status = 'Published'::assignment_status
             "#,
-            student_id
         )
-        .fetch_all(&**pool)
+        .bind(&assignment_ids)
+        .bind(user_id)
+        .fetch_all(&*pool)
         .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let assignments = rows.into_iter().map(|row| {
-            let status = if row.grade.is_some() {
-                "graded".to_string()
-            } else if row.submitted_at.is_some() {
-                "submitted".to_string()
-            } else if row.due_at < chrono::Utc::now() {
-                "overdue".to_string()
-            } else {
-                "pending".to_string()
-            };
-            
-            let grade = row.grade.map(|g| percentage_to_letter_grade(g.to_string().parse::<f64>().unwrap_or(0.0)));
-            
-            StudentAssignmentInfo {
-                id: row.id.to_string(),
-                title: row.title,
-                class_name: row.class_name,
-                due_date: row.due_at.format("%b %d, %Y").to_string(),
-                status,
-                grade,
-                points: row.grade.map(|g| format!("{}/100", g)),
-            }
-        }).collect();
-        
-        Ok(assignments)
+        .map_err(|error| {
+            tracing::error!(?error, "student assignment dashboard metadata query failed");
+            ServerFnError::new("Unable to load assignments")
+        })?;
+
+        let mut metadata = HashMap::with_capacity(rows.len());
+        for row in rows {
+            metadata.insert(
+                row.get::<Uuid, _>("id"),
+                (
+                    row.get::<String, _>("class_name"),
+                    row.get::<Option<f64>, _>("grade"),
+                ),
+            );
+        }
+
+        assignments
+            .into_iter()
+            .map(|assignment| {
+                let assignment_id: Uuid = assignment.id.into();
+                let (class_name, grade_value) = metadata
+                    .remove(&assignment_id)
+                    .ok_or_else(|| {
+                        tracing::error!(
+                            custom_assignment_id = %assignment_id,
+                            "authorized student assignment lost its scoped dashboard metadata"
+                        );
+                        ServerFnError::new("Unable to load assignments")
+                    })?;
+                let status = if grade_value.is_some() {
+                    "graded".to_string()
+                } else if assignment.submitted_at.is_some() {
+                    "submitted".to_string()
+                } else if assignment.due_at < chrono::Utc::now() {
+                    "overdue".to_string()
+                } else {
+                    "pending".to_string()
+                };
+
+                Ok(StudentAssignmentInfo {
+                    id: assignment_id.to_string(),
+                    title: assignment.assignment_title,
+                    class_name,
+                    due_date: assignment.due_at.format("%b %d, %Y").to_string(),
+                    status,
+                    grade: grade_value.map(percentage_to_letter_grade),
+                    points: grade_value.map(|grade| format!("{grade}/100")),
+                })
+            })
+            .collect()
     }
     #[cfg(not(feature = "server"))]
     Ok(vec![])
@@ -645,71 +710,113 @@ pub async fn get_teacher_classes() -> Result<Vec<TeacherClassInfo>, ServerFnErro
 pub async fn get_teacher_assignments() -> Result<Vec<TeacherAssignmentInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
         let state = extract_server_state()?;
-        let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
-        // Get teacher ID
-        let teacher_row = sqlx::query!(
-            r#"SELECT id FROM teachers WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
-        
-        let teacher_id = teacher_row.id;
-        
-        // Get assignments with submission counts
-        let rows = sqlx::query!(
+        let pool = state.services.pool.clone();
+        let user_id = Uuid::parse_str(&user.id)
+            .map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
+        let repository = AuthorizedAssignmentRepository::new(pool.clone());
+        let actor = repository
+            .resolve_active_teacher(user_id, &user.role)
+            .await
+            .map_err(map_assignment_dashboard_error)?;
+        let mut assignments = repository
+            .list_for_teacher(actor, 100, 0)
+            .await
+            .map_err(map_assignment_dashboard_error)?;
+        assignments.sort_by(|left, right| right.due_at.cmp(&left.due_at));
+        assignments.truncate(10);
+
+        if assignments.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let assignment_ids: Vec<Uuid> = assignments
+            .iter()
+            .map(|assignment| assignment.id.into())
+            .collect();
+        let rows = sqlx::query(
             r#"
-            SELECT 
+            SELECT
                 a.id,
-                a.title,
-                cs.name as class_name,
-                a.due_at,
-                COUNT(DISTINCT ca.id) as "total_count!",
-                COUNT(DISTINCT s.id) as "submitted_count!"
+                COUNT(DISTINCT custom_assignment.id) AS total_count,
+                COUNT(DISTINCT submission.id) AS submitted_count
             FROM assignments a
-            JOIN class_sections cs ON a.class_section_id = cs.id
-            LEFT JOIN custom_assignments ca ON ca.assignment_id = a.id
-            LEFT JOIN submissions s ON s.custom_assignment_id = ca.id
-            WHERE a.teacher_id = $1
-            GROUP BY a.id, a.title, cs.name, a.due_at
-            ORDER BY a.due_at DESC
-            LIMIT 10
+            JOIN teachers teacher ON teacher.id = a.teacher_id
+            JOIN users teacher_user ON teacher_user.id = teacher.user_id
+            JOIN roles teacher_role ON teacher_role.id = teacher_user.role_id
+            JOIN class_sections cs ON cs.id = a.class_section_id
+            JOIN teaching_assignments teaching_assignment
+              ON teaching_assignment.teacher_id = teacher.id
+             AND teaching_assignment.class_section_id = cs.id
+            LEFT JOIN custom_assignments custom_assignment
+              ON custom_assignment.assignment_id = a.id
+            LEFT JOIN submissions submission
+              ON submission.custom_assignment_id = custom_assignment.id
+            WHERE a.id = ANY($1::uuid[])
+              AND teacher.user_id = $2
+              AND teacher_user.is_active = TRUE
+              AND teacher_role.name::text = 'Teacher'
+              AND teacher.school_id = teacher_user.school_id
+              AND cs.school_id = teacher_user.school_id
+            GROUP BY a.id
             "#,
-            teacher_id
         )
-        .fetch_all(&**pool)
+        .bind(&assignment_ids)
+        .bind(user_id)
+        .fetch_all(&*pool)
         .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let assignments = rows.into_iter().map(|row| {
-            let status = if row.submitted_count == row.total_count && row.total_count > 0 {
-                "completed".to_string()
-            } else if row.due_at < chrono::Utc::now() {
-                "grading".to_string()
-            } else {
-                "active".to_string()
-            };
-            
-            TeacherAssignmentInfo {
-                id: row.id.to_string(),
-                title: row.title,
-                class_name: row.class_name,
-                due_date: row.due_at.format("%b %d, %Y").to_string(),
-                submitted_count: row.submitted_count,
-                total_count: row.total_count,
-                status,
-            }
-        }).collect();
-        
-        Ok(assignments)
+        .map_err(|error| {
+            tracing::error!(?error, "teacher assignment dashboard counts query failed");
+            ServerFnError::new("Unable to load assignments")
+        })?;
+
+        let mut counts = HashMap::with_capacity(rows.len());
+        for row in rows {
+            counts.insert(
+                row.get::<Uuid, _>("id"),
+                (
+                    row.get::<i64, _>("submitted_count"),
+                    row.get::<i64, _>("total_count"),
+                ),
+            );
+        }
+
+        assignments
+            .into_iter()
+            .map(|assignment| {
+                let assignment_id: Uuid = assignment.id.into();
+                let (submitted_count, total_count) = counts
+                    .remove(&assignment_id)
+                    .ok_or_else(|| {
+                        tracing::error!(
+                            assignment_id = %assignment_id,
+                            "authorized teacher assignment lost its scoped dashboard counts"
+                        );
+                        ServerFnError::new("Unable to load assignments")
+                    })?;
+                let status = if submitted_count == total_count && total_count > 0 {
+                    "completed".to_string()
+                } else if assignment.due_at < chrono::Utc::now() {
+                    "grading".to_string()
+                } else {
+                    "active".to_string()
+                };
+
+                Ok(TeacherAssignmentInfo {
+                    id: assignment_id.to_string(),
+                    title: assignment.title,
+                    class_name: assignment.class_section_name,
+                    due_date: assignment.due_at.format("%b %d, %Y").to_string(),
+                    submitted_count,
+                    total_count,
+                    status,
+                })
+            })
+            .collect()
     }
     #[cfg(not(feature = "server"))]
     Ok(vec![])

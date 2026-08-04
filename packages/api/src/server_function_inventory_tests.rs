@@ -31,6 +31,7 @@ fn module_authorization_manifest() -> BTreeMap<&'static str, AuthorizationClass>
             "dashboard_functions.rs",
             AuthorizationClass::SessionRoleScoped,
         ),
+        ("form_data.rs", AuthorizationClass::SchoolManager),
         ("invite_functions.rs", AuthorizationClass::SchoolManager),
         (
             "knowledge_audit_functions.rs",
@@ -89,7 +90,7 @@ fn every_production_server_function_module_has_an_authorization_class() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server_functions");
     let manifest = module_authorization_manifest();
     let ignored_non_endpoint_modules =
-        BTreeSet::from(["form_data.rs", "mod.rs", "rls_helpers.rs", "validation.rs"]);
+        BTreeSet::from(["mod.rs", "rls_helpers.rs", "validation.rs"]);
     let forbidden_endpoints = BTreeSet::from([
         "auth/refresh",
         "auth/verify",

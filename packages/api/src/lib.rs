@@ -42,15 +42,11 @@ pub mod rls_context;
 #[cfg(feature = "server")]
 pub mod services;
 #[cfg(feature = "server")]
+pub mod session_security;
+#[cfg(feature = "server")]
 pub mod supabase_auth;
 #[cfg(feature = "server")]
 pub mod utils;
 
 // NOTE: We are NOT glob re-exporting the server modules
 // to avoid the ambiguous `validation` error.
-
-/// Echo the user input on the server.
-#[server(endpoint = "echo")]
-pub async fn echo(input: String) -> Result<String, ServerFnError> {
-    Ok(input)
-}

@@ -1,0 +1,95 @@
+name: PR-01 Route Fix Bootstrap v2
+
+on:
+  pull_request:
+    types:
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  apply-reviewed-route-fix:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/pr-01-assignment-authorization'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Execute reviewed patch with scoped formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD}"
+          original=.github/workflows/pr-01-secure-dashboard-routes-patch.yml
+          bootstrap=.github/workflows/pr-01-route-fix-bootstrap-v2.yml
+          git show f9b99b76c1889416a22c9d0ea8cfed739b7c74d7:"${original}" > /tmp/original-route-patch.yml
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          original = Path('/tmp/original-route-patch.yml').read_text(encoding='utf-8')
+          old = """          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+"""
+          new = """          rustfmt --edition 2021 \\
+            packages/api/src/server_functions/dashboard_functions.rs \\
+            packages/api/src/repositories/authorized_assignment_repository_tests.rs
+          git diff --check
+"""
+          if original.count(old) != 1:
+              raise SystemExit(f'format block count: {original.count(old)}')
+          original = original.replace(old, new, 1)
+
+          anchor = '          workflow_path = Path(".github/workflows/pr-01-secure-dashboard-routes-patch.yml")\n'
+          replacement = anchor + '          bootstrap_path = Path(".github/workflows/pr-01-route-fix-bootstrap-v2.yml")\n'
+          if original.count(anchor) != 1:
+              raise SystemExit(f'workflow path count: {original.count(anchor)}')
+          original = original.replace(anchor, replacement, 1)
+
+          unlink = '          workflow_path.unlink()\n'
+          unlink_replacement = unlink + '          bootstrap_path.unlink()\n'
+          if original.count(unlink) != 1:
+              raise SystemExit(f'unlink count: {original.count(unlink)}')
+          original = original.replace(unlink, unlink_replacement, 1)
+
+          expected = """            '.github/workflows/pr-01-secure-dashboard-routes-patch.yml' \\
+            'packages/api/src/repositories/authorized_assignment_repository_tests.rs' \\
+"""
+          expected_replacement = """            '.github/workflows/pr-01-route-fix-bootstrap-v2.yml' \\
+            '.github/workflows/pr-01-secure-dashboard-routes-patch.yml' \\
+            'packages/api/src/repositories/authorized_assignment_repository_tests.rs' \\
+"""
+          if original.count(expected) != 1:
+              raise SystemExit(f'expected-files block count: {original.count(expected)}')
+          original = original.replace(expected, expected_replacement, 1)
+
+          marker = '        run: |\n'
+          start = original.index(marker, original.index('- name: Replace legacy dashboard assignment handlers')) + len(marker)
+          end = original.index('      - name: Commit exact route fix', start)
+          lines = original[start:end].splitlines()
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          Path('/tmp/apply-reviewed-route-fix.sh').write_text(script, encoding='utf-8')
+          PY
+
+          bash /tmp/apply-reviewed-route-fix.sh
+
+      - name: Commit final route authorization fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "security: authorize live assignment dashboard routes"
+          test "$(git rev-parse HEAD^)" = "${EXPECTED_HEAD}"
+          git push origin "HEAD:${HEAD_BRANCH}"

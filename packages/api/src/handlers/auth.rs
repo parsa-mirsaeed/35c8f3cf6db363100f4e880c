@@ -8,7 +8,7 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::app_state::AppState;
 use crate::domain::UserInfo;
@@ -20,7 +20,6 @@ use crate::session_security::{
 
 static LOGIN_RATE_LIMITER: Lazy<AuthRateLimiter> = Lazy::new(AuthRateLimiter::default);
 
-/// Authenticated user information extracted from JWT token
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthenticatedUser {
     pub id: String,
@@ -68,7 +67,7 @@ struct PasswordGrantResponse {
 /// validation and canonical active-account validation in PostgreSQL.
 pub async fn login_handler(
     Extension(state): Extension<AppState>,
-    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    remote_addr: Option<ConnectInfo<SocketAddr>>,
     jar: CookieJar,
     headers: HeaderMap,
     body: Bytes,
@@ -98,10 +97,13 @@ pub async fn login_handler(
         ));
     }
 
-    let rate_key = login_rate_limit_key(remote_addr.ip(), &email);
+    let remote_ip = remote_addr
+        .map(|ConnectInfo(address)| address.ip())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let rate_key = login_rate_limit_key(remote_ip, &email);
     if let Err(limit) = LOGIN_RATE_LIMITER.check(&rate_key).await {
         tracing::warn!(
-            remote_ip = %remote_addr.ip(),
+            %remote_ip,
             retry_after_seconds = limit.retry_after_seconds,
             "Login rate limit exceeded"
         );
@@ -191,8 +193,6 @@ pub async fn login_handler(
     }
 }
 
-/// Logout clears both cookies with exactly the same Path, Secure, HttpOnly and
-/// SameSite attributes used when the cookies were issued.
 pub async fn logout_handler(jar: CookieJar) -> impl IntoResponse {
     let jar = jar
         .add(access_removal_cookie())

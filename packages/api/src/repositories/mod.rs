@@ -1,5 +1,8 @@
 pub mod assignment_repository;
 pub mod audit_log_repository;
+pub mod authorized_assignment_repository;
+#[cfg(test)]
+mod authorized_assignment_repository_tests;
 pub mod base;
 pub mod class_section_repository;
 pub mod custom_assignment_repository;
@@ -32,6 +35,7 @@ pub mod user_repository;
 // Re-export all repositories
 pub use assignment_repository::*;
 pub use audit_log_repository::*;
+pub use authorized_assignment_repository::*;
 pub use base::*;
 pub use class_section_repository::*;
 pub use custom_assignment_repository::*;

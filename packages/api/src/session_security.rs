@@ -1,7 +1,10 @@
 use crate::app_state::AppState;
 use crate::domain::UserInfo;
 use crate::repositories::RepositoryError;
-use axum::http::{header::SET_COOKIE, HeaderMap, HeaderValue};
+use axum::http::{
+    header::{InvalidHeaderValue, SET_COOKIE},
+    HeaderMap, HeaderValue,
+};
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
@@ -194,14 +197,15 @@ fn apply_session_cookie_policy(cookie: &mut Cookie<'static>) {
     cookie.set_same_site(SameSite::Strict);
 }
 
-pub fn append_cookie(headers: &mut HeaderMap, cookie: &Cookie<'_>) -> Result<(), HeaderValue> {
-    let value =
-        HeaderValue::from_str(&cookie.to_string()).map_err(|_| HeaderValue::from_static(""))?;
-    headers.append(SET_COOKIE, value);
+pub fn append_cookie(
+    headers: &mut HeaderMap,
+    cookie: &Cookie<'_>,
+) -> Result<(), InvalidHeaderValue> {
+    headers.append(SET_COOKIE, HeaderValue::from_str(&cookie.to_string())?);
     Ok(())
 }
 
-pub fn append_session_removals(headers: &mut HeaderMap) -> Result<(), HeaderValue> {
+pub fn append_session_removals(headers: &mut HeaderMap) -> Result<(), InvalidHeaderValue> {
     append_cookie(headers, &access_removal_cookie())?;
     append_cookie(headers, &refresh_removal_cookie())?;
     Ok(())

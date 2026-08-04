@@ -81,14 +81,25 @@ jobs:
             done
           }
 
-          find_run_id() {
+          find_pr_run_id() {
             local workflow="$1"
-            local event="$2"
             retry_gh gh run list \
               --repo "$REPOSITORY" \
               --workflow "$workflow" \
               --branch "$HEAD_REF" \
-              --event "$event" \
+              --event pull_request \
+              --limit 50 \
+              --json databaseId,headSha \
+              --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end"
+          }
+
+          find_dispatch_run_id() {
+            local workflow="$1"
+            retry_gh gh run list \
+              --repo "$REPOSITORY" \
+              --workflow "$workflow" \
+              --branch "$HEAD_REF" \
+              --event workflow_dispatch \
               --limit 50 \
               --json databaseId,headSha \
               --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end"
@@ -202,7 +213,7 @@ jobs:
           find_pr_run() {
             local workflow="$1" attempt run_id
             for attempt in $(seq 1 180); do
-              run_id="$(find_run_id "$workflow" pull_request)"
+              run_id="$(find_pr_run_id "$workflow")"
               if [[ -n "$run_id" ]]; then
                 printf '%s\n' "$run_id"
                 return 0
@@ -304,7 +315,7 @@ jobs:
           PY
           }
 
-          pr_run_id="$(find_run_id 'Production Foundation' pull_request)"
+          pr_run_id="$(find_pr_run_id 'Production Foundation')"
           if [[ -n "$pr_run_id" ]]; then
             wait_for_run "$pr_run_id"
             write_run_evidence "$pr_run_id" production-pr-run.json
@@ -332,7 +343,7 @@ jobs:
             echo "No exact-head Production Foundation PR run exists; checking dispatch history."
           fi
 
-          dispatch_run_id="$(find_run_id 'Production Foundation' workflow_dispatch)"
+          dispatch_run_id="$(find_dispatch_run_id 'Production Foundation')"
           if [[ -n "$dispatch_run_id" ]]; then
             echo "Found exact-head Production Foundation dispatch: $dispatch_run_id"
             set +e
@@ -365,7 +376,7 @@ jobs:
             --repo "$REPOSITORY" \
             --ref "$HEAD_REF"
           for attempt in $(seq 1 120); do
-            run_id="$(find_run_id 'Production Foundation' workflow_dispatch)"
+            run_id="$(find_dispatch_run_id 'Production Foundation')"
             if [[ -n "$run_id" ]] && (( run_id > previous )); then
               {
                 echo "run_id=$run_id"
@@ -435,7 +446,7 @@ jobs:
           PY
           }
 
-          dispatch_run_id="$(find_run_id 'Package' workflow_dispatch)"
+          dispatch_run_id="$(find_dispatch_run_id 'Package')"
           if [[ -n "$dispatch_run_id" ]]; then
             echo "Found exact-head Package dispatch: $dispatch_run_id"
             set +e
@@ -467,7 +478,7 @@ jobs:
             --repo "$REPOSITORY" \
             --ref "$HEAD_REF"
           for attempt in $(seq 1 120); do
-            run_id="$(find_run_id 'Package' workflow_dispatch)"
+            run_id="$(find_dispatch_run_id 'Package')"
             if [[ -n "$run_id" ]] && (( run_id > previous )); then
               {
                 echo "run_id=$run_id"

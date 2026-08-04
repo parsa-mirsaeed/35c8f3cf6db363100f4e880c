@@ -1,6 +1,5 @@
 use axum::{
     body::Bytes,
-    extract::ConnectInfo,
     http::header::{HeaderMap, CONTENT_TYPE},
     response::IntoResponse,
     Extension, Json,
@@ -8,7 +7,7 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr};
 
 use crate::app_state::AppState;
 use crate::domain::UserInfo;
@@ -67,7 +66,6 @@ struct PasswordGrantResponse {
 /// validation and canonical active-account validation in PostgreSQL.
 pub async fn login_handler(
     Extension(state): Extension<AppState>,
-    remote_addr: Option<ConnectInfo<SocketAddr>>,
     jar: CookieJar,
     headers: HeaderMap,
     body: Bytes,
@@ -97,13 +95,13 @@ pub async fn login_handler(
         ));
     }
 
-    let remote_ip = remote_addr
-        .map(|ConnectInfo(address)| address.ip())
-        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-    let rate_key = login_rate_limit_key(remote_ip, &email);
+    // The supported appliance is a single trusted gateway node. Until a
+    // verified proxy-address chain exists, do not trust client-supplied IP
+    // headers; throttle by normalized account key in the unknown-address bucket.
+    let rate_limit_scope = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+    let rate_key = login_rate_limit_key(rate_limit_scope, &email);
     if let Err(limit) = LOGIN_RATE_LIMITER.check(&rate_key).await {
         tracing::warn!(
-            %remote_ip,
             retry_after_seconds = limit.retry_after_seconds,
             "Login rate limit exceeded"
         );

@@ -11,9 +11,8 @@ use futures::{
 };
 use sqlx::{
     database::Database,
-    executor::{Execute, Executor},
     postgres::{PgConnection, PgPool, Postgres},
-    Either, Error, Transaction,
+    Either, Error, Execute, Executor, Transaction,
 };
 use std::{
     fmt,
@@ -405,7 +404,7 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         query: E,
     ) -> BoxStream<'e, Result<Either<sqlx::postgres::PgQueryResult, sqlx::postgres::PgRow>, Error>>
     where
-        E: 'q + Execute<'q, Self::Database>,
+        E: 'q + Execute<'q, Postgres>,
         'c: 'e,
     {
         let state = active_transaction();
@@ -430,7 +429,7 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         query: E,
     ) -> BoxFuture<'e, Result<Option<sqlx::postgres::PgRow>, Error>>
     where
-        E: 'q + Execute<'q, Self::Database>,
+        E: 'q + Execute<'q, Postgres>,
         'c: 'e,
     {
         let state = active_transaction();
@@ -448,8 +447,8 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
     fn prepare_with<'e, 'q: 'e>(
         self,
         sql: &'q str,
-        parameters: &'e [<Self::Database as Database>::TypeInfo],
-    ) -> BoxFuture<'e, Result<<Self::Database as Database>::Statement<'q>, Error>>
+        parameters: &'e [<Postgres as Database>::TypeInfo],
+    ) -> BoxFuture<'e, Result<<Postgres as Database>::Statement<'q>, Error>>
     where
         'c: 'e,
     {

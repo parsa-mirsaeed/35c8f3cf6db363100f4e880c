@@ -99,8 +99,7 @@ fn production_repositories_use_the_authorized_executor_facade() {
 #[test]
 fn background_worker_uses_bounded_authorized_transactions() {
     let worker = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/services/knowledge_ingestion_worker.rs"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/services/knowledge_ingestion_worker.rs"),
     )
     .expect("read knowledge ingestion worker");
 

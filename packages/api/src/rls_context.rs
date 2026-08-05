@@ -399,13 +399,14 @@ fn active_transaction() -> Result<Arc<AuthorizedTransactionState>, Error> {
 impl<'c> Executor<'c> for &'c AuthorizedPool {
     type Database = Postgres;
 
-    fn fetch_many<'e, 'q: 'e, E>(
+    fn fetch_many<'e, 'q, E>(
         self,
         query: E,
     ) -> BoxStream<'e, Result<Either<sqlx::postgres::PgQueryResult, sqlx::postgres::PgRow>, Error>>
     where
-        E: 'q + Execute<'q, Postgres>,
+        'q: 'e,
         'c: 'e,
+        E: 'q + Execute<'q, Postgres>,
     {
         let state = active_transaction();
         Box::pin(
@@ -424,13 +425,14 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         )
     }
 
-    fn fetch_optional<'e, 'q: 'e, E>(
+    fn fetch_optional<'e, 'q, E>(
         self,
         query: E,
     ) -> BoxFuture<'e, Result<Option<sqlx::postgres::PgRow>, Error>>
     where
-        E: 'q + Execute<'q, Postgres>,
+        'q: 'e,
         'c: 'e,
+        E: 'q + Execute<'q, Postgres>,
     {
         let state = active_transaction();
         async move {
@@ -444,12 +446,13 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         .boxed()
     }
 
-    fn prepare_with<'e, 'q: 'e>(
+    fn prepare_with<'e, 'q>(
         self,
         sql: &'q str,
         parameters: &'e [<Postgres as Database>::TypeInfo],
     ) -> BoxFuture<'e, Result<<Postgres as Database>::Statement<'q>, Error>>
     where
+        'q: 'e,
         'c: 'e,
     {
         let state = active_transaction();

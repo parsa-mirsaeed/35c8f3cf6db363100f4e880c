@@ -145,3 +145,27 @@ fn database_security_probe_executes_role_denials_and_quiet_context_checks() {
     assert!(verifier.contains("context_after_commit"));
     assert!(verifier.contains("context_after_rollback"));
 }
+
+#[test]
+fn temporary_pr03_repair_scaffolding_cannot_return() {
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+
+    for relative_path in [
+        ".github/workflows/pr03-recover-approved-sources.yml",
+        ".github/workflows/pr03-fix-ai-classifier.yml",
+        "scripts/ci/pr03_apply_executor_migration.py",
+    ] {
+        assert!(
+            !repository_root.join(relative_path).exists(),
+            "temporary PR-03 repair scaffold returned: {relative_path}"
+        );
+    }
+
+    let ci = fs::read_to_string(repository_root.join(".github/workflows/ci.yml"))
+        .expect("read AI Change Proof workflow");
+    assert!(!ci.contains("pr03-apply-executor-migration"));
+    assert!(!ci.contains("Apply guarded PR-03 executor migration"));
+}

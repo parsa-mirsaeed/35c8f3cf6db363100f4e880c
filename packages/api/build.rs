@@ -16,9 +16,7 @@ fn main() {
                     );
                 }
             }
-            Err(error) => println!(
-                "cargo:warning=EDUTALENT_DIAGNOSTIC_MISSING {path}: {error}"
-            ),
+            Err(error) => println!("cargo:warning=EDUTALENT_DIAGNOSTIC_MISSING {path}: {error}"),
         }
         println!("cargo:warning=EDUTALENT_DIAGNOSTIC_END {path}");
     }

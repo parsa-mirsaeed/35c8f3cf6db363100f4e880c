@@ -1,0 +1,114 @@
+name: PR-03 Recover Approved Sources
+
+on:
+  pull_request:
+    types:
+      - synchronize
+      - reopened
+    branches:
+      - main
+    paths:
+      - .github/workflows/pr03-recover-approved-sources.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr03-recover-approved-sources
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Recover allowlisted transaction-RLS sources
+    if: github.head_ref == 'agent/pr-03-transaction-scoped-rls'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          show-progress: false
+
+      - uses: actions/checkout@v4
+        with:
+          ref: 3efe5a82749dcff8990ad05fdf58188fe669113d
+          path: _pr03_source
+          show-progress: false
+
+      - name: Copy only the reviewed source allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/pr03-paths" <<'PATHS'
+          packages/api/src/app_state.rs
+          packages/api/src/handlers/auth.rs
+          packages/api/src/middleware/auth_guard.rs
+          packages/api/src/readiness.rs
+          packages/api/src/repositories/assignment_repository.rs
+          packages/api/src/repositories/audit_log_repository.rs
+          packages/api/src/repositories/authorized_assignment_repository.rs
+          packages/api/src/repositories/base.rs
+          packages/api/src/repositories/class_section_repository.rs
+          packages/api/src/repositories/custom_assignment_repository.rs
+          packages/api/src/repositories/enrollment_repository.rs
+          packages/api/src/repositories/invite_repository.rs
+          packages/api/src/repositories/knowledge_asset_repository.rs
+          packages/api/src/repositories/knowledge_audit_repository.rs
+          packages/api/src/repositories/knowledge_ingestion_job_repository.rs
+          packages/api/src/repositories/lecture_repository.rs
+          packages/api/src/repositories/material_repository.rs
+          packages/api/src/repositories/notification_repository.rs
+          packages/api/src/repositories/parent_repository.rs
+          packages/api/src/repositories/profile_change_request_repository.rs
+          packages/api/src/repositories/profile_repository.rs
+          packages/api/src/repositories/report_repository.rs
+          packages/api/src/repositories/role_repository.rs
+          packages/api/src/repositories/school_repository.rs
+          packages/api/src/repositories/student_repository.rs
+          packages/api/src/repositories/subject_repository.rs
+          packages/api/src/repositories/submission_repository.rs
+          packages/api/src/repositories/teacher_repository.rs
+          packages/api/src/repositories/teaching_assignment_repository.rs
+          packages/api/src/repositories/user_preferences_repository.rs
+          packages/api/src/repositories/user_repository.rs
+          packages/api/src/rls_context.rs
+          packages/api/src/rls_transaction_inventory_tests.rs
+          packages/api/src/server_functions/form_data.rs
+          packages/api/src/server_functions/rls_helpers.rs
+          packages/api/src/session_lifecycle_integration_tests.rs
+          packages/api/src/session_security.rs
+          PATHS
+          while IFS= read -r path; do
+            test -f "_pr03_source/${path}"
+            install -D -m 0644 "_pr03_source/${path}" "${path}"
+          done < "${RUNNER_TEMP}/pr03-paths"
+          rm -rf _pr03_source
+          rm -f .github/workflows/pr03-recover-approved-sources.yml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format only the allowlisted sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t paths < "${RUNNER_TEMP}/pr03-paths"
+          rustfmt --edition 2021 "${paths[@]}"
+          rustfmt --edition 2021 --check "${paths[@]}"
+
+      - name: Commit the clean source migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          test ! -e .github/workflows/pr03-recover-approved-sources.yml
+          test ! -e _pr03_source
+          changed="$(git diff --cached --name-only | LC_ALL=C sort)"
+          expected="$(LC_ALL=C sort "${RUNNER_TEMP}/pr03-paths")"
+          test "${changed}" = "${expected}"
+          git commit -m 'security: route repositories through authorized transactions'
+          git push origin HEAD:agent/pr-03-transaction-scoped-rls

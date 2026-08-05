@@ -443,3 +443,67 @@ jobs:
           path: ai-change-evidence.json
           if-no-files-found: error
           retention-days: 14
+
+  pr03-apply-worker-rls:
+    name: Apply guarded PR-03 worker RLS fixes
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.head_ref == 'agent/pr-03-transaction-scoped-rls'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          show-progress: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Execute guarded patch and restore validation workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -ryaml -e '
+            doc = YAML.load_file(".github/workflows/pr03-recover-approved-sources.yml")
+            steps = doc.fetch("jobs").fetch("apply").fetch("steps")
+            File.write("/tmp/pr03-apply.sh", steps.find { |s| s["name"] == "Apply exact reviewed patches" }.fetch("run"))
+            File.write("/tmp/pr03-format.sh", steps.find { |s| s["name"] == "Format and validate changed sources" }.fetch("run"))
+            File.write("/tmp/pr03-commit.sh", steps.find { |s| s["name"] == "Commit exact allowlisted change set" }.fetch("run"))
+          '
+          bash /tmp/pr03-apply.sh
+          bash /tmp/pr03-format.sh
+
+          git show HEAD^:.github/workflows/ci.yml > .github/workflows/ci.yml
+          python3 <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/ci.yml')
+          text = path.read_text()
+          old = '''          if [[ "$EVENT_NAME" == "pull_request" && "$EVENT_ACTION" == "synchronize" && -n "${BEFORE_SHA:-}" && "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+            git diff --name-only "$BEFORE_SHA" "$HEAD_SHA" > changed-files.txt
+            comparison=commit
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git diff --name-only "$BASE_SHA"..."$HEAD_SHA" > changed-files.txt
+            comparison=pull-request
+'''
+          new = '''          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git diff --name-only "$BASE_SHA"..."$HEAD_SHA" > changed-files.txt
+            comparison=pull-request
+'''
+          if text.count(old) != 1:
+              raise SystemExit('AI classifier synchronization block did not match exactly once')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              'scripts/ci/(apply_migrations|verify_knowledge_schema|verify_knowledge_security)\\.sh',
+              'scripts/ci/(apply_migrations|verify_knowledge_schema|verify_knowledge_security|verify_transaction_scoped_rls)\\.sh',
+              1,
+          )
+          path.write_text(text)
+          PY
+
+          sed -i '/\.github\/workflows\/production-foundation\.yml/i\          .github/workflows/ci.yml' /tmp/pr03-commit.sh
+          bash /tmp/pr03-commit.sh

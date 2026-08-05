@@ -46,9 +46,9 @@ pub mod supabase_auth;
 #[cfg(feature = "server")]
 pub mod utils;
 
-#[cfg(test)]
-mod server_function_inventory_tests;
 #[cfg(all(test, feature = "server"))]
 mod rls_transaction_inventory_tests;
+#[cfg(test)]
+mod server_function_inventory_tests;
 #[cfg(all(test, feature = "server"))]
 mod session_lifecycle_integration_tests;

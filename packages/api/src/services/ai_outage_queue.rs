@@ -47,8 +47,7 @@ pub async fn requeue_provider_outage(
         return Ok(EmbeddingFailureDisposition::IgnoredInactive);
     }
 
-    let backoff_seconds =
-        provider_backoff_seconds(job.attempts, requested_retry_after_seconds);
+    let backoff_seconds = provider_backoff_seconds(job.attempts, requested_retry_after_seconds);
     let updated = sqlx::query(
         r#"
         UPDATE ingestion_jobs
@@ -78,9 +77,7 @@ pub async fn requeue_provider_outage(
 
 fn provider_backoff_seconds(attempts: i32, requested_retry_after_seconds: u64) -> i64 {
     let exponential = 2u64.saturating_pow(attempts.clamp(1, 8) as u32);
-    requested_retry_after_seconds
-        .max(exponential)
-        .clamp(5, 300) as i64
+    requested_retry_after_seconds.max(exponential).clamp(5, 300) as i64
 }
 
 fn sanitized_outage_code(value: &str) -> &'static str {

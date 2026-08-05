@@ -118,9 +118,14 @@ expect_role_failure() {
     local label="$1"
     local sql="$2"
     if psql "${DATABASE_URL}" \
+        --quiet \
         --set=ON_ERROR_STOP=1 \
         --set=app_role="${app_role}" \
-        --command="SET ROLE :\"app_role\"; ${sql}" >/tmp/edutalent-rls-denied.log 2>&1; then
+        >/tmp/edutalent-rls-denied.log 2>&1 <<SQL
+SET ROLE :"app_role";
+${sql};
+SQL
+    then
         echo "Runtime role unexpectedly succeeded: ${label}" >&2
         cat /tmp/edutalent-rls-denied.log >&2
         exit 1
@@ -137,6 +142,7 @@ expect_role_failure \
 query_school() {
     local school_id="$1"
     psql "${DATABASE_URL}" \
+        --quiet \
         --tuples-only \
         --no-align \
         --set=ON_ERROR_STOP=1 \
@@ -144,10 +150,10 @@ query_school() {
         --set=school_id="${school_id}" <<'SQL'
 SET ROLE :"app_role";
 BEGIN;
-SELECT set_config('app.user_id', '11111111-1111-1111-1111-111111111111', true);
-SELECT set_config('app.user_role', 'Teacher', true);
-SELECT set_config('app.school_id', :'school_id', true);
-SELECT set_config('app.elevated_operation', 'false', true);
+SET LOCAL app.user_id = '11111111-1111-1111-1111-111111111111';
+SET LOCAL app.user_role = 'Teacher';
+SET LOCAL app.school_id = :'school_id';
+SET LOCAL app.elevated_operation = 'false';
 SELECT string_agg(marker, ',' ORDER BY marker)
 FROM public.edutalent_rls_transaction_probe;
 ROLLBACK;
@@ -176,15 +182,17 @@ fi
 
 context_after_commit="$(
     psql "${DATABASE_URL}" \
+        --quiet \
         --tuples-only \
         --no-align \
         --set=ON_ERROR_STOP=1 \
         --set=app_role="${app_role}" <<'SQL'
 SET ROLE :"app_role";
 BEGIN;
-SELECT set_config('app.user_id', '11111111-1111-1111-1111-111111111111', true);
-SELECT set_config('app.user_role', 'Teacher', true);
-SELECT set_config('app.school_id', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', true);
+SET LOCAL app.user_id = '11111111-1111-1111-1111-111111111111';
+SET LOCAL app.user_role = 'Teacher';
+SET LOCAL app.school_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+SET LOCAL app.elevated_operation = 'false';
 COMMIT;
 SELECT concat_ws('|',
     NULLIF(current_setting('app.user_id', true), ''),
@@ -201,15 +209,17 @@ fi
 
 context_after_rollback="$(
     psql "${DATABASE_URL}" \
+        --quiet \
         --tuples-only \
         --no-align \
         --set=ON_ERROR_STOP=1 \
         --set=app_role="${app_role}" <<'SQL'
 SET ROLE :"app_role";
 BEGIN;
-SELECT set_config('app.user_id', '11111111-1111-1111-1111-111111111111', true);
-SELECT set_config('app.user_role', 'Teacher', true);
-SELECT set_config('app.school_id', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', true);
+SET LOCAL app.user_id = '11111111-1111-1111-1111-111111111111';
+SET LOCAL app.user_role = 'Teacher';
+SET LOCAL app.school_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+SET LOCAL app.elevated_operation = 'false';
 ROLLBACK;
 SELECT concat_ws('|',
     NULLIF(current_setting('app.user_id', true), ''),

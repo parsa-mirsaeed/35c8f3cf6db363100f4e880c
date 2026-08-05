@@ -108,7 +108,10 @@ jobs:
           test ! -e .github/workflows/pr03-recover-approved-sources.yml
           test ! -e _pr03_source
           changed="$(git diff --cached --name-only | LC_ALL=C sort)"
-          expected="$(LC_ALL=C sort "${RUNNER_TEMP}/pr03-paths")"
+          expected="$({
+            cat "${RUNNER_TEMP}/pr03-paths"
+            printf '%s\n' '.github/workflows/pr03-recover-approved-sources.yml'
+          } | LC_ALL=C sort)"
           test "${changed}" = "${expected}"
           git commit -m 'security: route repositories through authorized transactions'
           git push origin HEAD:agent/pr-03-transaction-scoped-rls

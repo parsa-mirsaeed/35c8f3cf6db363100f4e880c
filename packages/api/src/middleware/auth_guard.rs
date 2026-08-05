@@ -110,13 +110,21 @@ pub async fn auth_middleware(
 
         if !provider_response.status().is_success() {
             let status = provider_response.status();
-            if refresh_rejection_invalidates_session(status.as_u16()) {
+            let status_code = status.as_u16();
+            let invalidates_session = refresh_rejection_invalidates_session(status_code);
+            if refresh_response_records_failure(status_code) {
                 REFRESH_RATE_LIMITER.record_failure(rate_key).await;
+            }
+            if invalidates_session {
                 warn!(%status, "Refresh token was rejected");
                 return run_without_session(request, next, true).await;
             }
 
-            error!(%status, "Refresh provider dependency unavailable");
+            if status_code == 429 {
+                warn!(%status, "Refresh provider rate limited the session");
+            } else {
+                error!(%status, "Refresh provider dependency unavailable");
+            }
             return run_without_session(request, next, false).await;
         }
 
@@ -177,6 +185,10 @@ fn bypass_session_middleware(path: &str) -> bool {
 
 fn refresh_rejection_invalidates_session(status: u16) -> bool {
     matches!(status, 400 | 401 | 403 | 422)
+}
+
+fn refresh_response_records_failure(status: u16) -> bool {
+    refresh_rejection_invalidates_session(status) || status == 429
 }
 
 async fn token_user_id(state: &AppState, token: &str) -> Result<String, SessionValidationError> {
@@ -254,5 +266,18 @@ mod tests {
                 "{status}"
             );
         }
+    }
+
+    #[test]
+    fn provider_throttling_feeds_local_backoff_without_invalidating_session() {
+        assert!(refresh_response_records_failure(
+            StatusCode::TOO_MANY_REQUESTS.as_u16()
+        ));
+        assert!(!refresh_rejection_invalidates_session(
+            StatusCode::TOO_MANY_REQUESTS.as_u16()
+        ));
+        assert!(!refresh_response_records_failure(
+            StatusCode::SERVICE_UNAVAILABLE.as_u16()
+        ));
     }
 }

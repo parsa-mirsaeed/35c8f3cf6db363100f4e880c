@@ -23,7 +23,7 @@ env:
 jobs:
   pr03-apply-executor-migration:
     name: Apply guarded PR-03 executor migration
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/pr-03-transaction-scoped-rls' && hashFiles('scripts/ci/pr03_apply_executor_migration.py') != ''
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/pr-03-transaction-scoped-rls'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

@@ -6,21 +6,28 @@ import re
 def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
     file = Path(path)
     source = file.read_text()
-    count = source.count(old)
-    if count != expected:
-        raise SystemExit(
-            f"{path}: expected {expected} occurrences, found {count}: {old!r}"
-        )
-    file.write_text(source.replace(old, new))
+    old_count = source.count(old)
+    if old_count == expected:
+        file.write_text(source.replace(old, new))
+        return
+    if old_count == 0 and source.count(new) >= expected:
+        return
+    raise SystemExit(
+        f"{path}: expected {expected} old or migrated occurrences; "
+        f"found old={old_count}, new={source.count(new)}: {old!r}"
+    )
 
 
 def replace_regex(path: str, pattern: str, replacement: str, expected: int = 1) -> None:
     file = Path(path)
     source = file.read_text()
     updated, count = re.subn(pattern, replacement, source, flags=re.S)
-    if count != expected:
-        raise SystemExit(f"{path}: expected {expected} regex matches, found {count}")
-    file.write_text(updated)
+    if count == expected:
+        file.write_text(updated)
+        return
+    if count == 0 and replacement in source:
+        return
+    raise SystemExit(f"{path}: expected {expected} regex or migrated replacement, found {count}")
 
 
 replace_exact(
@@ -40,14 +47,12 @@ replace_exact(
 )
 path = Path("packages/api/src/repositories/knowledge_asset_repository.rs")
 source = path.read_text()
-if source.count("Self::append_audit_in_tx(\n            &mut tx,") < 1:
+old_audit = "Self::append_audit_in_tx(\n            &mut tx,"
+new_audit = "Self::append_audit_in_tx(\n            &mut *tx,"
+if old_audit in source:
+    path.write_text(source.replace(old_audit, new_audit))
+elif new_audit not in source:
     raise SystemExit("knowledge asset audit call sites were not found")
-path.write_text(
-    source.replace(
-        "Self::append_audit_in_tx(\n            &mut tx,",
-        "Self::append_audit_in_tx(\n            &mut *tx,",
-    )
-)
 
 replace_exact(
     "packages/api/src/repositories/knowledge_ingestion_job_repository.rs",
@@ -68,17 +73,19 @@ replace_exact(
 )
 path = Path("packages/api/src/repositories/knowledge_ingestion_job_repository.rs")
 source = path.read_text()
-if source.count("Self::lock_asset(&mut tx,") < 1:
+old_lock = "Self::lock_asset(&mut tx,"
+new_lock = "Self::lock_asset(&mut *tx,"
+if old_lock in source:
+    source = source.replace(old_lock, new_lock)
+elif new_lock not in source:
     raise SystemExit("knowledge ingestion lock call sites were not found")
-source = source.replace("Self::lock_asset(&mut tx,", "Self::lock_asset(&mut *tx,")
-if source.count("Self::append_audit(\n            &mut tx,") < 1:
+old_audit = "Self::append_audit(\n            &mut tx,"
+new_audit = "Self::append_audit(\n            &mut *tx,"
+if old_audit in source:
+    source = source.replace(old_audit, new_audit)
+elif new_audit not in source:
     raise SystemExit("knowledge ingestion audit call sites were not found")
-path.write_text(
-    source.replace(
-        "Self::append_audit(\n            &mut tx,",
-        "Self::append_audit(\n            &mut *tx,",
-    )
-)
+path.write_text(source)
 
 replace_exact(
     "packages/api/src/services/assignment_personalization_service.rs",

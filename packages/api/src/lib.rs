@@ -12,15 +12,13 @@ pub use models::*;
 
 // --- SERVER FUNCTIONS ---
 // This module MUST be public for the client to see the stubs.
-// NOTE: We do NOT glob re-export server_functions to avoid breaking
+// NOTE: We do NOT glob re-export server functions to avoid breaking
 // Dioxus #[server] macro endpoint resolution. Use full paths like:
-// api::server_functions::auth_functions::login
+// api::server_functions::auth_functions::whoami
 pub mod server_functions;
-// Re-export only types/models from server_functions, not the functions themselves
 pub use server_functions::{form_data::*, validation::*};
 
 // --- SERVER-ONLY MODULES ---
-// These are correctly hidden from the client.
 #[cfg(feature = "server")]
 pub mod ai_gateway_runtime;
 #[cfg(feature = "server")]
@@ -28,9 +26,9 @@ pub mod app_state;
 #[cfg(feature = "server")]
 pub mod config;
 #[cfg(feature = "server")]
-pub mod error; // Your middleware needs this
+pub mod error;
 #[cfg(feature = "server")]
-pub mod handlers; // Your middleware needs this
+pub mod handlers;
 #[cfg(feature = "server")]
 pub mod middleware;
 #[cfg(feature = "server")]
@@ -42,15 +40,13 @@ pub mod rls_context;
 #[cfg(feature = "server")]
 pub mod services;
 #[cfg(feature = "server")]
+pub mod session_security;
+#[cfg(feature = "server")]
 pub mod supabase_auth;
 #[cfg(feature = "server")]
 pub mod utils;
 
-// NOTE: We are NOT glob re-exporting the server modules
-// to avoid the ambiguous `validation` error.
-
-/// Echo the user input on the server.
-#[server(endpoint = "echo")]
-pub async fn echo(input: String) -> Result<String, ServerFnError> {
-    Ok(input)
-}
+#[cfg(test)]
+mod server_function_inventory_tests;
+#[cfg(all(test, feature = "server"))]
+mod session_lifecycle_integration_tests;

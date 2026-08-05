@@ -305,12 +305,10 @@ async fn recover_stale_embedding_jobs(
     pool: &AuthorizedPool,
     stale_after_seconds: i64,
 ) -> Result<u64, RepositoryError> {
-    let recovered = sqlx::query_scalar::<_, i64>(
-        "SELECT public.recover_stale_embedding_jobs($1)",
-    )
-    .bind(stale_after_seconds.max(60))
-    .fetch_one(pool)
-    .await?;
+    let recovered = sqlx::query_scalar::<_, i64>("SELECT public.recover_stale_embedding_jobs($1)")
+        .bind(stale_after_seconds.max(60))
+        .fetch_one(pool)
+        .await?;
     Ok(recovered.max(0) as u64)
 }
 

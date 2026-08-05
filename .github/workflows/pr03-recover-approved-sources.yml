@@ -1,0 +1,951 @@
+name: PR-03 Apply Worker RLS Fixes
+
+on:
+  pull_request:
+    types:
+      - synchronize
+      - reopened
+    branches:
+      - main
+    paths:
+      - .github/workflows/pr03-recover-approved-sources.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr03-apply-worker-rls-fixes
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply reviewed worker and validation fixes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          show-progress: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply exact reviewed patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              target.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "packages/api/src/rls_context.rs",
+              "    Either, Error, Execute, Executor, Transaction,\n",
+              "    Describe, Either, Error, Execute, Executor, Transaction,\n",
+          )
+          replace_once(
+              "packages/api/src/rls_context.rs",
+              '''    pub fn system_job(job_id: Uuid, school_id: Uuid) -> Self {
+        Self {
+            user_id: job_id,
+            role: "system_job".to_string(),
+            school_id: Some(school_id),
+            elevated_operation: true,
+        }
+    }
+''',
+              '''    pub fn system_job(actor_id: Uuid, school_id: Uuid) -> Self {
+        Self {
+            user_id: actor_id,
+            role: "system_job".to_string(),
+            school_id: Some(school_id),
+            elevated_operation: true,
+        }
+    }
+
+    /// Create the bounded global queue-scheduler context. Direct table policies
+    /// remain school-scoped; only dedicated SECURITY DEFINER queue functions
+    /// accept this no-school context after verifying the role and elevated flag.
+    pub fn system_queue(worker_id: Uuid) -> Self {
+        Self {
+            user_id: worker_id,
+            role: "system_job".to_string(),
+            school_id: None,
+            elevated_operation: true,
+        }
+    }
+''',
+          )
+          replace_once(
+              "packages/api/src/rls_context.rs",
+              '''            Executor::prepare_with(&mut **transaction, sql, parameters).await
+        }
+        .boxed()
+    }
+}
+''',
+              '''            Executor::prepare_with(&mut **transaction, sql, parameters).await
+        }
+        .boxed()
+    }
+
+    fn describe<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+    ) -> BoxFuture<'e, Result<Describe<Self::Database>, Error>>
+    where
+        'c: 'e,
+    {
+        let state = active_transaction();
+        async move {
+            let state = state?;
+            let mut guard = Arc::clone(&state.transaction).lock_owned().await;
+            let transaction = guard
+                .as_mut()
+                .ok_or_else(|| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))?;
+            Executor::describe(&mut **transaction, sql).await
+        }
+        .boxed()
+    }
+}
+''',
+          )
+          replace_once(
+              "packages/api/src/rls_context.rs",
+              '''        assert_eq!(actor.school_id, Some(school_id));
+        assert!(actor.elevated_operation);
+    }
+''',
+              '''        assert_eq!(actor.school_id, Some(school_id));
+        assert!(actor.elevated_operation);
+
+        let scheduler = AuthorizedActor::system_queue(Uuid::new_v4());
+        assert_eq!(scheduler.role, "system_job");
+        assert_eq!(scheduler.school_id, None);
+        assert!(scheduler.elevated_operation);
+    }
+''',
+          )
+
+          replace_once(
+              "packages/api/src/repositories/knowledge_ingestion_job_repository.rs",
+              '''    pub requested_by: Uuid,
+    pub attempts: i32,
+''',
+              '''    pub requested_by: Uuid,
+    pub school_id: Uuid,
+    pub attempts: i32,
+''',
+          )
+          start = Path("packages/api/src/repositories/knowledge_ingestion_job_repository.rs")
+          text = start.read_text()
+          old_claim = '''        let row = sqlx::query(
+            r#"
+            WITH candidate AS (
+                SELECT job.id
+                FROM ingestion_jobs job
+                JOIN knowledge_assets asset ON asset.id = job.asset_id
+                WHERE job.stage = 'embed'
+                  AND job.status = 'queued'
+                  AND job.available_at <= NOW()
+                  AND job.requested_by IS NOT NULL
+                  AND asset.status = 'embedding_pending'
+                ORDER BY job.available_at, job.created_at
+                FOR UPDATE OF job SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE ingestion_jobs job
+            SET status = 'running',
+                attempts = job.attempts + 1,
+                started_at = COALESCE(job.started_at, NOW()),
+                locked_at = NOW(),
+                heartbeat_at = NOW(),
+                error_message = NULL
+            FROM candidate
+            WHERE job.id = candidate.id
+            RETURNING job.id, job.asset_id, job.requested_by, job.attempts
+            "#,
+        )
+        .fetch_optional(&*self.base.pool())
+'''
+          new_claim = '''        let row = sqlx::query(
+            r#"
+            SELECT job_id AS id, asset_id, requested_by, school_id, attempts
+            FROM public.claim_next_embedding_job()
+            "#,
+        )
+        .fetch_optional(&*self.base.pool())
+'''
+          if text.count(old_claim) != 1:
+              raise SystemExit("knowledge ingestion claim query did not match exactly once")
+          text = text.replace(old_claim, new_claim, 1)
+          text = text.replace(
+              '''                requested_by: row.try_get("requested_by")?,
+                attempts: row.try_get("attempts")?,
+''',
+              '''                requested_by: row.try_get("requested_by")?,
+                school_id: row.try_get("school_id")?,
+                attempts: row.try_get("attempts")?,
+''',
+              1,
+          )
+          old_recover = '''        let result = sqlx::query(
+            r#"
+            UPDATE ingestion_jobs job
+            SET status = 'queued',
+                available_at = NOW(),
+                locked_at = NULL,
+                heartbeat_at = NULL,
+                error_message = COALESCE(job.error_message, 'Recovered after stale worker lock')
+            FROM knowledge_assets asset
+            WHERE job.asset_id = asset.id
+              AND job.stage = 'embed'
+              AND job.status = 'running'
+              AND asset.status = 'embedding_pending'
+              AND COALESCE(job.heartbeat_at, job.locked_at, job.started_at, job.created_at)
+                    < NOW() - make_interval(secs => $1)
+            "#,
+        )
+        .bind(stale_after_seconds.max(60))
+        .execute(&*self.base.pool())
+        .await?;
+        Ok(result.rows_affected())
+'''
+          new_recover = '''        let recovered = sqlx::query_scalar::<_, i64>(
+            "SELECT public.recover_stale_embedding_jobs($1)",
+        )
+        .bind(stale_after_seconds.max(60))
+        .fetch_one(&*self.base.pool())
+        .await?;
+        Ok(recovered.max(0) as u64)
+'''
+          if text.count(old_recover) != 1:
+              raise SystemExit("knowledge ingestion recovery query did not match exactly once")
+          text = text.replace(old_recover, new_recover, 1)
+          text = text.replace("'PlatformAdmin', $2, 'knowledge_asset'", "'system_job', $2, 'knowledge_asset'", 1)
+          start.write_text(text)
+
+          replace_once(
+              "packages/api/src/services/ai_outage_queue.rs",
+              "use sqlx::PgPool;\n",
+              "use crate::rls_context::AuthorizedPool;\n",
+          )
+          replace_once(
+              "packages/api/src/services/ai_outage_queue.rs",
+              "    pool: Arc<PgPool>,\n",
+              "    pool: Arc<AuthorizedPool>,\n",
+          )
+
+          worker = Path("packages/api/src/services/knowledge_ingestion_worker.rs")
+          text = worker.read_text()
+          marker = "fn provider_outage(error: &KnowledgeAssetError)"
+          if text.count(marker) != 1:
+              raise SystemExit("worker provider_outage marker missing")
+          suffix = marker + text.split(marker, 1)[1]
+          prefix = r'''use crate::repositories::{
+    ClaimedKnowledgeIngestionJob, EmbeddingFailureDisposition, KnowledgeIngestionJobRepository,
+};
+use crate::rls_context::{AuthorizedActor, AuthorizedPool, AuthorizedTx, RlsContextError};
+use crate::services::ai_outage_queue::requeue_provider_outage;
+use crate::services::embedding_service::EmbeddingError;
+use crate::services::{KnowledgeAssetError, KnowledgeAssetService};
+use sqlx::PgPool;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
+use uuid::Uuid;
+
+/// Start the governed knowledge ingestion worker.
+///
+/// Global queue discovery runs only through two bounded SECURITY DEFINER
+/// functions under an explicit no-school scheduler context. Once a job is
+/// claimed, every protected query runs in a separate school-scoped system-job
+/// transaction. The long-running database role never bypasses RLS.
+pub fn start_knowledge_ingestion_worker(
+    raw_pool: Arc<PgPool>,
+    pool: Arc<AuthorizedPool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let repository = KnowledgeIngestionJobRepository::new(Arc::clone(&pool));
+        let worker_id = Uuid::new_v4();
+        let poll_interval = Duration::from_millis(env_u64("KNOWLEDGE_JOB_POLL_MS", 1_500));
+        let heartbeat_interval =
+            Duration::from_secs(env_u64("KNOWLEDGE_JOB_HEARTBEAT_SECONDS", 30).max(5));
+        let stale_after_seconds = env_i64("KNOWLEDGE_JOB_STALE_SECONDS", 3_600).max(60);
+        let max_attempts = env_i32("KNOWLEDGE_JOB_MAX_ATTEMPTS", 3).clamp(1, 10);
+
+        match run_authorized(
+            &raw_pool,
+            AuthorizedActor::system_queue(worker_id),
+            repository.recover_stale_embedding_jobs(stale_after_seconds),
+        )
+        .await
+        {
+            Ok(Ok(recovered)) if recovered > 0 => {
+                tracing::warn!(recovered, "Recovered stale knowledge ingestion jobs");
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::error!(%error, "Unable to recover stale knowledge ingestion jobs");
+            }
+            Err(error) => {
+                tracing::error!(%error, "Unable to open queue recovery authorization transaction");
+            }
+        }
+
+        loop {
+            let claimed = run_authorized(
+                &raw_pool,
+                AuthorizedActor::system_queue(worker_id),
+                repository.claim_next_embedding(),
+            )
+            .await;
+
+            let job = match claimed {
+                Ok(Ok(Some(job))) => job,
+                Ok(Ok(None)) => {
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
+                }
+                Ok(Err(error)) => {
+                    tracing::error!(%error, "Knowledge ingestion queue claim failed");
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
+                }
+                Err(error) => {
+                    tracing::error!(%error, "Unable to open queue claim authorization transaction");
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
+                }
+            };
+
+            tracing::info!(
+                job_id = %job.id,
+                asset_id = %job.asset_id,
+                school_id = %job.school_id,
+                attempt = job.attempts,
+                "Processing governed knowledge embedding job"
+            );
+
+            let heartbeat_repository = repository.clone();
+            let heartbeat_raw_pool = Arc::clone(&raw_pool);
+            let heartbeat_job = job.clone();
+            let (heartbeat_stop, mut heartbeat_stop_rx) = tokio::sync::watch::channel(false);
+            let heartbeat_task = tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(heartbeat_interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+                loop {
+                    tokio::select! {
+                        _ = ticker.tick() => {
+                            match run_authorized(
+                                &heartbeat_raw_pool,
+                                AuthorizedActor::system_job(
+                                    heartbeat_job.requested_by,
+                                    heartbeat_job.school_id,
+                                ),
+                                heartbeat_repository.heartbeat(heartbeat_job.id),
+                            ).await {
+                                Ok(Ok(())) => {}
+                                Ok(Err(error)) => tracing::warn!(
+                                    job_id = %heartbeat_job.id,
+                                    error = %error,
+                                    "Unable to update knowledge ingestion heartbeat"
+                                ),
+                                Err(error) => tracing::warn!(
+                                    job_id = %heartbeat_job.id,
+                                    error = %error,
+                                    "Unable to open heartbeat authorization transaction"
+                                ),
+                            }
+                        }
+                        changed = heartbeat_stop_rx.changed() => {
+                            if changed.is_err() || *heartbeat_stop_rx.borrow() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+
+            let service = KnowledgeAssetService::new(Arc::clone(&pool)).await;
+            let result = match service {
+                Ok(service) => match run_authorized(
+                    &raw_pool,
+                    AuthorizedActor::system_job(job.requested_by, job.school_id),
+                    service.process_embedding_job(job.id, job.asset_id, job.requested_by),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        tracing::error!(
+                            job_id = %job.id,
+                            error = %error,
+                            "Unable to open embedding authorization transaction"
+                        );
+                        let _ = heartbeat_stop.send(true);
+                        let _ = heartbeat_task.await;
+                        continue;
+                    }
+                },
+                Err(error) => Err(error),
+            };
+
+            let _ = heartbeat_stop.send(true);
+            let _ = heartbeat_task.await;
+
+            match result {
+                Ok(chunk_count) => {
+                    tracing::info!(
+                        job_id = %job.id,
+                        asset_id = %job.asset_id,
+                        chunk_count,
+                        "Governed knowledge embedding job completed"
+                    );
+                }
+                Err(error) => {
+                    if let Some((outage_code, retry_after_seconds)) = provider_outage(&error) {
+                        match run_authorized(
+                            &raw_pool,
+                            AuthorizedActor::system_job(job.requested_by, job.school_id),
+                            requeue_provider_outage(
+                                Arc::clone(&pool),
+                                &job,
+                                outage_code,
+                                retry_after_seconds,
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(Ok(EmbeddingFailureDisposition::Requeued)) => tracing::warn!(
+                                job_id = %job.id,
+                                asset_id = %job.asset_id,
+                                attempt = job.attempts,
+                                outage_code,
+                                "Knowledge ingestion job remains queued during AI outage"
+                            ),
+                            Ok(Ok(EmbeddingFailureDisposition::IgnoredInactive)) => tracing::info!(
+                                job_id = %job.id,
+                                asset_id = %job.asset_id,
+                                "Ignoring AI outage because the job is no longer active"
+                            ),
+                            Ok(Ok(EmbeddingFailureDisposition::FailedPermanently)) => {
+                                tracing::error!(
+                                    job_id = %job.id,
+                                    "Provider outage handler returned an impossible permanent failure"
+                                );
+                            }
+                            Ok(Err(repository_error)) => tracing::error!(
+                                job_id = %job.id,
+                                error = %repository_error,
+                                outage_code,
+                                "Unable to persist AI outage retry"
+                            ),
+                            Err(transaction_error) => tracing::error!(
+                                job_id = %job.id,
+                                error = %transaction_error,
+                                outage_code,
+                                "Unable to open AI outage retry transaction"
+                            ),
+                        }
+                        continue;
+                    }
+
+                    let message = error.to_string();
+                    match run_authorized(
+                        &raw_pool,
+                        AuthorizedActor::system_job(job.requested_by, job.school_id),
+                        repository.record_embedding_failure(&job, &message, max_attempts),
+                    )
+                    .await
+                    {
+                        Ok(Ok(EmbeddingFailureDisposition::Requeued)) => tracing::warn!(
+                            job_id = %job.id,
+                            asset_id = %job.asset_id,
+                            attempt = job.attempts,
+                            error = %message,
+                            "Knowledge ingestion job requeued after transient processing failure"
+                        ),
+                        Ok(Ok(EmbeddingFailureDisposition::FailedPermanently)) => tracing::error!(
+                            job_id = %job.id,
+                            asset_id = %job.asset_id,
+                            attempts = job.attempts,
+                            error = %message,
+                            "Knowledge ingestion job failed permanently"
+                        ),
+                        Ok(Ok(EmbeddingFailureDisposition::IgnoredInactive)) => tracing::info!(
+                            job_id = %job.id,
+                            asset_id = %job.asset_id,
+                            "Ignoring worker failure because the job is no longer active"
+                        ),
+                        Ok(Err(repository_error)) => tracing::error!(
+                            job_id = %job.id,
+                            error = %repository_error,
+                            original_error = %message,
+                            "Unable to persist knowledge ingestion failure"
+                        ),
+                        Err(transaction_error) => tracing::error!(
+                            job_id = %job.id,
+                            error = %transaction_error,
+                            original_error = %message,
+                            "Unable to open embedding failure transaction"
+                        ),
+                    }
+                }
+            }
+        }
+    })
+}
+
+async fn run_authorized<T, E, F>(
+    raw_pool: &PgPool,
+    actor: AuthorizedActor,
+    operation: F,
+) -> Result<Result<T, E>, RlsContextError>
+where
+    F: Future<Output = Result<T, E>>,
+{
+    let transaction = AuthorizedTx::begin(raw_pool, actor).await?;
+    transaction.scope(operation, Result::is_ok).await
+}
+
+'''
+          worker.write_text(prefix + suffix)
+
+          replace_once(
+              "packages/web/src/main.rs",
+              '''    let _knowledge_ingestion_worker =
+        api::services::start_knowledge_ingestion_worker(app_state.services.pool.clone());
+''',
+              '''    let _knowledge_ingestion_worker = api::services::start_knowledge_ingestion_worker(
+        app_state.services.raw_pool.clone(),
+        app_state.services.pool.clone(),
+    );
+''',
+          )
+
+          inventory = Path("packages/api/src/rls_transaction_inventory_tests.rs")
+          text = inventory.read_text()
+          anchor = '''#[test]
+fn auth_middleware_owns_the_request_transaction_boundary() {
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit("inventory test anchor missing")
+          test = '''#[test]
+fn background_worker_uses_bounded_authorized_transactions() {
+    let worker = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/services/knowledge_ingestion_worker.rs"),
+    )
+    .expect("read knowledge ingestion worker");
+    assert!(worker.contains("AuthorizedActor::system_queue"));
+    assert!(worker.contains("AuthorizedActor::system_job"));
+    assert!(worker.contains("AuthorizedTx::begin"));
+    assert!(worker.contains("raw_pool: Arc<PgPool>"));
+    assert!(worker.contains("pool: Arc<AuthorizedPool>"));
+}
+
+'''
+          inventory.write_text(text.replace(anchor, test + anchor, 1))
+
+          workflow = Path(".github/workflows/production-foundation.yml")
+          text = workflow.read_text()
+          text = text.replace(
+              '''          ! grep -R --line-number --fixed-strings 'AI_GATEWAY_DEFAULT_SCHOOL_ID' deploy/production .env.example compose.yaml compose.release.yaml
+          ! grep -R --line-number -E 'AI_ALLOWED_(EMBEDDING|LLM)_BASE_URLS' deploy/production .env.example compose.yaml compose.release.yaml
+''',
+              '''          ! grep -H --line-number --fixed-strings 'AI_GATEWAY_DEFAULT_SCHOOL_ID=' \\
+            deploy/production/.env.edutalent deploy/production/runtime/supabase/.env \\
+            .env.example compose.yaml compose.release.yaml deploy/production/compose.production.yaml
+          ! grep -H --line-number -E 'AI_ALLOWED_(EMBEDDING|LLM)_BASE_URLS=' \\
+            deploy/production/.env.edutalent deploy/production/runtime/supabase/.env \\
+            .env.example compose.yaml compose.release.yaml deploy/production/compose.production.yaml
+''',
+              1,
+          )
+          text = text.replace(
+              "          grep -Fq 'NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS' scripts/ci/configure_database_role.sh\n          grep -Fq 'true|false|false|false|false|false|true' scripts/ci/configure_database_role.sh\n",
+              "          grep -Fq 'NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS' scripts/ci/configure_database_role.sh\n          grep -Fq 'true|false|false|false|false|false|false' scripts/ci/configure_database_role.sh\n",
+              1,
+          )
+          text = text.replace(
+              '          test "${bypassrls}" = "true"\n',
+              '          test "${bypassrls}" = "false"\n',
+              1,
+          )
+          workflow.write_text(text)
+
+          verify = Path("scripts/ci/verify_transaction_scoped_rls.sh")
+          text = verify.read_text()
+          anchor = '''    IF has_function_privilege(
+        verification_role,
+        'public.set_app_context(uuid,text,uuid)',
+        'EXECUTE'
+    ) THEN
+        RAISE EXCEPTION 'Runtime role can execute retired set_app_context';
+    END IF;
+'''
+          addition = anchor + '''
+    IF NOT has_function_privilege(
+        verification_role,
+        'public.claim_next_embedding_job()',
+        'EXECUTE'
+    ) OR NOT has_function_privilege(
+        verification_role,
+        'public.recover_stale_embedding_jobs(bigint)',
+        'EXECUTE'
+    ) THEN
+        RAISE EXCEPTION 'Runtime role cannot execute bounded system queue functions';
+    END IF;
+
+    IF pg_get_functiondef('public.claim_next_embedding_job()'::regprocedure)
+           NOT LIKE '%get_role() <> ''system_job''%'
+       OR pg_get_functiondef('public.claim_next_embedding_job()'::regprocedure)
+           NOT LIKE '%get_elevated_operation()%'
+       OR pg_get_functiondef('public.recover_stale_embedding_jobs(bigint)'::regprocedure)
+           NOT LIKE '%get_role() <> ''system_job''%' THEN
+        RAISE EXCEPTION 'System queue functions do not enforce the bounded context';
+    END IF;
+'''
+          if text.count(anchor) != 1:
+              raise SystemExit("RLS verifier function privilege anchor missing")
+          text = text.replace(anchor, addition, 1)
+          failure_anchor = '''expect_role_failure \\
+    "write migration registry" \\
+    "INSERT INTO public.edutalent_migration_files(path, checksum) VALUES ('forbidden', 'forbidden')"
+'''
+          failure_add = failure_anchor + '''expect_role_failure \\
+    "claim queue without bounded system context" \\
+    "SELECT * FROM public.claim_next_embedding_job()"
+
+psql "${DATABASE_URL}" \\
+    --quiet \\
+    --set=ON_ERROR_STOP=1 \\
+    --set=app_role="${app_role}" <<'SQL'
+SET ROLE :"app_role";
+BEGIN;
+SET LOCAL app.user_id = '33333333-3333-3333-3333-333333333333';
+SET LOCAL app.user_role = 'system_job';
+SET LOCAL app.school_id = '';
+SET LOCAL app.elevated_operation = 'true';
+SELECT COUNT(*) FROM public.claim_next_embedding_job();
+SELECT public.recover_stale_embedding_jobs(60);
+ROLLBACK;
+SQL
+'''
+          if text.count(failure_anchor) != 1:
+              raise SystemExit("RLS verifier failure anchor missing")
+          verify.write_text(text.replace(failure_anchor, failure_add, 1))
+          PY
+
+          cat > migrations/20260805121700_system_job_rls.sql <<'SQL'
+          -- PR-03: tightly bound the durable knowledge worker to transaction-scoped RLS.
+          -- Global queue discovery is available only through two SECURITY DEFINER
+          -- functions that verify the explicit no-school scheduler context. Every
+          -- operation after claim is constrained by the claimed asset's school.
+
+          CREATE OR REPLACE FUNCTION public.claim_next_embedding_job()
+          RETURNS TABLE (
+              job_id UUID,
+              asset_id UUID,
+              requested_by UUID,
+              school_id UUID,
+              attempts INTEGER
+          )
+          LANGUAGE plpgsql
+          SECURITY DEFINER
+          SET search_path = pg_catalog, public
+          AS $$
+          BEGIN
+              IF public.get_role() <> 'system_job'
+                 OR NOT public.get_elevated_operation()
+                 OR public.get_school_id() IS NOT NULL
+                 OR public.get_user_id() IS NULL THEN
+                  RAISE EXCEPTION 'bounded system queue context required'
+                      USING ERRCODE = '42501';
+              END IF;
+
+              RETURN QUERY
+              WITH candidate AS (
+                  SELECT job.id, asset.school_id
+                  FROM public.ingestion_jobs AS job
+                  JOIN public.knowledge_assets AS asset ON asset.id = job.asset_id
+                  JOIN public.users AS requester
+                    ON requester.id = job.requested_by
+                   AND requester.is_active
+                  WHERE job.stage = 'embed'
+                    AND job.status = 'queued'
+                    AND job.available_at <= NOW()
+                    AND asset.status = 'embedding_pending'
+                  ORDER BY job.available_at, job.created_at
+                  FOR UPDATE OF job SKIP LOCKED
+                  LIMIT 1
+              )
+              UPDATE public.ingestion_jobs AS job
+              SET status = 'running',
+                  attempts = job.attempts + 1,
+                  started_at = COALESCE(job.started_at, NOW()),
+                  locked_at = NOW(),
+                  heartbeat_at = NOW(),
+                  error_message = NULL
+              FROM candidate
+              WHERE job.id = candidate.id
+              RETURNING job.id, job.asset_id, job.requested_by,
+                        candidate.school_id, job.attempts;
+          END
+          $$;
+
+          CREATE OR REPLACE FUNCTION public.recover_stale_embedding_jobs(
+              p_stale_after_seconds BIGINT
+          )
+          RETURNS BIGINT
+          LANGUAGE plpgsql
+          SECURITY DEFINER
+          SET search_path = pg_catalog, public
+          AS $$
+          DECLARE
+              recovered BIGINT;
+          BEGIN
+              IF public.get_role() <> 'system_job'
+                 OR NOT public.get_elevated_operation()
+                 OR public.get_school_id() IS NOT NULL
+                 OR public.get_user_id() IS NULL THEN
+                  RAISE EXCEPTION 'bounded system queue context required'
+                      USING ERRCODE = '42501';
+              END IF;
+
+              WITH updated AS (
+                  UPDATE public.ingestion_jobs AS job
+                  SET status = 'queued',
+                      available_at = NOW(),
+                      locked_at = NULL,
+                      heartbeat_at = NULL,
+                      error_message = COALESCE(
+                          job.error_message,
+                          'Recovered after stale worker lock'
+                      )
+                  FROM public.knowledge_assets AS asset
+                  WHERE job.asset_id = asset.id
+                    AND job.stage = 'embed'
+                    AND job.status = 'running'
+                    AND asset.status = 'embedding_pending'
+                    AND COALESCE(
+                        job.heartbeat_at,
+                        job.locked_at,
+                        job.started_at,
+                        job.created_at
+                    ) < NOW() - make_interval(secs => GREATEST(p_stale_after_seconds, 60))
+                  RETURNING 1
+              )
+              SELECT COUNT(*) INTO recovered FROM updated;
+              RETURN recovered;
+          END
+          $$;
+
+          REVOKE EXECUTE ON FUNCTION public.claim_next_embedding_job() FROM PUBLIC;
+          REVOKE EXECUTE ON FUNCTION public.recover_stale_embedding_jobs(BIGINT) FROM PUBLIC;
+
+          DROP POLICY IF EXISTS knowledge_assets_scoped_select ON public.knowledge_assets;
+          CREATE POLICY knowledge_assets_scoped_select ON public.knowledge_assets
+          FOR SELECT USING (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() = 'SchoolManager'
+                  AND school_id = public.get_school_id()
+              )
+              OR (
+                  public.get_role() = 'Teacher'
+                  AND school_id = public.get_school_id()
+                  AND status = 'published'
+              )
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND school_id = public.get_school_id()
+              )
+          );
+
+          DROP POLICY IF EXISTS knowledge_assets_admin_update ON public.knowledge_assets;
+          CREATE POLICY knowledge_assets_admin_update ON public.knowledge_assets
+          FOR UPDATE
+          USING (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND school_id = public.get_school_id()
+              )
+          )
+          WITH CHECK (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND school_id = public.get_school_id()
+              )
+          );
+
+          DROP POLICY IF EXISTS knowledge_ocr_texts_admin_all ON public.knowledge_ocr_texts;
+          CREATE POLICY knowledge_ocr_texts_admin_all ON public.knowledge_ocr_texts
+          FOR ALL
+          USING (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND EXISTS (
+                      SELECT 1 FROM public.knowledge_assets AS asset
+                      WHERE asset.id = knowledge_ocr_texts.asset_id
+                        AND asset.school_id = public.get_school_id()
+                  )
+              )
+          )
+          WITH CHECK (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND EXISTS (
+                      SELECT 1 FROM public.knowledge_assets AS asset
+                      WHERE asset.id = knowledge_ocr_texts.asset_id
+                        AND asset.school_id = public.get_school_id()
+                  )
+              )
+          );
+
+          DROP POLICY IF EXISTS knowledge_chunks_admin_all ON public.knowledge_chunks;
+          CREATE POLICY knowledge_chunks_admin_all ON public.knowledge_chunks
+          FOR ALL
+          USING (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND EXISTS (
+                      SELECT 1 FROM public.knowledge_assets AS asset
+                      WHERE asset.id = knowledge_chunks.asset_id
+                        AND asset.school_id = public.get_school_id()
+                  )
+              )
+          )
+          WITH CHECK (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND EXISTS (
+                      SELECT 1 FROM public.knowledge_assets AS asset
+                      WHERE asset.id = knowledge_chunks.asset_id
+                        AND asset.school_id = public.get_school_id()
+                  )
+              )
+          );
+
+          DROP POLICY IF EXISTS ingestion_jobs_admin_all ON public.ingestion_jobs;
+          CREATE POLICY ingestion_jobs_admin_all ON public.ingestion_jobs
+          FOR ALL
+          USING (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND EXISTS (
+                      SELECT 1 FROM public.knowledge_assets AS asset
+                      WHERE asset.id = ingestion_jobs.asset_id
+                        AND asset.school_id = public.get_school_id()
+                  )
+              )
+          )
+          WITH CHECK (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND EXISTS (
+                      SELECT 1 FROM public.knowledge_assets AS asset
+                      WHERE asset.id = ingestion_jobs.asset_id
+                        AND asset.school_id = public.get_school_id()
+                  )
+              )
+          );
+
+          DROP POLICY IF EXISTS knowledge_audit_logs_actor_insert ON public.knowledge_audit_logs;
+          CREATE POLICY knowledge_audit_logs_actor_insert ON public.knowledge_audit_logs
+          FOR INSERT WITH CHECK (
+              public.get_role() = 'PlatformAdmin'
+              OR (
+                  public.get_role() IN ('SchoolManager', 'Teacher')
+                  AND actor_id = public.get_user_id()
+                  AND school_id = public.get_school_id()
+              )
+              OR (
+                  public.get_role() = 'system_job'
+                  AND public.get_elevated_operation()
+                  AND actor_id = public.get_user_id()
+                  AND school_id = public.get_school_id()
+              )
+          );
+
+          COMMENT ON FUNCTION public.claim_next_embedding_job() IS
+              'Atomically claims one durable embedding job for an explicitly authorized system scheduler.';
+          COMMENT ON FUNCTION public.recover_stale_embedding_jobs(BIGINT) IS
+              'Requeues stale embedding jobs for an explicitly authorized system scheduler.';
+          SQL
+
+          rm -f .github/workflows/pr03-recover-approved-sources.yml
+
+      - name: Format and validate changed sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2021 \
+            packages/api/src/rls_context.rs \
+            packages/api/src/repositories/knowledge_ingestion_job_repository.rs \
+            packages/api/src/rls_transaction_inventory_tests.rs \
+            packages/api/src/services/ai_outage_queue.rs \
+            packages/api/src/services/knowledge_ingestion_worker.rs \
+            packages/web/src/main.rs
+          rustfmt --edition 2021 --check \
+            packages/api/src/rls_context.rs \
+            packages/api/src/repositories/knowledge_ingestion_job_repository.rs \
+            packages/api/src/rls_transaction_inventory_tests.rs \
+            packages/api/src/services/ai_outage_queue.rs \
+            packages/api/src/services/knowledge_ingestion_worker.rs \
+            packages/web/src/main.rs
+          bash -n scripts/ci/verify_transaction_scoped_rls.sh
+
+      - name: Commit exact allowlisted change set
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          changed="$(git diff --cached --name-only | LC_ALL=C sort)"
+          expected="$(cat <<'PATHS' | LC_ALL=C sort
+          .github/workflows/pr03-recover-approved-sources.yml
+          .github/workflows/production-foundation.yml
+          migrations/20260805121700_system_job_rls.sql
+          packages/api/src/repositories/knowledge_ingestion_job_repository.rs
+          packages/api/src/rls_context.rs
+          packages/api/src/rls_transaction_inventory_tests.rs
+          packages/api/src/services/ai_outage_queue.rs
+          packages/api/src/services/knowledge_ingestion_worker.rs
+          packages/web/src/main.rs
+          scripts/ci/verify_transaction_scoped_rls.sh
+          PATHS
+          )"
+          test "${changed}" = "${expected}"
+          git commit -m 'security: scope durable workers through transaction RLS'
+          git push origin HEAD:agent/pr-03-transaction-scoped-rls

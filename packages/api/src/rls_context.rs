@@ -12,7 +12,7 @@ use futures::{
 use sqlx::{
     database::Database,
     postgres::{PgConnection, PgPool, Postgres},
-    Describe, Either, Error, Execute, Executor, Transaction,
+    Either, Error, Execute, Executor, Transaction,
 };
 use std::{
     fmt,
@@ -460,25 +460,6 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
                 .as_mut()
                 .ok_or_else(|| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))?;
             Executor::prepare_with(&mut **transaction, sql, parameters).await
-        }
-        .boxed()
-    }
-
-    fn describe<'e, 'q: 'e>(
-        self,
-        sql: &'q str,
-    ) -> BoxFuture<'e, Result<Describe<Postgres>, Error>>
-    where
-        'c: 'e,
-    {
-        let state = active_transaction();
-        async move {
-            let state = state?;
-            let mut guard = Arc::clone(&state.transaction).lock_owned().await;
-            let transaction = guard
-                .as_mut()
-                .ok_or_else(|| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))?;
-            Executor::describe(&mut **transaction, sql).await
         }
         .boxed()
     }

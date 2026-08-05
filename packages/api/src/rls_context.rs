@@ -12,7 +12,7 @@ use futures::{
 use sqlx::{
     database::Database,
     postgres::{PgConnection, PgPool, Postgres},
-    Either, Error, Execute, Executor, Transaction,
+    Describe, Either, Error, Execute, Executor, Transaction,
 };
 use std::{
     fmt,
@@ -99,11 +99,25 @@ impl AuthorizedActor {
     ///
     /// This is not a general RLS bypass. Policies must opt in to the bounded
     /// `system_job` role and elevated flag for the exact operation needed.
-    pub fn system_job(job_id: Uuid, school_id: Uuid) -> Self {
+    pub fn system_job(actor_id: Uuid, school_id: Uuid) -> Self {
         Self {
-            user_id: job_id,
+            user_id: actor_id,
             role: "system_job".to_string(),
             school_id: Some(school_id),
+            elevated_operation: true,
+        }
+    }
+
+    /// Create the bounded global queue-scheduler context.
+    ///
+    /// Direct table policies remain school-scoped. Only dedicated, audited
+    /// queue functions accept this no-school context after checking the exact
+    /// system role and elevated-operation flag.
+    pub fn system_queue(worker_id: Uuid) -> Self {
+        Self {
+            user_id: worker_id,
+            role: "system_job".to_string(),
+            school_id: None,
             elevated_operation: true,
         }
     }
@@ -466,6 +480,25 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         }
         .boxed()
     }
+
+    fn describe<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+    ) -> BoxFuture<'e, Result<Describe<Self::Database>, Error>>
+    where
+        'c: 'e,
+    {
+        let state = active_transaction();
+        async move {
+            let state = state?;
+            let mut guard = Arc::clone(&state.transaction).lock_owned().await;
+            let transaction = guard
+                .as_mut()
+                .ok_or_else(|| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))?;
+            Executor::describe(&mut **transaction, sql).await
+        }
+        .boxed()
+    }
 }
 
 /// Legacy compatibility marker. Pool-scoped context is deliberately rejected.
@@ -501,12 +534,17 @@ mod tests {
     }
 
     #[test]
-    fn system_jobs_are_explicitly_school_scoped() {
+    fn system_jobs_are_explicitly_scoped() {
         let school_id = Uuid::new_v4();
         let actor = AuthorizedActor::system_job(Uuid::new_v4(), school_id);
         assert_eq!(actor.role, "system_job");
         assert_eq!(actor.school_id, Some(school_id));
         assert!(actor.elevated_operation);
+
+        let scheduler = AuthorizedActor::system_queue(Uuid::new_v4());
+        assert_eq!(scheduler.role, "system_job");
+        assert_eq!(scheduler.school_id, None);
+        assert!(scheduler.elevated_operation);
     }
 
     #[tokio::test]

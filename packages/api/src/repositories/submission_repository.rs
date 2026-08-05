@@ -1,10 +1,12 @@
-use crate::domain::{SubmissionId, CustomAssignmentId, StudentId, TeacherId};
-use crate::models::{Submission, SubmissionWithDetails, CreateSubmissionRequest, GradeSubmissionRequest};
+use crate::domain::{CustomAssignmentId, StudentId, SubmissionId, TeacherId};
+use crate::models::{
+    CreateSubmissionRequest, GradeSubmissionRequest, Submission, SubmissionWithDetails,
+};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
-use sqlx::{PgPool, Row, postgres::PgRow};
+use sqlx::{postgres::PgRow, Row};
 use std::sync::Arc;
 
 /// Submission repository for handling submission-related database operations
@@ -15,14 +17,19 @@ pub struct SubmissionRepository {
 
 impl SubmissionRepository {
     /// Create a new submission repository
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }
     }
 
     /// Create a new submission
-    pub async fn create(&self, custom_assignment_id: CustomAssignmentId, student_id: StudentId, request: CreateSubmissionRequest) -> RepositoryResult<Submission> {
+    pub async fn create(
+        &self,
+        custom_assignment_id: CustomAssignmentId,
+        student_id: StudentId,
+        request: CreateSubmissionRequest,
+    ) -> RepositoryResult<Submission> {
         // Update custom assignment status to Submitted
         let _ = sqlx::query(
             "UPDATE custom_assignments SET status = 'Submitted'::custom_status, submitted_at = now() WHERE id = $1"
@@ -39,7 +46,7 @@ impl SubmissionRepository {
             VALUES ($1, $2, $3, now(), 20)
             RETURNING id, custom_assignment_id, student_id, content, submitted_at,
                       grade, grade_scale, feedback, graded_by, grading_rubric
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(custom_assignment_id.into())
         .bind::<uuid::Uuid>(student_id.into())
@@ -56,13 +63,18 @@ impl SubmissionRepository {
             grade: row.get("grade"),
             grade_scale: row.get("grade_scale"),
             feedback: row.get("feedback"),
-            graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+            graded_by: row
+                .get::<Option<uuid::Uuid>, _>("graded_by")
+                .map(|id| id.into()),
             grading_rubric: row.get("grading_rubric"),
         })
     }
 
     /// Get submission by ID with details
-    pub async fn find_with_details_by_id(&self, submission_id: SubmissionId) -> RepositoryResult<SubmissionWithDetails> {
+    pub async fn find_with_details_by_id(
+        &self,
+        submission_id: SubmissionId,
+    ) -> RepositoryResult<SubmissionWithDetails> {
         let row: Option<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -99,7 +111,9 @@ impl SubmissionRepository {
             grade: row.get("grade"),
             grade_scale: row.get("grade_scale"),
             feedback: row.get("feedback"),
-            graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+            graded_by: row
+                .get::<Option<uuid::Uuid>, _>("graded_by")
+                .map(|id| id.into()),
             grading_rubric: row.get("grading_rubric"),
             assignment_title: row.get("assignment_title"),
             student_name: row.get("student_name"),
@@ -116,7 +130,7 @@ impl SubmissionRepository {
                    grade, grade_scale, feedback, graded_by, grading_rubric
             FROM submissions
             WHERE id = $1
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(submission_id.into())
         .fetch_optional(&*self.base.pool())
@@ -136,22 +150,32 @@ impl SubmissionRepository {
             grade: row.get("grade"),
             grade_scale: row.get("grade_scale"),
             feedback: row.get("feedback"),
-            graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+            graded_by: row
+                .get::<Option<uuid::Uuid>, _>("graded_by")
+                .map(|id| id.into()),
             grading_rubric: row.get("grading_rubric"),
         })
     }
 
     /// Grade a submission
-    pub async fn grade(&self, submission_id: SubmissionId, teacher_id: TeacherId, request: GradeSubmissionRequest) -> RepositoryResult<Submission> {
+    pub async fn grade(
+        &self,
+        submission_id: SubmissionId,
+        teacher_id: TeacherId,
+        request: GradeSubmissionRequest,
+    ) -> RepositoryResult<Submission> {
         // Validate grade scale is valid (only 20 or 100 allowed)
         if request.grade_scale != 20 && request.grade_scale != 100 {
-            return Err(RepositoryError::Validation("Grade scale must be 20 (Farsi) or 100 (English)".to_string()));
+            return Err(RepositoryError::Validation(
+                "Grade scale must be 20 (Farsi) or 100 (English)".to_string(),
+            ));
         }
 
         // Validate grade is within bounds for the given scale
         if request.grade < 0.0 || request.grade > request.grade_scale as f64 {
             return Err(RepositoryError::Validation(format!(
-                "Grade must be between 0 and {}", request.grade_scale
+                "Grade must be between 0 and {}",
+                request.grade_scale
             )));
         }
 
@@ -164,7 +188,7 @@ impl SubmissionRepository {
             WHERE id = $6
             RETURNING id, custom_assignment_id, student_id, content, submitted_at,
                       grade, grade_scale, feedback, graded_by, grading_rubric
-            "#
+            "#,
         )
         .bind(&request.grade)
         .bind(&request.grade_scale)
@@ -176,7 +200,8 @@ impl SubmissionRepository {
         .await?;
 
         // Update custom assignment status to Graded
-        let custom_assignment_id: CustomAssignmentId = row.get::<uuid::Uuid, _>("custom_assignment_id").into();
+        let custom_assignment_id: CustomAssignmentId =
+            row.get::<uuid::Uuid, _>("custom_assignment_id").into();
         let _ = sqlx::query(
             "UPDATE custom_assignments SET status = 'Graded'::custom_status, graded_at = now() WHERE id = $1"
         )
@@ -195,13 +220,20 @@ impl SubmissionRepository {
             grade: row.get("grade"),
             grade_scale: row.get("grade_scale"),
             feedback: row.get("feedback"),
-            graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+            graded_by: row
+                .get::<Option<uuid::Uuid>, _>("graded_by")
+                .map(|id| id.into()),
             grading_rubric: row.get("grading_rubric"),
         })
     }
 
     /// Approve a submission without a grade (approval-only grading)
-    pub async fn approve(&self, submission_id: SubmissionId, teacher_id: TeacherId, feedback: Option<String>) -> RepositoryResult<Submission> {
+    pub async fn approve(
+        &self,
+        submission_id: SubmissionId,
+        teacher_id: TeacherId,
+        feedback: Option<String>,
+    ) -> RepositoryResult<Submission> {
         let mut tx = self.base.pool().begin().await?;
 
         let row = sqlx::query(
@@ -211,7 +243,7 @@ impl SubmissionRepository {
             WHERE id = $3
             RETURNING id, custom_assignment_id, student_id, content, submitted_at,
                       grade, grade_scale, feedback, graded_by, grading_rubric
-            "#
+            "#,
         )
         .bind(&feedback)
         .bind::<uuid::Uuid>(teacher_id.into())
@@ -220,7 +252,8 @@ impl SubmissionRepository {
         .await?;
 
         // Update custom assignment status to Graded
-        let custom_assignment_id: CustomAssignmentId = row.get::<uuid::Uuid, _>("custom_assignment_id").into();
+        let custom_assignment_id: CustomAssignmentId =
+            row.get::<uuid::Uuid, _>("custom_assignment_id").into();
         let _ = sqlx::query(
             "UPDATE custom_assignments SET status = 'Graded'::custom_status, graded_at = now() WHERE id = $1"
         )
@@ -239,13 +272,19 @@ impl SubmissionRepository {
             grade: row.get("grade"),
             grade_scale: row.get("grade_scale"),
             feedback: row.get("feedback"),
-            graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+            graded_by: row
+                .get::<Option<uuid::Uuid>, _>("graded_by")
+                .map(|id| id.into()),
             grading_rubric: row.get("grading_rubric"),
         })
     }
 
     /// Update submission content
-    pub async fn update_content(&self, submission_id: SubmissionId, content: Value) -> RepositoryResult<Submission> {
+    pub async fn update_content(
+        &self,
+        submission_id: SubmissionId,
+        content: Value,
+    ) -> RepositoryResult<Submission> {
         let row = sqlx::query(
             r#"
             UPDATE submissions
@@ -253,7 +292,7 @@ impl SubmissionRepository {
             WHERE id = $2
             RETURNING id, custom_assignment_id, student_id, content, submitted_at,
                       grade, grade_scale, feedback, graded_by, grading_rubric
-            "#
+            "#,
         )
         .bind(&content)
         .bind::<uuid::Uuid>(submission_id.into())
@@ -269,13 +308,20 @@ impl SubmissionRepository {
             grade: row.get("grade"),
             grade_scale: row.get("grade_scale"),
             feedback: row.get("feedback"),
-            graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+            graded_by: row
+                .get::<Option<uuid::Uuid>, _>("graded_by")
+                .map(|id| id.into()),
             grading_rubric: row.get("grading_rubric"),
         })
     }
 
     /// List submissions by student
-    pub async fn list_by_student(&self, student_id: StudentId, limit: i64, offset: i64) -> RepositoryResult<Vec<SubmissionWithDetails>> {
+    pub async fn list_by_student(
+        &self,
+        student_id: StudentId,
+        limit: i64,
+        offset: i64,
+    ) -> RepositoryResult<Vec<SubmissionWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -313,7 +359,9 @@ impl SubmissionRepository {
                 grade: row.get("grade"),
                 grade_scale: row.get("grade_scale"),
                 feedback: row.get("feedback"),
-                graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+                graded_by: row
+                    .get::<Option<uuid::Uuid>, _>("graded_by")
+                    .map(|id| id.into()),
                 grading_rubric: row.get("grading_rubric"),
                 assignment_title: row.get("assignment_title"),
                 student_name: row.get("student_name"),
@@ -326,7 +374,10 @@ impl SubmissionRepository {
     }
 
     /// List submissions by custom assignment (for teachers)
-    pub async fn list_by_custom_assignment(&self, custom_assignment_id: CustomAssignmentId) -> RepositoryResult<Vec<SubmissionWithDetails>> {
+    pub async fn list_by_custom_assignment(
+        &self,
+        custom_assignment_id: CustomAssignmentId,
+    ) -> RepositoryResult<Vec<SubmissionWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -361,7 +412,9 @@ impl SubmissionRepository {
                 grade: row.get("grade"),
                 grade_scale: row.get("grade_scale"),
                 feedback: row.get("feedback"),
-                graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+                graded_by: row
+                    .get::<Option<uuid::Uuid>, _>("graded_by")
+                    .map(|id| id.into()),
                 grading_rubric: row.get("grading_rubric"),
                 assignment_title: row.get("assignment_title"),
                 student_name: row.get("student_name"),
@@ -374,7 +427,10 @@ impl SubmissionRepository {
     }
 
     /// List submissions by assignment (for teachers)
-    pub async fn list_by_assignment(&self, assignment_id: crate::domain::AssignmentId) -> RepositoryResult<Vec<SubmissionWithDetails>> {
+    pub async fn list_by_assignment(
+        &self,
+        assignment_id: crate::domain::AssignmentId,
+    ) -> RepositoryResult<Vec<SubmissionWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -409,7 +465,9 @@ impl SubmissionRepository {
                 grade: row.get("grade"),
                 grade_scale: row.get("grade_scale"),
                 feedback: row.get("feedback"),
-                graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+                graded_by: row
+                    .get::<Option<uuid::Uuid>, _>("graded_by")
+                    .map(|id| id.into()),
                 grading_rubric: row.get("grading_rubric"),
                 assignment_title: row.get("assignment_title"),
                 student_name: row.get("student_name"),
@@ -422,7 +480,11 @@ impl SubmissionRepository {
     }
 
     /// Get submissions pending grading
-    pub async fn list_pending_grading(&self, teacher_id: TeacherId, limit: i64) -> RepositoryResult<Vec<SubmissionWithDetails>> {
+    pub async fn list_pending_grading(
+        &self,
+        teacher_id: TeacherId,
+        limit: i64,
+    ) -> RepositoryResult<Vec<SubmissionWithDetails>> {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             SELECT
@@ -460,7 +522,9 @@ impl SubmissionRepository {
                 grade: row.get("grade"),
                 grade_scale: row.get("grade_scale"),
                 feedback: row.get("feedback"),
-                graded_by: row.get::<Option<uuid::Uuid>, _>("graded_by").map(|id| id.into()),
+                graded_by: row
+                    .get::<Option<uuid::Uuid>, _>("graded_by")
+                    .map(|id| id.into()),
                 grading_rubric: row.get("grading_rubric"),
                 assignment_title: row.get("assignment_title"),
                 student_name: row.get("student_name"),
@@ -474,12 +538,10 @@ impl SubmissionRepository {
 
     /// Delete submission
     pub async fn delete(&self, submission_id: SubmissionId) -> RepositoryResult<()> {
-        let result = sqlx::query(
-            "DELETE FROM submissions WHERE id = $1"
-        )
-        .bind::<uuid::Uuid>(submission_id.into())
-        .execute(&*self.base.pool())
-        .await?;
+        let result = sqlx::query("DELETE FROM submissions WHERE id = $1")
+            .bind::<uuid::Uuid>(submission_id.into())
+            .execute(&*self.base.pool())
+            .await?;
 
         if result.rows_affected() == 0 {
             return Err(RepositoryError::NotFound {
@@ -492,9 +554,13 @@ impl SubmissionRepository {
     }
 
     /// Check if student has already submitted for a custom assignment
-    pub async fn has_student_submitted(&self, custom_assignment_id: CustomAssignmentId, student_id: StudentId) -> RepositoryResult<bool> {
+    pub async fn has_student_submitted(
+        &self,
+        custom_assignment_id: CustomAssignmentId,
+        student_id: StudentId,
+    ) -> RepositoryResult<bool> {
         let row: Option<PgRow> = sqlx::query(
-            "SELECT id FROM submissions WHERE custom_assignment_id = $1 AND student_id = $2"
+            "SELECT id FROM submissions WHERE custom_assignment_id = $1 AND student_id = $2",
         )
         .bind::<uuid::Uuid>(custom_assignment_id.into())
         .bind::<uuid::Uuid>(student_id.into())

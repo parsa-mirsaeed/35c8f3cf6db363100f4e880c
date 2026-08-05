@@ -1,9 +1,10 @@
-use crate::domain::{ParentId, UserId, SchoolId};
-use crate::models::{Parent, ParentWithUser, CreateParentRequest};
+use crate::domain::{ParentId, SchoolId, UserId};
+use crate::models::{CreateParentRequest, Parent, ParentWithUser};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
+use crate::rls_context::AuthorizedPool;
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -15,7 +16,7 @@ pub struct ParentRepository {
 
 impl ParentRepository {
     /// Create a new parent repository
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }
@@ -28,7 +29,7 @@ impl ParentRepository {
             INSERT INTO parents (user_id, school_id, created_at, updated_at)
             VALUES ($1, $2, NOW(), NOW())
             RETURNING id, user_id, school_id, created_at, updated_at
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(request.user_id.into())
         .bind::<uuid::Uuid>(request.school_id.into())
@@ -47,7 +48,10 @@ impl ParentRepository {
     }
 
     /// Get parent by ID with user information
-    pub async fn find_with_user_by_id(&self, parent_id: ParentId) -> RepositoryResult<ParentWithUser> {
+    pub async fn find_with_user_by_id(
+        &self,
+        parent_id: ParentId,
+    ) -> RepositoryResult<ParentWithUser> {
         let row = sqlx::query(
             r#"
             SELECT
@@ -58,7 +62,7 @@ impl ParentRepository {
             FROM parents p
             JOIN users u ON p.user_id = u.id
             WHERE p.id = $1
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(parent_id.into())
         .fetch_optional(&*self.base.pool())
@@ -89,7 +93,7 @@ impl ParentRepository {
             SELECT id, user_id, school_id, created_at, updated_at
             FROM parents
             WHERE user_id = $1
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(user_id.into())
         .fetch_optional(&*self.base.pool())
@@ -116,7 +120,7 @@ impl ParentRepository {
             r#"
             DELETE FROM parents
             WHERE id = $1
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(parent_id.into())
         .execute(&*self.base.pool())
@@ -133,7 +137,12 @@ impl ParentRepository {
     }
 
     /// List parents by school
-    pub async fn list_by_school(&self, school_id: Uuid, limit: i64, offset: i64) -> RepositoryResult<Vec<ParentWithUser>> {
+    pub async fn list_by_school(
+        &self,
+        school_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> RepositoryResult<Vec<ParentWithUser>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -146,7 +155,7 @@ impl ParentRepository {
             WHERE p.school_id = $1
             ORDER BY u.name
             LIMIT $2 OFFSET $3
-            "#
+            "#,
         )
         .bind(school_id)
         .bind(limit)
@@ -172,7 +181,10 @@ impl ParentRepository {
     }
 
     /// Get parents for a specific student (through student.parent_id)
-    pub async fn find_by_student_id(&self, student_id: Uuid) -> RepositoryResult<Option<ParentWithUser>> {
+    pub async fn find_by_student_id(
+        &self,
+        student_id: Uuid,
+    ) -> RepositoryResult<Option<ParentWithUser>> {
         let row = sqlx::query(
             r#"
             SELECT
@@ -184,7 +196,7 @@ impl ParentRepository {
             JOIN users u ON p.user_id = u.id
             JOIN students s ON s.parent_id = p.user_id
             WHERE s.id = $1
-            "#
+            "#,
         )
         .bind(student_id)
         .fetch_optional(&*self.base.pool())
@@ -204,7 +216,7 @@ impl ParentRepository {
 }
 
 impl Repository for ParentRepository {
-    fn pool(&self) -> Arc<PgPool> {
+    fn pool(&self) -> Arc<AuthorizedPool> {
         self.base.pool()
     }
 }

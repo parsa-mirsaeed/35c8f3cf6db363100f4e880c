@@ -1,15 +1,16 @@
 use crate::config::{Config, SupabaseConfig};
-use crate::services::{ValidationService, AuditService, SupabaseAdminService};
-use crate::repositories::user_repository::UserRepository;
-use crate::repositories::student_repository::StudentRepository;
-use crate::repositories::teacher_repository::TeacherRepository;
-use crate::repositories::parent_repository::ParentRepository;
 use crate::repositories::audit_log_repository::AuditLogRepository;
-use crate::repositories::school_repository::SchoolRepository;
 use crate::repositories::class_section_repository::ClassSectionRepository;
+use crate::repositories::parent_repository::ParentRepository;
+use crate::repositories::school_repository::SchoolRepository;
+use crate::repositories::student_repository::StudentRepository;
 use crate::repositories::subject_repository::SubjectRepository;
-use std::sync::Arc;
+use crate::repositories::teacher_repository::TeacherRepository;
+use crate::repositories::user_repository::UserRepository;
+use crate::rls_context::AuthorizedPool;
+use crate::services::{AuditService, SupabaseAdminService, ValidationService};
 use sqlx::PgPool;
+use std::sync::Arc;
 
 /// Application state that can be accessed by server functions
 #[derive(Clone)]
@@ -24,9 +25,12 @@ pub struct AppServices {
     pub validation_service: Arc<ValidationService>,
     pub audit_service: Arc<AuditService>,
     pub supabase_service: Arc<SupabaseAdminService>,
-    pub pool: Arc<PgPool>,
+    /// Raw pool used only to begin authorized transactions and for readiness.
+    pub raw_pool: Arc<PgPool>,
+    /// Fail-closed executor facade used by repositories and server functions.
+    pub pool: Arc<AuthorizedPool>,
     pub http_client: reqwest::Client,
-    
+
     // Repositories exposed directly for server functions
     pub user: Arc<UserRepository>,
     pub student: Arc<StudentRepository>,
@@ -41,41 +45,45 @@ impl AppServices {
     pub async fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
         println!("Initializing database connection pool...");
         let pool_start = std::time::Instant::now();
-        
+
         // Initialize database connection pool with warm connections
         // min_connections > 0 keeps connections warm to avoid cold start latency
         // IMPORTANT: statement_cache_capacity(0) prevents "prepared statement already exists" errors
         // when using connection pooling (especially pgbouncer in transaction mode)
         let connect_options: sqlx::postgres::PgConnectOptions = config.database.url.parse()?;
         let connect_options = connect_options.statement_cache_capacity(0);
-        
+
         let pool = sqlx::postgres::PgPoolOptions::new()
             // Clamp max connections to 15 for Supabase Transaction Mode compatibility
             .max_connections(config.database.max_connections.max(1).min(15))
             .min_connections(1) // Keep 1 warm connection
-
             .acquire_timeout(std::time::Duration::from_secs(30))
             .idle_timeout(Some(std::time::Duration::from_secs(600))) // 10 minutes
             .max_lifetime(Some(std::time::Duration::from_secs(1800))) // 30 minutes
             .test_before_acquire(false) // Skip extra ping, we trust our warm connections
             .connect_with(connect_options)
             .await?;
-        
-        println!("Database pool initialized in {:?} with {} min connections", 
-                 pool_start.elapsed(), 5);
+
+        println!(
+            "Database pool initialized in {:?} with {} min connections",
+            pool_start.elapsed(),
+            5
+        );
 
         // Wrap pool in Arc for repositories that expect Arc<PgPool>
         let arc_pool = Arc::new(pool);
+        let authorized_pool = Arc::new(AuthorizedPool::new());
 
         // Initialize repositories
-        let user_repository = Arc::new(UserRepository::new(arc_pool.clone()));
-        let student_repository = Arc::new(StudentRepository::new(arc_pool.clone()));
-        let teacher_repository = Arc::new(TeacherRepository::new(arc_pool.clone()));
-        let parent_repository = Arc::new(ParentRepository::new(arc_pool.clone()));
-        let audit_repository = Arc::new(AuditLogRepository::new(arc_pool.clone()));
-        let school_repository = Arc::new(SchoolRepository::new(arc_pool.clone()));
-        let class_section_repository = Arc::new(ClassSectionRepository::new(arc_pool.clone()));
-        let subject_repository = Arc::new(SubjectRepository::new(arc_pool.clone()));
+        let user_repository = Arc::new(UserRepository::new(authorized_pool.clone()));
+        let student_repository = Arc::new(StudentRepository::new(authorized_pool.clone()));
+        let teacher_repository = Arc::new(TeacherRepository::new(authorized_pool.clone()));
+        let parent_repository = Arc::new(ParentRepository::new(authorized_pool.clone()));
+        let audit_repository = Arc::new(AuditLogRepository::new(authorized_pool.clone()));
+        let school_repository = Arc::new(SchoolRepository::new(authorized_pool.clone()));
+        let class_section_repository =
+            Arc::new(ClassSectionRepository::new(authorized_pool.clone()));
+        let subject_repository = Arc::new(SubjectRepository::new(authorized_pool.clone()));
 
         // Initialize services
         let validation_service = Arc::new(ValidationService::new(
@@ -98,7 +106,8 @@ impl AppServices {
             validation_service,
             audit_service,
             supabase_service,
-            pool: arc_pool.clone(),
+            raw_pool: arc_pool.clone(),
+            pool: authorized_pool.clone(),
             http_client,
             // Map to fields expected by server functions
             user: user_repository,
@@ -131,12 +140,10 @@ pub async fn initialize_app_services(config: Config) -> Result<(), Box<dyn std::
     APP_SERVICES_INIT.call_once(|| {
         // Use a blocking runtime for the async initialization
         match tokio::runtime::Runtime::new() {
-            Ok(rt) => {
-                match rt.block_on(AppServices::new(config.clone())) {
-                    Ok(s) => services = Some(s),
-                    Err(e) => error = Some(e),
-                }
-            }
+            Ok(rt) => match rt.block_on(AppServices::new(config.clone())) {
+                Ok(s) => services = Some(s),
+                Err(e) => error = Some(e),
+            },
             Err(e) => error = Some(e.into()),
         }
     });
@@ -180,18 +187,19 @@ pub static APP_STATE: once_cell::sync::OnceCell<AppState> = once_cell::sync::Onc
 pub async fn initialize_app_state(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     println!("Initializing global APP_STATE...");
     let services = AppServices::new(config.clone()).await?;
-    
+
     let app_state = AppState {
         services,
         supabase_config: config.supabase,
     };
-    
-    APP_STATE.set(app_state).map_err(|_| "App state already initialized")?;
+
+    APP_STATE
+        .set(app_state)
+        .map_err(|_| "App state already initialized")?;
     println!("Global APP_STATE initialized successfully.");
-    
+
     Ok(())
 }
-
 
 /// Extract server state for use in server functions
 /// This function can be used by Dioxus server functions to access application state
@@ -204,42 +212,48 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
     println!("WARNING: APP_STATE not initialized, creating new temporary state. This should not happen in production!");
 
     // If not initialized, create it on-demand (for development)
-    let config = crate::config::Config::from_env()
-        .map_err(|e| dioxus::prelude::ServerFnError::new(format!("Failed to load config: {}", e)))?;
+    let config = crate::config::Config::from_env().map_err(|e| {
+        dioxus::prelude::ServerFnError::new(format!("Failed to load config: {}", e))
+    })?;
 
     // Configure pool with better settings for concurrent requests
     // IMPORTANT: statement_cache_capacity(0) prevents "prepared statement already exists" errors
-    let connect_options: sqlx::postgres::PgConnectOptions = config.database.url.parse()
-        .map_err(|e| dioxus::prelude::ServerFnError::new(format!("Invalid DATABASE_URL: {}", e)))?;
+    let connect_options: sqlx::postgres::PgConnectOptions =
+        config.database.url.parse().map_err(|e| {
+            dioxus::prelude::ServerFnError::new(format!("Invalid DATABASE_URL: {}", e))
+        })?;
     let connect_options = connect_options.statement_cache_capacity(0);
-    
+
     let pool = Arc::new(
         sqlx::postgres::PgPoolOptions::new()
-             // Clamp max connections to 15 for Supabase Transaction Mode compatibility
-            .max_connections(config.database.max_connections.max(1).min(15)) 
+            // Clamp max connections to 15 for Supabase Transaction Mode compatibility
+            .max_connections(config.database.max_connections.max(1).min(15))
             .min_connections(1) // Keep 1 warm connection, but don't hold too many
             .acquire_timeout(std::time::Duration::from_secs(30)) // Increase timeout for latency
             .idle_timeout(Some(std::time::Duration::from_secs(600))) // 10 minutes
             .max_lifetime(Some(std::time::Duration::from_secs(1800))) // 30 minutes
-            .connect_lazy_with(connect_options)
+            .connect_lazy_with(connect_options),
     );
 
     // Initialize ALL repositories here for the on-demand state as well
     let arc_pool = pool.clone();
-    let user_repository = Arc::new(UserRepository::new(arc_pool.clone()));
-    let student_repository = Arc::new(StudentRepository::new(arc_pool.clone()));
-    let teacher_repository = Arc::new(TeacherRepository::new(arc_pool.clone()));
-    let parent_repository = Arc::new(ParentRepository::new(arc_pool.clone()));
-    let audit_repository = Arc::new(AuditLogRepository::new(arc_pool.clone()));
-    let school_repository = Arc::new(SchoolRepository::new(arc_pool.clone()));
-    let class_section_repository = Arc::new(ClassSectionRepository::new(arc_pool.clone()));
-    let subject_repository = Arc::new(SubjectRepository::new(arc_pool.clone()));
+    let authorized_pool = Arc::new(AuthorizedPool::new());
+    let user_repository = Arc::new(UserRepository::new(authorized_pool.clone()));
+    let student_repository = Arc::new(StudentRepository::new(authorized_pool.clone()));
+    let teacher_repository = Arc::new(TeacherRepository::new(authorized_pool.clone()));
+    let parent_repository = Arc::new(ParentRepository::new(authorized_pool.clone()));
+    let audit_repository = Arc::new(AuditLogRepository::new(authorized_pool.clone()));
+    let school_repository = Arc::new(SchoolRepository::new(authorized_pool.clone()));
+    let class_section_repository = Arc::new(ClassSectionRepository::new(authorized_pool.clone()));
+    let subject_repository = Arc::new(SubjectRepository::new(authorized_pool.clone()));
 
     // Initialize shared HTTP client for temporary state too
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| dioxus::prelude::ServerFnError::new(format!("Failed to create http client: {}", e)))?;
+        .map_err(|e| {
+            dioxus::prelude::ServerFnError::new(format!("Failed to create http client: {}", e))
+        })?;
 
     let app_state = AppState {
         services: AppServices {
@@ -248,13 +262,12 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
                 student_repository.clone(),
                 teacher_repository.clone(),
             )),
-            audit_service: Arc::new(AuditService::new(
-                audit_repository
-            )),
+            audit_service: Arc::new(AuditService::new(audit_repository)),
             supabase_service: Arc::new(SupabaseAdminService::new(config.supabase.clone())),
-            pool: pool.clone(),
+            raw_pool: pool.clone(),
+            pool: authorized_pool.clone(),
             http_client,
-            
+
             user: user_repository,
             student: student_repository,
             teacher: teacher_repository,

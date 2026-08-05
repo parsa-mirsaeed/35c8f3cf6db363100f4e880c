@@ -1,7 +1,7 @@
-use crate::models::{School, CreateSchoolRequest};
+use crate::models::{CreateSchoolRequest, School};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
+use crate::rls_context::AuthorizedPool;
 use async_trait::async_trait;
-use sqlx::PgPool;
 use std::sync::Arc;
 
 /// School repository for handling school-related database operations
@@ -11,7 +11,7 @@ pub struct SchoolRepository {
 }
 
 impl SchoolRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }
@@ -71,7 +71,7 @@ impl SchoolRepository {
 
 #[async_trait]
 impl Repository for SchoolRepository {
-    fn pool(&self) -> Arc<PgPool> {
+    fn pool(&self) -> Arc<AuthorizedPool> {
         self.base.pool()
     }
 }

@@ -4,7 +4,7 @@ use crate::repositories::{BaseRepository, Repository, RepositoryError, Repositor
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{Postgres, Row, Transaction};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -125,7 +125,7 @@ pub struct KnowledgeAssetRepository {
 }
 
 impl KnowledgeAssetRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }
@@ -668,7 +668,7 @@ impl KnowledgeAssetRepository {
 }
 
 impl Repository for KnowledgeAssetRepository {
-    fn pool(&self) -> Arc<PgPool> {
+    fn pool(&self) -> Arc<AuthorizedPool> {
         self.base.pool()
     }
 }

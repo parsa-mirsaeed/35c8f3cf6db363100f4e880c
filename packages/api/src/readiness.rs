@@ -4,7 +4,7 @@ use crate::app_state::AppState;
 /// configured pool. This is a readiness boundary, not a liveness check.
 pub async fn check_database(state: &AppState) -> Result<(), sqlx::Error> {
     sqlx::query_scalar::<_, i32>("SELECT 1")
-        .fetch_one(state.services.pool.as_ref())
+        .fetch_one(state.services.raw_pool.as_ref())
         .await
         .map(|_| ())
 }

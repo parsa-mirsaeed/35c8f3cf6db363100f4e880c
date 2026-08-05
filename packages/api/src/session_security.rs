@@ -1,12 +1,13 @@
 use crate::app_state::AppState;
 use crate::domain::UserInfo;
-use crate::repositories::RepositoryError;
+use crate::rls_context::{AuthorizedActor, AuthorizedTx};
 use axum::http::{
     header::{InvalidHeaderValue, SET_COOKIE},
     HeaderMap, HeaderValue,
 };
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -119,45 +120,82 @@ pub fn refresh_rate_limit_key(ip: Option<IpAddr>, refresh_token: &str) -> String
     )
 }
 
+#[derive(Debug, Clone)]
+pub struct ActiveSession {
+    pub user: UserInfo,
+    pub school_id: Uuid,
+}
+
 pub async fn resolve_active_session(
     state: &AppState,
     user_id: &str,
-) -> Result<UserInfo, SessionValidationError> {
+) -> Result<ActiveSession, SessionValidationError> {
     let user_uuid =
         Uuid::parse_str(user_id).map_err(|_| SessionValidationError::AccountUnavailable)?;
-    let user = state
-        .services
-        .user
-        .find_with_role_by_id(user_uuid.into())
-        .await
-        .map_err(map_repository_error)?;
 
-    if !user.is_active {
+    // Bootstrap uses only the canonical user ID. The users self-row policy does
+    // not trust the provisional role, and the canonical role is read from the
+    // database before the request transaction begins.
+    let actor = AuthorizedActor::new(user_uuid, "Student", None)
+        .map_err(|_| SessionValidationError::AccountUnavailable)?;
+    let mut tx = AuthorizedTx::begin(&state.services.raw_pool, actor)
+        .await
+        .map_err(|_| SessionValidationError::DependencyUnavailable)?;
+    let mut connection = tx
+        .connection()
+        .await
+        .map_err(|_| SessionValidationError::DependencyUnavailable)?;
+
+    let row = sqlx::query(
+        r#"
+        SELECT u.email, u.school_id, r.name::text AS role_name
+        FROM users u
+        JOIN roles r ON r.id = u.role_id
+        WHERE u.id = $1
+          AND u.is_active = TRUE
+        "#,
+    )
+    .bind(user_uuid)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(|_| SessionValidationError::DependencyUnavailable)?
+    .ok_or(SessionValidationError::AccountUnavailable)?;
+
+    let email: String = row.get("email");
+    let school_id: Uuid = row.get("school_id");
+    let role: String = row.get("role_name");
+    drop(connection);
+
+    tx.set_school_id(school_id)
+        .await
+        .map_err(|_| SessionValidationError::DependencyUnavailable)?;
+    let mut connection = tx
+        .connection()
+        .await
+        .map_err(|_| SessionValidationError::DependencyUnavailable)?;
+    let school_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM schools WHERE id = $1)")
+            .bind(school_id)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(|_| SessionValidationError::DependencyUnavailable)?;
+    drop(connection);
+    tx.rollback()
+        .await
+        .map_err(|_| SessionValidationError::DependencyUnavailable)?;
+
+    if !school_exists {
         return Err(SessionValidationError::AccountUnavailable);
     }
 
-    let school_id: Uuid = user.school_id.into();
-    state
-        .services
-        .school
-        .find_by_id(school_id)
-        .await
-        .map_err(map_repository_error)?;
-
-    Ok(UserInfo {
-        id: user.id.to_string(),
-        email: user.email,
-        role: user.role_name.to_string(),
+    Ok(ActiveSession {
+        user: UserInfo {
+            id: user_uuid.to_string(),
+            email,
+            role,
+        },
+        school_id,
     })
-}
-
-fn map_repository_error(error: RepositoryError) -> SessionValidationError {
-    match error {
-        RepositoryError::NotFound { .. } | RepositoryError::Unauthorized => {
-            SessionValidationError::AccountUnavailable
-        }
-        _ => SessionValidationError::DependencyUnavailable,
-    }
 }
 
 pub fn access_cookie(value: String) -> Cookie<'static> {

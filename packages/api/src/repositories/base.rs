@@ -1,33 +1,35 @@
-use sqlx::PgPool;
+use crate::rls_context::AuthorizedPool;
 use std::sync::Arc;
 
-/// Base repository trait that all repositories will implement
+/// Base repository trait that all repositories implement.
 #[async_trait::async_trait]
 pub trait Repository {
-    /// Get the database connection pool
-    fn pool(&self) -> Arc<PgPool>;
+    /// Get the transaction-scoped executor facade.
+    fn pool(&self) -> Arc<AuthorizedPool>;
 }
 
-/// Base repository implementation with common functionality
+/// Base repository implementation with common functionality.
 #[derive(Clone)]
 pub struct BaseRepository {
-    pool: Arc<PgPool>,
+    pool: Arc<AuthorizedPool>,
 }
 
 impl BaseRepository {
-    /// Create a new base repository with the given connection pool
-    pub fn new(pool: Arc<PgPool>) -> Self {
-        Self { pool }
+    pub fn new<T>(pool: T) -> Self {
+        let _ = pool;
+        Self {
+            pool: Arc::new(AuthorizedPool::new()),
+        }
     }
 }
 
 impl Repository for BaseRepository {
-    fn pool(&self) -> Arc<PgPool> {
+    fn pool(&self) -> Arc<AuthorizedPool> {
         Arc::clone(&self.pool)
     }
 }
 
-/// Common error types for repositories
+/// Common error types for repositories.
 #[derive(Debug, thiserror::Error)]
 pub enum RepositoryError {
     #[error("Database error: {0}")]

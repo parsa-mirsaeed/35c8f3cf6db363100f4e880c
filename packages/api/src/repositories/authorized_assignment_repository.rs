@@ -13,8 +13,9 @@ use crate::models::{
     UpdateAssignmentRequest,
 };
 use crate::repositories::{RepositoryError, RepositoryResult};
+use crate::rls_context::AuthorizedPool;
 use chrono::Utc;
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{postgres::PgRow, Row};
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -37,12 +38,15 @@ pub struct AuthorizedStudent {
 
 #[derive(Clone)]
 pub struct AuthorizedAssignmentRepository {
-    pool: Arc<PgPool>,
+    pool: Arc<AuthorizedPool>,
 }
 
 impl AuthorizedAssignmentRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
-        Self { pool }
+    pub fn new<T>(pool: T) -> Self {
+        let _ = pool;
+        Self {
+            pool: Arc::new(AuthorizedPool::new()),
+        }
     }
 
     pub async fn resolve_active_teacher(

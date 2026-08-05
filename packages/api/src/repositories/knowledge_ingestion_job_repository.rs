@@ -1,7 +1,8 @@
 use crate::repositories::{
     BaseRepository, PersistedChunk, Repository, RepositoryError, RepositoryResult,
 };
-use sqlx::{PgPool, Row};
+use crate::rls_context::AuthorizedPool;
+use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -26,7 +27,7 @@ pub struct KnowledgeIngestionJobRepository {
 }
 
 impl KnowledgeIngestionJobRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }

@@ -7,12 +7,12 @@
 use futures::{
     future::BoxFuture,
     stream::{self, BoxStream},
-    FutureExt, StreamExt, TryStreamExt,
+    FutureExt, TryStreamExt,
 };
 use sqlx::{
     database::Database,
     postgres::{PgConnection, PgPool, Postgres},
-    Either, Error, Execute, Executor, Transaction,
+    Describe, Either, Error, Execute, Executor, Transaction,
 };
 use std::{
     fmt,
@@ -419,7 +419,7 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
                     .try_collect::<Vec<_>>()
                     .await
             })
-            .map_ok(stream::iter)
+            .map_ok(|items| stream::iter(items.into_iter().map(Ok::<_, Error>)))
             .try_flatten(),
         )
     }
@@ -460,6 +460,25 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
                 .as_mut()
                 .ok_or_else(|| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))?;
             Executor::prepare_with(&mut **transaction, sql, parameters).await
+        }
+        .boxed()
+    }
+
+    fn describe<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+    ) -> BoxFuture<'e, Result<Describe<Postgres>, Error>>
+    where
+        'c: 'e,
+    {
+        let state = active_transaction();
+        async move {
+            let state = state?;
+            let mut guard = Arc::clone(&state.transaction).lock_owned().await;
+            let transaction = guard
+                .as_mut()
+                .ok_or_else(|| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))?;
+            Executor::describe(&mut **transaction, sql).await
         }
         .boxed()
     }

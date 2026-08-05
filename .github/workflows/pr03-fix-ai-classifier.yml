@@ -1,0 +1,11 @@
+name: PR-03 Temporary Placeholder
+
+on:
+  workflow_dispatch:
+
+jobs:
+  disabled:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Removed by guarded PR-03 executor migration"

@@ -14,11 +14,14 @@ DATABASE_APP_PASSWORD="${app_password}" \
 psql "${DATABASE_URL}" \
     --set=ON_ERROR_STOP=1 \
     --set=app_role="${app_role}" <<'SQL'
+SELECT set_config('edutalent.verification_role', :'app_role', false);
+
 DO $verification$
 DECLARE
     role_state text;
     missing_force text[];
     obsolete_policy_count integer;
+    verification_role text := current_setting('edutalent.verification_role');
 BEGIN
     SELECT concat_ws('|',
         rolcanlogin::text,
@@ -31,7 +34,7 @@ BEGIN
     )
     INTO role_state
     FROM pg_roles
-    WHERE rolname = :'app_role';
+    WHERE rolname = verification_role;
 
     IF role_state <> 'true|false|false|false|false|false|false' THEN
         RAISE EXCEPTION 'Unexpected runtime role state: %', role_state;
@@ -41,7 +44,7 @@ BEGIN
         SELECT 1
         FROM pg_auth_members membership
         JOIN pg_roles member_role ON member_role.oid = membership.member
-        WHERE member_role.rolname = :'app_role'
+        WHERE member_role.rolname = verification_role
     ) THEN
         RAISE EXCEPTION 'Runtime role retains role memberships';
     END IF;
@@ -79,7 +82,7 @@ BEGIN
     END IF;
 
     IF has_function_privilege(
-        :'app_role',
+        verification_role,
         'public.set_app_context(uuid,text,uuid)',
         'EXECUTE'
     ) THEN

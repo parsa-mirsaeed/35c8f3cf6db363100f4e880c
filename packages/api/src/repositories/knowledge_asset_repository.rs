@@ -1,6 +1,7 @@
 //! Persistence boundary for governed knowledge assets.
 
 use crate::repositories::{BaseRepository, Repository, RepositoryError, RepositoryResult};
+use crate::rls_context::AuthorizedPool;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

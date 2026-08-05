@@ -1,5 +1,6 @@
 name: PR-03 Apply Worker RLS Fixes
 
+# Synchronization marker: apply the reviewed exact-path patch set.
 on:
   pull_request:
     types:
@@ -760,10 +761,7 @@ SQL
           CREATE POLICY knowledge_assets_scoped_select ON public.knowledge_assets
           FOR SELECT USING (
               public.get_role() = 'PlatformAdmin'
-              OR (
-                  public.get_role() = 'SchoolManager'
-                  AND school_id = public.get_school_id()
-              )
+              OR (public.get_role() = 'SchoolManager' AND school_id = public.get_school_id())
               OR (
                   public.get_role() = 'Teacher'
                   AND school_id = public.get_school_id()

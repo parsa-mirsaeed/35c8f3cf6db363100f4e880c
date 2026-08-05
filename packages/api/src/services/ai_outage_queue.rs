@@ -9,11 +9,11 @@
 use crate::repositories::{
     ClaimedKnowledgeIngestionJob, EmbeddingFailureDisposition, RepositoryError,
 };
-use sqlx::PgPool;
+use crate::rls_context::AuthorizedPool;
 use std::sync::Arc;
 
 pub async fn requeue_provider_outage(
-    pool: Arc<PgPool>,
+    pool: Arc<AuthorizedPool>,
     job: &ClaimedKnowledgeIngestionJob,
     error_code: &str,
     requested_retry_after_seconds: u64,

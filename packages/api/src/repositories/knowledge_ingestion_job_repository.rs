@@ -2,7 +2,7 @@ use crate::repositories::{
     BaseRepository, PersistedChunk, Repository, RepositoryError, RepositoryResult,
 };
 use crate::rls_context::AuthorizedPool;
-use sqlx::Row;
+use sqlx::{postgres::PgConnection, Row};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -41,7 +41,7 @@ impl KnowledgeIngestionJobRepository {
         requested_by: Uuid,
     ) -> RepositoryResult<Uuid> {
         let mut tx = self.base.pool().begin().await?;
-        Self::lock_asset(&mut tx, asset_id).await?;
+        Self::lock_asset(&mut *tx, asset_id).await?;
 
         let status = sqlx::query_scalar::<_, String>(
             "SELECT status::text FROM knowledge_assets WHERE id = $1 FOR UPDATE",
@@ -173,7 +173,7 @@ impl KnowledgeIngestionJobRepository {
         chunks: &[PersistedChunk],
     ) -> RepositoryResult<()> {
         let mut tx = self.base.pool().begin().await?;
-        Self::lock_asset(&mut tx, asset_id).await?;
+        Self::lock_asset(&mut *tx, asset_id).await?;
 
         let job_status = sqlx::query_scalar::<_, String>(
             "SELECT status::text FROM ingestion_jobs WHERE id = $1 AND asset_id = $2 FOR UPDATE",
@@ -260,7 +260,7 @@ impl KnowledgeIngestionJobRepository {
         }
 
         Self::append_audit(
-            &mut tx,
+            &mut *tx,
             actor_id,
             "knowledge_asset.embedded",
             asset_id,
@@ -276,7 +276,7 @@ impl KnowledgeIngestionJobRepository {
     /// same transaction, preventing a worker from reviving the archived asset.
     pub async fn archive_asset(&self, asset_id: Uuid, actor_id: Uuid) -> RepositoryResult<()> {
         let mut tx = self.base.pool().begin().await?;
-        Self::lock_asset(&mut tx, asset_id).await?;
+        Self::lock_asset(&mut *tx, asset_id).await?;
 
         let exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(SELECT 1 FROM knowledge_assets WHERE id = $1 FOR UPDATE)",
@@ -321,7 +321,7 @@ impl KnowledgeIngestionJobRepository {
             .await?;
 
         Self::append_audit(
-            &mut tx,
+            &mut *tx,
             actor_id,
             "knowledge_asset.archived",
             asset_id,
@@ -371,7 +371,7 @@ impl KnowledgeIngestionJobRepository {
         max_attempts: i32,
     ) -> RepositoryResult<EmbeddingFailureDisposition> {
         let mut tx = self.base.pool().begin().await?;
-        Self::lock_asset(&mut tx, job.asset_id).await?;
+        Self::lock_asset(&mut *tx, job.asset_id).await?;
 
         let current_status = sqlx::query_scalar::<_, String>(
             "SELECT status::text FROM ingestion_jobs WHERE id = $1 FOR UPDATE",
@@ -446,19 +446,16 @@ impl KnowledgeIngestionJobRepository {
         Ok(EmbeddingFailureDisposition::FailedPermanently)
     }
 
-    async fn lock_asset(
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        asset_id: Uuid,
-    ) -> RepositoryResult<()> {
+    async fn lock_asset(tx: &mut PgConnection, asset_id: Uuid) -> RepositoryResult<()> {
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
             .bind(asset_id)
-            .execute(&mut **tx)
+            .execute(&mut *tx)
             .await?;
         Ok(())
     }
 
     async fn append_audit(
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        tx: &mut PgConnection,
         actor_id: Uuid,
         action: &str,
         asset_id: Uuid,
@@ -477,7 +474,7 @@ impl KnowledgeIngestionJobRepository {
         .bind(asset_id)
         .bind(school_id)
         .bind(details)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?;
         Ok(())
     }

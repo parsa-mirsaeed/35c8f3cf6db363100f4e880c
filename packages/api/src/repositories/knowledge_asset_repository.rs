@@ -5,7 +5,7 @@ use crate::rls_context::AuthorizedPool;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{postgres::PgConnection, Row};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -193,7 +193,7 @@ impl KnowledgeAssetRepository {
         .await?;
 
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             request.created_by,
             "SchoolManager",
             "knowledge_asset.submitted",
@@ -393,7 +393,7 @@ impl KnowledgeAssetRepository {
         let school_id: Uuid = row.try_get("school_id")?;
 
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             verified_by,
             "PlatformAdmin",
             "knowledge_asset.ocr_verified",
@@ -480,7 +480,7 @@ impl KnowledgeAssetRepository {
         .execute(&mut *tx)
         .await?;
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             actor_id,
             "PlatformAdmin",
             "knowledge_asset.embedded",
@@ -515,7 +515,7 @@ impl KnowledgeAssetRepository {
         })?;
         let school_id: Uuid = row.try_get("school_id")?;
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             actor_id,
             "PlatformAdmin",
             "knowledge_asset.published",
@@ -547,7 +547,7 @@ impl KnowledgeAssetRepository {
             .execute(&mut *tx)
             .await?;
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             actor_id,
             "PlatformAdmin",
             "knowledge_asset.archived",
@@ -618,7 +618,7 @@ impl KnowledgeAssetRepository {
     }
 
     async fn append_audit_in_tx(
-        tx: &mut Transaction<'_, Postgres>,
+        tx: &mut PgConnection,
         actor_id: Uuid,
         actor_role: &str,
         action: &str,
@@ -639,7 +639,7 @@ impl KnowledgeAssetRepository {
         .bind(target_id)
         .bind(school_id)
         .bind(details)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?;
         Ok(())
     }

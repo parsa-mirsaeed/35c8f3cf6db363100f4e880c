@@ -88,6 +88,29 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Runtime role can execute retired set_app_context';
     END IF;
+
+    IF NOT has_function_privilege(
+        verification_role,
+        'public.claim_next_embedding_job()',
+        'EXECUTE'
+    ) OR NOT has_function_privilege(
+        verification_role,
+        'public.recover_stale_embedding_jobs(bigint)',
+        'EXECUTE'
+    ) THEN
+        RAISE EXCEPTION 'Runtime role cannot execute bounded system queue functions';
+    END IF;
+
+    IF pg_get_functiondef('public.claim_next_embedding_job()'::regprocedure)
+           NOT LIKE '%bounded system queue context required%'
+       OR pg_get_functiondef('public.claim_next_embedding_job()'::regprocedure)
+           NOT LIKE '%get_elevated_operation()%'
+       OR pg_get_functiondef('public.recover_stale_embedding_jobs(bigint)'::regprocedure)
+           NOT LIKE '%bounded system queue context required%'
+       OR pg_get_functiondef('public.recover_stale_embedding_jobs(bigint)'::regprocedure)
+           NOT LIKE '%get_elevated_operation()%' THEN
+        RAISE EXCEPTION 'System queue functions do not enforce the bounded context';
+    END IF;
 END
 $verification$;
 
@@ -138,6 +161,24 @@ expect_role_failure "create database" "CREATE DATABASE edutalent_forbidden_datab
 expect_role_failure \
     "write migration registry" \
     "INSERT INTO public.edutalent_migration_files(path, checksum) VALUES ('forbidden', 'forbidden')"
+expect_role_failure \
+    "claim queue without bounded system context" \
+    "SELECT * FROM public.claim_next_embedding_job()"
+
+psql "${DATABASE_URL}" \
+    --quiet \
+    --set=ON_ERROR_STOP=1 \
+    --set=app_role="${app_role}" <<'SQL'
+SET ROLE :"app_role";
+BEGIN;
+SET LOCAL app.user_id = '33333333-3333-3333-3333-333333333333';
+SET LOCAL app.user_role = 'system_job';
+SET LOCAL app.school_id = '';
+SET LOCAL app.elevated_operation = 'true';
+SELECT COUNT(*) FROM public.claim_next_embedding_job();
+SELECT public.recover_stale_embedding_jobs(60);
+ROLLBACK;
+SQL
 
 query_school() {
     local school_id="$1"

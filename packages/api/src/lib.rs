@@ -46,6 +46,8 @@ pub mod supabase_auth;
 #[cfg(feature = "server")]
 pub mod utils;
 
+// Security inventories are ordinary API tests so every protected-source change
+// is compiled and checked by the exact-head AI Change Proof contract.
 #[cfg(all(test, feature = "server"))]
 mod rls_transaction_inventory_tests;
 #[cfg(test)]

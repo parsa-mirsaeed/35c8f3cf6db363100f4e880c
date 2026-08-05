@@ -123,9 +123,7 @@ fn forced_rls_finalizer_waits_for_the_legacy_policy_migration() {
     )
     .expect("read transaction-scoped RLS finalizer");
 
-    assert!(finalizer.contains(
-        "WHERE path = 'migrations/20260103000001_enable_rls_policies.sql'"
-    ));
+    assert!(finalizer.contains("WHERE path = 'migrations/20260103000001_enable_rls_policies.sql'"));
     assert!(finalizer.contains("FORCE ROW LEVEL SECURITY"));
     assert!(finalizer.contains("AND NOT relation.relforcerowsecurity"));
 }

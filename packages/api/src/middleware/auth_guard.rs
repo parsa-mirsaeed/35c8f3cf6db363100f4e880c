@@ -110,7 +110,7 @@ pub async fn auth_middleware(
 
         if !provider_response.status().is_success() {
             let status = provider_response.status();
-            if refresh_rejection_invalidates_session(status) {
+            if refresh_rejection_invalidates_session(status.as_u16()) {
                 REFRESH_RATE_LIMITER.record_failure(rate_key).await;
                 warn!(%status, "Refresh token was rejected");
                 return run_without_session(request, next, true).await;
@@ -175,14 +175,8 @@ fn bypass_session_middleware(path: &str) -> bool {
     matches!(path, LOGIN_PATH | LOGOUT_PATH)
 }
 
-fn refresh_rejection_invalidates_session(status: StatusCode) -> bool {
-    matches!(
-        status,
-        StatusCode::BAD_REQUEST
-            | StatusCode::UNAUTHORIZED
-            | StatusCode::FORBIDDEN
-            | StatusCode::UNPROCESSABLE_ENTITY
-    )
+fn refresh_rejection_invalidates_session(status: u16) -> bool {
+    matches!(status, 400 | 401 | 403 | 422)
 }
 
 async fn token_user_id(state: &AppState, token: &str) -> Result<String, SessionValidationError> {
@@ -242,7 +236,10 @@ mod tests {
             StatusCode::FORBIDDEN,
             StatusCode::UNPROCESSABLE_ENTITY,
         ] {
-            assert!(refresh_rejection_invalidates_session(status), "{status}");
+            assert!(
+                refresh_rejection_invalidates_session(status.as_u16()),
+                "{status}"
+            );
         }
 
         for status in [
@@ -252,7 +249,10 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE,
             StatusCode::GATEWAY_TIMEOUT,
         ] {
-            assert!(!refresh_rejection_invalidates_session(status), "{status}");
+            assert!(
+                !refresh_rejection_invalidates_session(status.as_u16()),
+                "{status}"
+            );
         }
     }
 }

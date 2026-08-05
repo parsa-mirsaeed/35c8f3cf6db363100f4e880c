@@ -19,10 +19,10 @@ concurrency:
 
 jobs:
   recover:
-    name: Apply guarded full-PR classifier correction
+    name: Apply guarded authorized executor type migration
     if: github.head_ref == 'agent/pr-03-transaction-scoped-rls'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,67 +30,213 @@ jobs:
           fetch-depth: 0
           show-progress: false
 
-      - name: Patch AI Change Proof classifier
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply exact source transformations
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
 
-          path = Path('.github/workflows/ci.yml')
+          def replace_exact(path, old, new, expected=1):
+              file = Path(path)
+              source = file.read_text()
+              count = source.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} occurrences, found {count}: {old!r}")
+              file.write_text(source.replace(old, new))
+
+          def replace_regex(path, pattern, replacement, expected=1):
+              file = Path(path)
+              source = file.read_text()
+              updated, count = re.subn(pattern, replacement, source, flags=re.S)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} regex matches, found {count}")
+              file.write_text(updated)
+
+          # Savepoint-backed repository helpers operate on the dereferenced
+          # PostgreSQL connection exposed by NestedAuthorizedTx.
+          replace_exact(
+              'packages/api/src/repositories/knowledge_asset_repository.rs',
+              'use sqlx::{Postgres, Row, Transaction};',
+              'use sqlx::{postgres::PgConnection, Row};',
+          )
+          replace_exact(
+              'packages/api/src/repositories/knowledge_asset_repository.rs',
+              "tx: &mut Transaction<'_, Postgres>,",
+              'tx: &mut PgConnection,',
+          )
+          replace_exact(
+              'packages/api/src/repositories/knowledge_asset_repository.rs',
+              '.execute(&mut **tx)',
+              '.execute(&mut *tx)',
+          )
+          path = Path('packages/api/src/repositories/knowledge_asset_repository.rs')
           source = path.read_text()
-          old = '''          comparison=repository
-          if [[ "$EVENT_NAME" == "pull_request" && "$EVENT_ACTION" == "synchronize" && -n "${BEFORE_SHA:-}" && "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]]; then
-            git diff --name-only "$BEFORE_SHA" "$HEAD_SHA" > changed-files.txt
-            comparison=commit
-          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
-            git diff --name-only "$BASE_SHA"..."$HEAD_SHA" > changed-files.txt
-            comparison=pull-request
-          elif git rev-parse HEAD^ >/dev/null 2>&1; then
-            git diff --name-only HEAD^ HEAD > changed-files.txt
-            comparison=commit
-          else
-            git ls-files > changed-files.txt
-          fi
+          if source.count('Self::append_audit_in_tx(\n            &mut tx,') < 1:
+              raise SystemExit('knowledge asset audit call sites were not found')
+          path.write_text(source.replace(
+              'Self::append_audit_in_tx(\n            &mut tx,',
+              'Self::append_audit_in_tx(\n            &mut *tx,',
+          ))
 
-          sort -u changed-files.txt -o changed-files.txt
+          replace_exact(
+              'packages/api/src/repositories/knowledge_ingestion_job_repository.rs',
+              'use sqlx::Row;',
+              'use sqlx::{postgres::PgConnection, Row};',
+          )
+          replace_exact(
+              'packages/api/src/repositories/knowledge_ingestion_job_repository.rs',
+              "tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,",
+              'tx: &mut PgConnection,',
+              expected=2,
+          )
+          replace_exact(
+              'packages/api/src/repositories/knowledge_ingestion_job_repository.rs',
+              '.execute(&mut **tx)',
+              '.execute(&mut *tx)',
+              expected=2,
+          )
+          path = Path('packages/api/src/repositories/knowledge_ingestion_job_repository.rs')
+          source = path.read_text()
+          if source.count('Self::lock_asset(&mut tx,') < 1:
+              raise SystemExit('knowledge ingestion lock call sites were not found')
+          source = source.replace('Self::lock_asset(&mut tx,', 'Self::lock_asset(&mut *tx,')
+          if source.count('Self::append_audit(\n            &mut tx,') < 1:
+              raise SystemExit('knowledge ingestion audit call sites were not found')
+          path.write_text(source.replace(
+              'Self::append_audit(\n            &mut tx,',
+              'Self::append_audit(\n            &mut *tx,',
+          ))
 
-          # A validation-rule change can alter which proof is required for every
-          # file in the pull request. Escalate it to the complete PR impact set.
-          if [[ "$EVENT_NAME" == "pull_request" ]] && grep -Eq '^\\.github/workflows/(ci|full-validation|package|production-foundation|air-gapped-appliance|mirror-final-proof)\\.yml$' changed-files.txt; then
-            git diff --name-only "$BASE_SHA"..."$HEAD_SHA" > changed-files.txt
-            sort -u changed-files.txt -o changed-files.txt
-            comparison=pull-request-validation
-          fi
-'''
-          new = '''          comparison=repository
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            # Classify the complete candidate on every PR update. A final docs or
-            # script-only commit must not hide earlier Rust/database changes.
-            git diff --name-only "$BASE_SHA"..."$HEAD_SHA" > changed-files.txt
-            comparison=pull-request
-          elif git rev-parse HEAD^ >/dev/null 2>&1; then
-            git diff --name-only HEAD^ HEAD > changed-files.txt
-            comparison=commit
-          else
-            git ls-files > changed-files.txt
-          fi
+          # Protected services accept the fail-closed executor facade, not PgPool.
+          replace_exact(
+              'packages/api/src/services/assignment_personalization_service.rs',
+              'use sqlx::PgPool;',
+              'use crate::rls_context::AuthorizedPool;',
+          )
+          replace_exact(
+              'packages/api/src/services/assignment_personalization_service.rs',
+              'Arc<PgPool>',
+              'Arc<AuthorizedPool>',
+              expected=2,
+          )
+          replace_exact(
+              'packages/api/src/services/student_context_service.rs',
+              'use sqlx::PgPool;',
+              'use crate::rls_context::AuthorizedPool;',
+          )
+          replace_exact(
+              'packages/api/src/services/student_context_service.rs',
+              'Arc<PgPool>',
+              'Arc<AuthorizedPool>',
+          )
+          replace_exact(
+              'packages/api/src/services/knowledge_asset_service.rs',
+              'use sqlx::{PgPool, Row};',
+              'use crate::rls_context::AuthorizedPool;\nuse sqlx::Row;',
+          )
+          replace_exact(
+              'packages/api/src/services/knowledge_asset_service.rs',
+              'Arc<PgPool>',
+              'Arc<AuthorizedPool>',
+              expected=2,
+          )
+          replace_exact(
+              'packages/api/src/services/material_vectorization_service.rs',
+              'use sqlx::PgPool;',
+              'use crate::rls_context::AuthorizedPool;',
+          )
+          replace_exact(
+              'packages/api/src/services/material_vectorization_service.rs',
+              'Arc<PgPool>',
+              'Arc<AuthorizedPool>',
+              expected=2,
+          )
 
-          sort -u changed-files.txt -o changed-files.txt
-'''
-          if source.count(old) != 1:
-              raise SystemExit('expected classifier block was not found exactly once')
-          source = source.replace(old, new)
-          old_scope = r'scripts/ci/(apply_migrations|verify_knowledge_schema|verify_knowledge_security)\.sh'
-          new_scope = r'scripts/ci/(apply_migrations|verify_knowledge_schema|verify_knowledge_security|verify_transaction_scoped_rls)\.sh'
-          if source.count(old_scope) != 1:
-              raise SystemExit('expected database scope expression was not found exactly once')
-          path.write_text(source.replace(old_scope, new_scope))
+          # Retire duplicated pool-scoped context helpers in dashboard functions.
+          dashboard = 'packages/api/src/server_functions/dashboard_functions.rs'
+          replace_exact(dashboard, 'use crate::rls_context::RlsContext;', 'use crate::rls_context::AuthorizedPool;')
+          replace_exact(
+              dashboard,
+              'use std::collections::HashMap;',
+              'use std::collections::HashMap;\n#[cfg(feature = "server")]\nuse std::sync::Arc;',
+          )
+          replace_regex(
+              dashboard,
+              r'// ==================== RLS Context Helper ====================.*?// ==================== Query Timing Helper ====================',
+              '''// ==================== RLS Context Helper ====================
+
+#[cfg(feature = "server")]
+async fn extract_user_with_rls() -> Result<(UserInfo, Arc<AuthorizedPool>), ServerFnError> {
+    crate::server_functions::rls_helpers::extract_user().await
+}
+
+#[cfg(feature = "server")]
+async fn extract_user_with_full_rls(
+) -> Result<(UserInfo, Arc<AuthorizedPool>), ServerFnError> {
+    crate::server_functions::rls_helpers::extract_user_with_full_rls().await
+}
+
+// ==================== Query Timing Helper ====================''',
+          )
+
+          # Governed knowledge authorization reuses middleware-owned transaction.
+          knowledge = 'packages/api/src/server_functions/knowledge_functions.rs'
+          replace_exact(knowledge, 'use crate::rls_context::RlsContext;', 'use crate::rls_context::AuthorizedPool;')
+          replace_exact(knowledge, 'pool: Arc<sqlx::PgPool>,', 'pool: Arc<AuthorizedPool>,')
+          replace_regex(
+              knowledge,
+              r'async fn authorize\(allowed_roles: &\[&str\]\) -> Result<AuthorizedActor, ServerFnError> \{.*?\n\}',
+              '''async fn authorize(allowed_roles: &[&str]) -> Result<AuthorizedActor, ServerFnError> {
+    let (user, pool) =
+        crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
+
+    if !allowed_roles
+        .iter()
+        .any(|allowed_role| *allowed_role == user.role.as_str())
+    {
+        return Err(ServerFnError::new("Forbidden: insufficient role"));
+    }
+
+    let user_id = Uuid::parse_str(&user.id)
+        .map_err(|_| ServerFnError::new("Invalid authenticated user ID"))?;
+    let school_id =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT school_id FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&*pool)
+            .await
+            .map_err(|error| ServerFnError::new(format!("Failed to resolve school: {error}")))?
+            .flatten();
+
+    Ok(AuthorizedActor {
+        user_id,
+        school_id,
+        pool,
+    })
+}''',
+          )
+
+          # Remove temporary workflow scaffolding in the same guarded commit.
+          Path('.github/workflows/pr03-recover-approved-sources.yml').unlink()
+          Path('.github/workflows/pr03-fix-ai-classifier.yml').unlink()
           PY
-          rm -f .github/workflows/pr03-recover-approved-sources.yml
-          rm -f .github/workflows/pr03-fix-ai-classifier.yml
 
-      - name: Commit guarded classifier correction
+          rustfmt --edition 2021 \
+            packages/api/src/repositories/knowledge_asset_repository.rs \
+            packages/api/src/repositories/knowledge_ingestion_job_repository.rs \
+            packages/api/src/services/assignment_personalization_service.rs \
+            packages/api/src/services/student_context_service.rs \
+            packages/api/src/services/knowledge_asset_service.rs \
+            packages/api/src/services/material_vectorization_service.rs \
+            packages/api/src/server_functions/dashboard_functions.rs \
+            packages/api/src/server_functions/knowledge_functions.rs
+
+      - name: Commit guarded executor migration
         shell: bash
         run: |
           set -euo pipefail
@@ -99,9 +245,16 @@ jobs:
           git add -A
           changed="$(git diff --cached --name-only | LC_ALL=C sort)"
           expected="$(printf '%s\n' \
-            '.github/workflows/ci.yml' \
             '.github/workflows/pr03-fix-ai-classifier.yml' \
-            '.github/workflows/pr03-recover-approved-sources.yml' | LC_ALL=C sort)"
+            '.github/workflows/pr03-recover-approved-sources.yml' \
+            'packages/api/src/repositories/knowledge_asset_repository.rs' \
+            'packages/api/src/repositories/knowledge_ingestion_job_repository.rs' \
+            'packages/api/src/server_functions/dashboard_functions.rs' \
+            'packages/api/src/server_functions/knowledge_functions.rs' \
+            'packages/api/src/services/assignment_personalization_service.rs' \
+            'packages/api/src/services/knowledge_asset_service.rs' \
+            'packages/api/src/services/material_vectorization_service.rs' \
+            'packages/api/src/services/student_context_service.rs' | LC_ALL=C sort)"
           test "${changed}" = "${expected}"
-          git commit -m 'ci: classify complete pull request impact'
+          git commit -m 'fix(api): complete authorized executor type migration'
           git push origin HEAD:agent/pr-03-transaction-scoped-rls

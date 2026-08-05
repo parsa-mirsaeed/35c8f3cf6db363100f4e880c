@@ -38,7 +38,7 @@ impl NotificationRepository {
         .bind(&request.notification_type)
         .bind(&request.resource_type)
         .bind(request.resource_id)
-        .fetch_one(&self.pool)
+        .fetch_one(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to create notification: {}", e)))?;
 
@@ -64,7 +64,7 @@ impl NotificationRepository {
         .bind(user_uuid)
         .bind(limit)
         .bind(offset)
-        .fetch_all(&self.pool)
+        .fetch_all(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch notifications: {}", e)))?;
 
@@ -88,7 +88,7 @@ impl NotificationRepository {
         )
         .bind(user_uuid)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch unread notifications: {}", e)))?;
 
@@ -108,7 +108,7 @@ impl NotificationRepository {
             "#,
         )
         .bind(user_uuid)
-        .fetch_one(&self.pool)
+        .fetch_one(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch notification summary: {}", e)))?;
 
@@ -130,7 +130,7 @@ impl NotificationRepository {
         )
         .bind(notification_id)
         .bind(user_uuid)
-        .execute(&self.pool)
+        .execute(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to mark notification as read: {}", e)))?;
 
@@ -152,7 +152,7 @@ impl NotificationRepository {
             "#,
         )
         .bind(user_uuid)
-        .execute(&self.pool)
+        .execute(&*self.pool)
         .await
         .map_err(|e| {
             AppError::Internal(format!("Failed to mark all notifications as read: {}", e))
@@ -172,7 +172,7 @@ impl NotificationRepository {
         )
         .bind(notification_id)
         .bind(user_uuid)
-        .execute(&self.pool)
+        .execute(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to delete notification: {}", e)))?;
 
@@ -193,7 +193,7 @@ impl NotificationRepository {
             "#,
         )
         .bind(user_uuid)
-        .execute(&self.pool)
+        .execute(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to delete read notifications: {}", e)))?;
 

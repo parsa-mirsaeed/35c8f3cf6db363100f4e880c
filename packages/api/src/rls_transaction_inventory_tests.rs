@@ -111,3 +111,21 @@ fn auth_middleware_owns_the_request_transaction_boundary() {
     assert!(app_state.contains("pub raw_pool: Arc<PgPool>"));
     assert!(app_state.contains("pub pool: Arc<AuthorizedPool>"));
 }
+
+#[test]
+fn forced_rls_finalizer_waits_for_the_legacy_policy_migration() {
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let finalizer = fs::read_to_string(
+        repository_root.join("migrations/20260805121600_finalize_transaction_scoped_rls.sql"),
+    )
+    .expect("read transaction-scoped RLS finalizer");
+
+    assert!(finalizer.contains(
+        "WHERE path = 'migrations/20260103000001_enable_rls_policies.sql'"
+    ));
+    assert!(finalizer.contains("FORCE ROW LEVEL SECURITY"));
+    assert!(finalizer.contains("AND NOT relation.relforcerowsecurity"));
+}

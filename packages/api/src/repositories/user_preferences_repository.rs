@@ -29,7 +29,7 @@ impl UserPreferencesRepository {
             "SELECT * FROM user_preferences WHERE user_id = $1",
         )
         .bind(user_uuid)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch user preferences: {}", e)))?;
 
@@ -46,7 +46,7 @@ impl UserPreferencesRepository {
             "#,
         )
         .bind(user_uuid)
-        .fetch_one(&self.pool)
+        .fetch_one(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to create user preferences: {}", e)))?;
 
@@ -108,7 +108,7 @@ impl UserPreferencesRepository {
         query_builder = query_builder.bind(user_uuid);
 
         let prefs = query_builder
-            .fetch_one(&self.pool)
+            .fetch_one(&*self.pool)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to update general settings: {}", e)))?;
 
@@ -211,9 +211,12 @@ impl UserPreferencesRepository {
 
         query_builder = query_builder.bind(user_uuid);
 
-        let prefs = query_builder.fetch_one(&self.pool).await.map_err(|e| {
-            AppError::Internal(format!("Failed to update notification preferences: {}", e))
-        })?;
+        let prefs = query_builder
+            .fetch_one(&*self.pool)
+            .await
+            .map_err(|e| {
+                AppError::Internal(format!("Failed to update notification preferences: {}", e))
+            })?;
 
         Ok(prefs)
     }

@@ -21,6 +21,9 @@ use crate::session_security::{
 
 static REFRESH_RATE_LIMITER: Lazy<AuthRateLimiter> = Lazy::new(AuthRateLimiter::default);
 
+const LOGIN_PATH: &str = "/api/auth/login";
+const LOGOUT_PATH: &str = "/api/auth/logout";
+
 #[derive(Debug, Deserialize)]
 struct RefreshGrantResponse {
     access_token: String,
@@ -36,7 +39,7 @@ pub async fn auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if request.uri().path() == "/api/auth/logout" {
+    if bypass_session_middleware(request.uri().path()) {
         return Ok(next.run(request).await);
     }
 
@@ -79,7 +82,7 @@ pub async fn auth_middleware(
                 retry_after_seconds = limit.retry_after_seconds,
                 "Refresh rate limit exceeded"
             );
-            return run_without_session(request, next, true).await;
+            return run_without_session(request, next, false).await;
         }
 
         let config = &state.supabase_config;
@@ -100,39 +103,48 @@ pub async fn auth_middleware(
         let provider_response = match provider_response {
             Ok(response) => response,
             Err(error) => {
-                REFRESH_RATE_LIMITER.record_failure(rate_key).await;
-                error!(%error, "Refresh request failed");
-                return run_without_session(request, next, true).await;
+                error!(%error, "Refresh request dependency unavailable");
+                return run_without_session(request, next, false).await;
             }
         };
 
         if !provider_response.status().is_success() {
             let status = provider_response.status();
-            REFRESH_RATE_LIMITER.record_failure(rate_key).await;
-            warn!(%status, "Refresh token was rejected");
-            return run_without_session(request, next, true).await;
+            let status_code = status.as_u16();
+            let invalidates_session = refresh_rejection_invalidates_session(status_code);
+            if refresh_response_records_failure(status_code) {
+                REFRESH_RATE_LIMITER.record_failure(rate_key).await;
+            }
+            if invalidates_session {
+                warn!(%status, "Refresh token was rejected");
+                return run_without_session(request, next, true).await;
+            }
+
+            if status_code == 429 {
+                warn!(%status, "Refresh provider rate limited the session");
+            } else {
+                error!(%status, "Refresh provider dependency unavailable");
+            }
+            return run_without_session(request, next, false).await;
         }
 
         let grant = match provider_response.json::<RefreshGrantResponse>().await {
             Ok(grant) => grant,
             Err(error) => {
-                REFRESH_RATE_LIMITER.record_failure(rate_key).await;
                 error!(%error, "Refresh provider returned an invalid response");
-                return run_without_session(request, next, true).await;
+                return run_without_session(request, next, false).await;
             }
         };
         let Some(new_refresh_token) = grant.refresh_token.filter(|value| !value.is_empty()) else {
-            REFRESH_RATE_LIMITER.record_failure(rate_key).await;
             error!("Refresh provider omitted rotated refresh token");
-            return run_without_session(request, next, true).await;
+            return run_without_session(request, next, false).await;
         };
 
         let user_id = match token_user_id(&state, &grant.access_token).await {
             Ok(user_id) => user_id,
             Err(SessionValidationError::AccountUnavailable) => {
-                REFRESH_RATE_LIMITER.record_failure(rate_key).await;
-                warn!("Refresh provider returned an invalid access token");
-                return run_without_session(request, next, true).await;
+                error!("Refresh provider returned an invalid access token");
+                return run_without_session(request, next, false).await;
             }
             Err(SessionValidationError::DependencyUnavailable) => {
                 error!("Refreshed-token validation dependency unavailable");
@@ -165,6 +177,18 @@ pub async fn auth_middleware(
 
     debug!("No valid authenticated session found");
     run_without_session(request, next, clear_invalid_cookies).await
+}
+
+fn bypass_session_middleware(path: &str) -> bool {
+    matches!(path, LOGIN_PATH | LOGOUT_PATH)
+}
+
+fn refresh_rejection_invalidates_session(status: u16) -> bool {
+    matches!(status, 400 | 401 | 403 | 422)
+}
+
+fn refresh_response_records_failure(status: u16) -> bool {
+    refresh_rejection_invalidates_session(status) || status == 429
 }
 
 async fn token_user_id(state: &AppState, token: &str) -> Result<String, SessionValidationError> {
@@ -202,4 +226,58 @@ async fn run_without_session(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_and_logout_bypass_session_cookie_cleanup() {
+        assert!(bypass_session_middleware(LOGIN_PATH));
+        assert!(bypass_session_middleware(LOGOUT_PATH));
+        assert!(!bypass_session_middleware("/api/auth/whoami"));
+        assert!(!bypass_session_middleware("/protected"));
+    }
+
+    #[test]
+    fn only_explicit_refresh_rejections_invalidate_session_cookies() {
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ] {
+            assert!(
+                refresh_rejection_invalidates_session(status.as_u16()),
+                "{status}"
+            );
+        }
+
+        for status in [
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            assert!(
+                !refresh_rejection_invalidates_session(status.as_u16()),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_throttling_feeds_local_backoff_without_invalidating_session() {
+        assert!(refresh_response_records_failure(
+            StatusCode::TOO_MANY_REQUESTS.as_u16()
+        ));
+        assert!(!refresh_rejection_invalidates_session(
+            StatusCode::TOO_MANY_REQUESTS.as_u16()
+        ));
+        assert!(!refresh_response_records_failure(
+            StatusCode::SERVICE_UNAVAILABLE.as_u16()
+        ));
+    }
 }

@@ -97,6 +97,23 @@ fn production_repositories_use_the_authorized_executor_facade() {
 }
 
 #[test]
+fn background_worker_uses_bounded_authorized_transactions() {
+    let worker = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/services/knowledge_ingestion_worker.rs"),
+    )
+    .expect("read knowledge ingestion worker");
+
+    assert!(worker.contains("AuthorizedActor::system_queue"));
+    assert!(worker.contains("AuthorizedActor::system_job"));
+    assert!(worker.contains("AuthorizedTx::begin"));
+    assert!(worker.contains("raw_pool: Arc<PgPool>"));
+    assert!(worker.contains("pool: Arc<AuthorizedPool>"));
+    assert!(worker.contains("claim_next_embedding(&pool)"));
+    assert!(worker.contains("recover_stale_embedding_jobs(&pool"));
+}
+
+#[test]
 fn auth_middleware_owns_the_request_transaction_boundary() {
     let middleware = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/middleware/auth_guard.rs"),
@@ -142,6 +159,7 @@ fn database_security_probe_executes_role_denials_and_quiet_context_checks() {
     assert!(verifier.contains("SET ROLE :\"app_role\";\n${sql};"));
     assert!(verifier.contains("--quiet"));
     assert!(verifier.contains("SET LOCAL app.user_id"));
+    assert!(verifier.contains("claim queue without bounded system context"));
     assert!(verifier.contains("context_after_commit"));
     assert!(verifier.contains("context_after_rollback"));
 }
@@ -154,6 +172,7 @@ fn temporary_pr03_repair_scaffolding_cannot_return() {
         .expect("workspace root");
 
     for relative_path in [
+        ".github/pr03-worker-fix-trigger",
         ".github/workflows/pr03-recover-approved-sources.yml",
         ".github/workflows/pr03-fix-ai-classifier.yml",
         "scripts/ci/pr03_apply_executor_migration.py",
@@ -168,4 +187,5 @@ fn temporary_pr03_repair_scaffolding_cannot_return() {
         .expect("read AI Change Proof workflow");
     assert!(!ci.contains("pr03-apply-executor-migration"));
     assert!(!ci.contains("Apply guarded PR-03 executor migration"));
+    assert!(!ci.contains("pr03-apply-worker-rls"));
 }

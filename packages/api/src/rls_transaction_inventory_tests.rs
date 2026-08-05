@@ -127,3 +127,22 @@ fn forced_rls_finalizer_waits_for_the_legacy_policy_migration() {
     assert!(finalizer.contains("FORCE ROW LEVEL SECURITY"));
     assert!(finalizer.contains("AND NOT relation.relforcerowsecurity"));
 }
+
+#[test]
+fn database_security_probe_executes_role_denials_and_quiet_context_checks() {
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let verifier = fs::read_to_string(
+        repository_root.join("scripts/ci/verify_transaction_scoped_rls.sh"),
+    )
+    .expect("read transaction-scoped RLS verifier");
+
+    assert!(!verifier.contains("--command=\"SET ROLE"));
+    assert!(verifier.contains("SET ROLE :\"app_role\";\n${sql};"));
+    assert!(verifier.contains("--quiet"));
+    assert!(verifier.contains("SET LOCAL app.user_id"));
+    assert!(verifier.contains("context_after_commit"));
+    assert!(verifier.contains("context_after_rollback"));
+}

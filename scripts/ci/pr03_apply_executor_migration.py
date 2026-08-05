@@ -10,11 +10,12 @@ def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
     if old_count == expected:
         file.write_text(source.replace(old, new))
         return
-    if old_count == 0 and source.count(new) >= expected:
+    migrated_lines = [line.strip() for line in new.splitlines() if line.strip()]
+    if old_count == 0 and all(line in source for line in migrated_lines):
         return
     raise SystemExit(
         f"{path}: expected {expected} old or migrated occurrences; "
-        f"found old={old_count}, new={source.count(new)}: {old!r}"
+        f"found old={old_count}, migrated_lines={migrated_lines!r}: {old!r}"
     )
 
 
@@ -25,7 +26,8 @@ def replace_regex(path: str, pattern: str, replacement: str, expected: int = 1) 
     if count == expected:
         file.write_text(updated)
         return
-    if count == 0 and replacement in source:
+    replacement_lines = [line.strip() for line in replacement.splitlines() if line.strip()]
+    if count == 0 and all(line in source for line in replacement_lines):
         return
     raise SystemExit(f"{path}: expected {expected} regex or migrated replacement, found {count}")
 

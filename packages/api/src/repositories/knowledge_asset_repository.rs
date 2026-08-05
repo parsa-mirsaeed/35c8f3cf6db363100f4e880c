@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Persistence boundary for governed knowledge assets.
 
 use crate::repositories::{BaseRepository, Repository, RepositoryError, RepositoryResult};

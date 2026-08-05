@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Dashboard server functions for role-specific data.
 //!
 //! Provides endpoints for student, teacher, and parent dashboards to fetch

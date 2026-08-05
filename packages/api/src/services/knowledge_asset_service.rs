@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Application service for reviewed knowledge ingestion and filtered retrieval.
 
 use crate::repositories::{

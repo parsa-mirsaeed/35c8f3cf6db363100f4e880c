@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Assignment personalization orchestration.
 //!
 //! The service retrieves only authorized local context, passes a minimized prompt

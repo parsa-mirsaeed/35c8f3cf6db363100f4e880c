@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! School-scoped material vectorization and retrieval.
 //!
 //! External retries, quotas, and circuit breaking belong to the local AI Gateway.

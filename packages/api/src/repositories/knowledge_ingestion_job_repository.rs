@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 use crate::repositories::{
     BaseRepository, PersistedChunk, Repository, RepositoryError, RepositoryResult,
 };

@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Student Context Service for aggregating student data for LLM personalization.
 //!
 //! This service gathers all relevant information about a student including:

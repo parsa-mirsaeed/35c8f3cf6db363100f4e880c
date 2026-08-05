@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Role-scoped server functions for the governed knowledge workflow.
 
 use dioxus::prelude::*;

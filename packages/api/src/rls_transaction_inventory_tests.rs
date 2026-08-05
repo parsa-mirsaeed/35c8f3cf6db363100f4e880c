@@ -134,10 +134,9 @@ fn database_security_probe_executes_role_denials_and_quiet_context_checks() {
         .parent()
         .and_then(Path::parent)
         .expect("workspace root");
-    let verifier = fs::read_to_string(
-        repository_root.join("scripts/ci/verify_transaction_scoped_rls.sh"),
-    )
-    .expect("read transaction-scoped RLS verifier");
+    let verifier =
+        fs::read_to_string(repository_root.join("scripts/ci/verify_transaction_scoped_rls.sh"))
+            .expect("read transaction-scoped RLS verifier");
 
     assert!(!verifier.contains("--command=\"SET ROLE"));
     assert!(verifier.contains("SET ROLE :\"app_role\";\n${sql};"));

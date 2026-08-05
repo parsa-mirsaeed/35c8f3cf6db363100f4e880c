@@ -211,12 +211,9 @@ impl UserPreferencesRepository {
 
         query_builder = query_builder.bind(user_uuid);
 
-        let prefs = query_builder
-            .fetch_one(&*self.pool)
-            .await
-            .map_err(|e| {
-                AppError::Internal(format!("Failed to update notification preferences: {}", e))
-            })?;
+        let prefs = query_builder.fetch_one(&*self.pool).await.map_err(|e| {
+            AppError::Internal(format!("Failed to update notification preferences: {}", e))
+        })?;
 
         Ok(prefs)
     }

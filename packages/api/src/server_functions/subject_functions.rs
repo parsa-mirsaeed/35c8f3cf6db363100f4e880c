@@ -58,10 +58,17 @@ pub async fn get_by_id(id: String) -> Result<Option<Subject>, ServerFnError> {
         current_user().await?;
         let state = extract_server_state()?;
         let subject_id = Uuid::parse_str(&id).map_err(|_| ServerFnError::new("Invalid ID"))?;
-        match state.services.subject.find_by_id(SubjectId::from(subject_id)).await {
+        match state
+            .services
+            .subject
+            .find_by_id(SubjectId::from(subject_id))
+            .await
+        {
             Ok(subject) => Ok(Some(subject)),
             Err(crate::repositories::RepositoryError::NotFound { .. }) => Ok(None),
-            Err(error) => Err(ServerFnError::new(format!("Failed to fetch subject: {error}"))),
+            Err(error) => Err(ServerFnError::new(format!(
+                "Failed to fetch subject: {error}"
+            ))),
         }
     }
 
@@ -103,7 +110,10 @@ pub async fn update(
         state
             .services
             .subject
-            .update(SubjectId::from(subject_id), UpdateSubjectRequest { code, name })
+            .update(
+                SubjectId::from(subject_id),
+                UpdateSubjectRequest { code, name },
+            )
             .await
             .map_err(|error| ServerFnError::new(format!("Failed to update subject: {error}")))
     }

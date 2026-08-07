@@ -937,13 +937,62 @@ mod tests {
             .expect("insert schools");
 
         for (id, name, email, role_id, school_id, active) in [
-            (teacher_a_user, "Teacher A", format!("teacher-a-{suffix}@example.test"), teacher_role, school_a, true),
-            (teacher_a2_user, "Teacher A2", format!("teacher-a2-{suffix}@example.test"), teacher_role, school_a, true),
-            (teacher_b_user, "Teacher B", format!("teacher-b-{suffix}@example.test"), teacher_role, school_b, true),
-            (inactive_teacher_user, "Inactive Teacher", format!("teacher-inactive-{suffix}@example.test"), teacher_role, school_a, false),
-            (student_a_user, "Student A", format!("student-a-{suffix}@example.test"), student_role, school_a, true),
-            (student_a2_user, "Student A2", format!("student-a2-{suffix}@example.test"), student_role, school_a, true),
-            (student_b_user, "Student B", format!("student-b-{suffix}@example.test"), student_role, school_b, true),
+            (
+                teacher_a_user,
+                "Teacher A",
+                format!("teacher-a-{suffix}@example.test"),
+                teacher_role,
+                school_a,
+                true,
+            ),
+            (
+                teacher_a2_user,
+                "Teacher A2",
+                format!("teacher-a2-{suffix}@example.test"),
+                teacher_role,
+                school_a,
+                true,
+            ),
+            (
+                teacher_b_user,
+                "Teacher B",
+                format!("teacher-b-{suffix}@example.test"),
+                teacher_role,
+                school_b,
+                true,
+            ),
+            (
+                inactive_teacher_user,
+                "Inactive Teacher",
+                format!("teacher-inactive-{suffix}@example.test"),
+                teacher_role,
+                school_a,
+                false,
+            ),
+            (
+                student_a_user,
+                "Student A",
+                format!("student-a-{suffix}@example.test"),
+                student_role,
+                school_a,
+                true,
+            ),
+            (
+                student_a2_user,
+                "Student A2",
+                format!("student-a2-{suffix}@example.test"),
+                student_role,
+                school_a,
+                true,
+            ),
+            (
+                student_b_user,
+                "Student B",
+                format!("student-b-{suffix}@example.test"),
+                student_role,
+                school_b,
+                true,
+            ),
         ] {
             sqlx::query(
                 r#"
@@ -1163,21 +1212,33 @@ mod tests {
         assert!(run_as(
             pool.as_ref(),
             actor(teacher_a_user, "Teacher", school_a),
-            repository.authorize_personalization_target(actor_a, assignment.id, student_a_id.into()),
+            repository.authorize_personalization_target(
+                actor_a,
+                assignment.id,
+                student_a_id.into()
+            ),
         )
         .await
         .is_ok());
         assert!(run_as(
             pool.as_ref(),
             actor(teacher_a_user, "Teacher", school_a),
-            repository.authorize_personalization_target(actor_a, assignment.id, student_a2_id.into()),
+            repository.authorize_personalization_target(
+                actor_a,
+                assignment.id,
+                student_a2_id.into()
+            ),
         )
         .await
         .is_err());
         assert!(run_as(
             pool.as_ref(),
             actor(teacher_a_user, "Teacher", school_a),
-            repository.authorize_personalization_target(actor_a, assignment.id, student_b_id.into()),
+            repository.authorize_personalization_target(
+                actor_a,
+                assignment.id,
+                student_b_id.into()
+            ),
         )
         .await
         .is_err());

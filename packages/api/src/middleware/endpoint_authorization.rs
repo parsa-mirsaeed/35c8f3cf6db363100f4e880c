@@ -107,9 +107,7 @@ pub(crate) fn authorize_path(
 
     // Browser page/static routes are not API authority boundaries. Explicit
     // direct API/health routes and every Dioxus server function are inventoried.
-    if !normalized.starts_with(API_PREFIX)
-        && !matches!(normalized, "/healthz" | "/readyz")
-    {
+    if !normalized.starts_with(API_PREFIX) && !matches!(normalized, "/healthz" | "/readyz") {
         return EndpointAuthorizationDecision::Allow;
     }
 
@@ -137,10 +135,7 @@ pub(crate) fn authorize_path(
     }
 }
 
-pub async fn endpoint_authorization_middleware(
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn endpoint_authorization_middleware(request: Request, next: Next) -> Response {
     let role = request
         .extensions()
         .get::<crate::domain::UserInfo>()

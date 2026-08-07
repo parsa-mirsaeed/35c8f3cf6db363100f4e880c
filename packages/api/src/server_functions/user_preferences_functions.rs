@@ -53,7 +53,9 @@ pub async fn get_user_preferences() -> Result<UserPreferences, ServerFnError> {
     }
 
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("This function can only be called on the server"))
+    Err(ServerFnError::new(
+        "This function can only be called on the server",
+    ))
 }
 
 #[server(endpoint = "user_preferences/update_general")]
@@ -72,7 +74,9 @@ pub async fn update_general_settings(
     }
 
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("This function can only be called on the server"))
+    Err(ServerFnError::new(
+        "This function can only be called on the server",
+    ))
 }
 
 #[server(endpoint = "user_preferences/update_notifications")]
@@ -91,5 +95,7 @@ pub async fn update_notification_preferences(
     }
 
     #[cfg(not(feature = "server"))]
-    Err(ServerFnError::new("This function can only be called on the server"))
+    Err(ServerFnError::new(
+        "This function can only be called on the server",
+    ))
 }

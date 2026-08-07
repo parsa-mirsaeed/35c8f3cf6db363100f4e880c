@@ -40,7 +40,12 @@ async fn require_school_manager() -> Result<(crate::domain::UserInfo, SchoolId),
         .find_with_role_by_id(user_id)
         .await
         .map_err(|_| ServerFnError::new("Unauthorized"))?;
-    if !current.is_active || !matches!(current.role_name.to_string().as_str(), "SchoolManager" | "admin") {
+    if !current.is_active
+        || !matches!(
+            current.role_name.to_string().as_str(),
+            "SchoolManager" | "admin"
+        )
+    {
         return Err(ServerFnError::new("Forbidden: SchoolManager role required"));
     }
     Ok((user, current.school_id))
@@ -100,8 +105,15 @@ pub async fn get_by_id(id: String) -> Result<Option<StudentResponse>, ServerFnEr
         let student_id: StudentId = Uuid::parse_str(&id)
             .map_err(|_| ServerFnError::new("Invalid ID"))?
             .into();
-        match state.services.student.find_with_user_by_id(student_id).await {
-            Ok(student) if student.school_id == school_id => Ok(Some(StudentResponse::from(student))),
+        match state
+            .services
+            .student
+            .find_with_user_by_id(student_id)
+            .await
+        {
+            Ok(student) if student.school_id == school_id => {
+                Ok(Some(StudentResponse::from(student)))
+            }
             Ok(_) | Err(crate::repositories::RepositoryError::NotFound { .. }) => Ok(None),
             Err(error) => Err(ServerFnError::new(error.to_string())),
         }
@@ -136,7 +148,10 @@ pub async fn create(data: CreateStudentRequest) -> Result<StudentResponse, Serve
                 .find_with_role_by_id(parent_id)
                 .await
                 .map_err(|_| ServerFnError::new("Parent not found"))?;
-            if parent.school_id != school_id || parent.role_name.to_string() != "Parent" || !parent.is_active {
+            if parent.school_id != school_id
+                || parent.role_name.to_string() != "Parent"
+                || !parent.is_active
+            {
                 return Err(ServerFnError::new("Forbidden: invalid parent target"));
             }
         }
@@ -163,7 +178,10 @@ pub async fn create(data: CreateStudentRequest) -> Result<StudentResponse, Serve
 }
 
 #[server(endpoint = "students/update")]
-pub async fn update(_id: String, _data: serde_json::Value) -> Result<StudentResponse, ServerFnError> {
+pub async fn update(
+    _id: String,
+    _data: serde_json::Value,
+) -> Result<StudentResponse, ServerFnError> {
     Err(ServerFnError::new("Endpoint unavailable"))
 }
 

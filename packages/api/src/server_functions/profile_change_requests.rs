@@ -112,6 +112,21 @@ async fn response_for_request(
         .await
         .map_err(|_| ServerFnError::new("Requester not found"))?
         .ok_or_else(|| ServerFnError::new("Requester not found"))?;
+    let decided_by = match request.decided_by {
+        Some(decider_id) => {
+            let decider = user_repo
+                .find_by_id(decider_id)
+                .await
+                .map_err(|_| ServerFnError::new("Decider not found"))?
+                .ok_or_else(|| ServerFnError::new("Decider not found"))?;
+            Some(crate::models::profile_change_request::UserInfo {
+                id: decider.id,
+                name: decider.name,
+                email: decider.email,
+            })
+        }
+        None => None,
+    };
 
     Ok(ProfileChangeRequestResponse {
         id: request.id,
@@ -127,7 +142,7 @@ async fn response_for_request(
             email: requester.email,
         },
         status: request.status,
-        decided_by: request.decided_by,
+        decided_by,
         decided_at: request.decided_at,
         created_at: request.created_at,
     })
@@ -270,10 +285,14 @@ mod tests {
             "status",
             "decided_by",
         ] {
-            let payload = serde_json::json!({ forbidden: "attacker-controlled" });
+            let mut payload = serde_json::Map::new();
+            payload.insert(
+                forbidden.to_string(),
+                serde_json::Value::String("attacker-controlled".to_string()),
+            );
             #[cfg(feature = "server")]
             assert!(
-                validate_profile_diff(&payload).is_err(),
+                validate_profile_diff(&serde_json::Value::Object(payload)).is_err(),
                 "accepted {forbidden}"
             );
         }

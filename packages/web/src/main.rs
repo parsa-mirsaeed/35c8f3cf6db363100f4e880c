@@ -113,6 +113,11 @@ async fn main() {
         .layer(axum::middleware::from_fn(
             api::middleware::block_legacy_teacher_material_ingestion,
         ))
+        // Axum applies later layers first. Authentication therefore resolves the
+        // canonical active session before this deny-by-default endpoint policy.
+        .layer(axum::middleware::from_fn(
+            api::middleware::endpoint_authorization_middleware,
+        ))
         .layer(axum::middleware::from_fn(
             api::middleware::auth_guard::auth_middleware,
         ))

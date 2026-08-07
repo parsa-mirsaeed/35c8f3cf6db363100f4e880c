@@ -134,8 +134,8 @@ pub async fn get_parents_by_school(school_id: String) -> Result<Vec<ParentOption
     #[cfg(feature = "server")]
     {
         let authorized_school = manager_school_id().await?;
-        let requested_school = Uuid::parse_str(&school_id)
-            .map_err(|_| ServerFnError::new("Invalid school ID"))?;
+        let requested_school =
+            Uuid::parse_str(&school_id).map_err(|_| ServerFnError::new("Invalid school ID"))?;
         if Uuid::from(authorized_school) != requested_school {
             return Err(ServerFnError::new("Forbidden"));
         }

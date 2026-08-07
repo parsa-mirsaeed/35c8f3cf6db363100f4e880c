@@ -65,7 +65,8 @@ fn parse_manifest() -> Vec<ManifestRow> {
 
 fn active_server_function_modules() -> Vec<PathBuf> {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server_functions");
-    let mod_source = fs::read_to_string(directory.join("mod.rs")).expect("read server function mod");
+    let mod_source =
+        fs::read_to_string(directory.join("mod.rs")).expect("read server function mod");
     let mut modules = mod_source
         .lines()
         .filter_map(|line| {
@@ -85,9 +86,9 @@ fn discover_endpoints(source: &str, file_name: &str) -> Vec<String> {
     let mut remaining = source;
     while let Some(start) = remaining.find("#[server") {
         let annotation = &remaining[start..];
-        let end = annotation.find(']').unwrap_or_else(|| {
-            panic!("unterminated #[server] annotation in {file_name}")
-        });
+        let end = annotation
+            .find(']')
+            .unwrap_or_else(|| panic!("unterminated #[server] annotation in {file_name}"));
         let annotation = &annotation[..=end];
         let marker = "endpoint = \"";
         let endpoint_start = annotation.find(marker).unwrap_or_else(|| {
@@ -96,9 +97,9 @@ fn discover_endpoints(source: &str, file_name: &str) -> Vec<String> {
             )
         });
         let value = &annotation[endpoint_start + marker.len()..];
-        let endpoint_end = value.find('"').unwrap_or_else(|| {
-            panic!("unterminated endpoint path in {file_name}: {annotation}")
-        });
+        let endpoint_end = value
+            .find('"')
+            .unwrap_or_else(|| panic!("unterminated endpoint path in {file_name}: {annotation}"));
         endpoints.push(value[..endpoint_end].to_string());
         remaining = &remaining[start + end + 1..];
     }
@@ -164,7 +165,10 @@ fn endpoint_manifest_metadata_is_complete_and_exceptions_expire() {
         assert!(!row.object_scope.is_empty());
         assert!(matches!(row.access.as_str(), "read" | "write"));
         assert!(!row.resource_class.is_empty());
-        assert!(matches!(row.audit.as_str(), "none" | "security" | "required"));
+        assert!(matches!(
+            row.audit.as_str(),
+            "none" | "security" | "required"
+        ));
         assert!(!row.owner.is_empty());
         assert!(
             keys.insert((row.kind.clone(), row.endpoint.clone())),
@@ -210,7 +214,10 @@ fn every_manifested_endpoint_has_positive_and_negative_function_authorization() 
         authorize_path, EndpointAuthorizationDecision as Decision,
     };
 
-    for row in parse_manifest().into_iter().filter(|row| row.kind == "server") {
+    for row in parse_manifest()
+        .into_iter()
+        .filter(|row| row.kind == "server")
+    {
         let path = format!("/api/{}", row.endpoint);
         match row.policy.as_str() {
             "Public" => assert_eq!(authorize_path(&path, None), Decision::Allow),
@@ -265,13 +272,11 @@ fn direct_browser_routes_are_manifested_and_policy_runs_after_session_resolution
         .filter(|row| row.kind == "route")
         .map(|row| row.endpoint.as_str())
         .collect::<BTreeSet<_>>();
-    for required in [
-        "/healthz",
-        "/readyz",
-        "/api/auth/login",
-        "/api/auth/logout",
-    ] {
-        assert!(routes.contains(required), "missing direct route policy for {required}");
+    for required in ["/healthz", "/readyz", "/api/auth/login", "/api/auth/logout"] {
+        assert!(
+            routes.contains(required),
+            "missing direct route policy for {required}"
+        );
     }
 
     let web_main = fs::read_to_string(
@@ -282,7 +287,10 @@ fn direct_browser_routes_are_manifested_and_policy_runs_after_session_resolution
     )
     .expect("read web main");
     for route in ["/healthz", "/readyz", "/api/auth/login", "/api/auth/logout"] {
-        assert!(web_main.contains(route), "manifested route is not registered: {route}");
+        assert!(
+            web_main.contains(route),
+            "manifested route is not registered: {route}"
+        );
     }
     let policy_position = web_main
         .find("endpoint_authorization_middleware")
@@ -318,7 +326,8 @@ fn active_browser_endpoints_do_not_accept_identity_tokens_as_arguments() {
 fn disabled_placeholder_modules_cannot_return_fake_success() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server_functions");
     for file in ["class_section_functions.rs", "invite_functions.rs"] {
-        let source = fs::read_to_string(directory.join(file)).expect("read disabled endpoint source");
+        let source =
+            fs::read_to_string(directory.join(file)).expect("read disabled endpoint source");
         for forbidden in [
             "TODO: Implement",
             "status\": \"created",
@@ -339,8 +348,8 @@ fn disabled_placeholder_modules_cannot_return_fake_success() {
 #[test]
 fn session_identity_cannot_be_supplied_by_browser_arguments() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server_functions");
-    let auth_source =
-        fs::read_to_string(directory.join("auth_functions.rs")).expect("read auth server functions");
+    let auth_source = fs::read_to_string(directory.join("auth_functions.rs"))
+        .expect("read auth server functions");
     let notification_source = fs::read_to_string(directory.join("notification_functions.rs"))
         .expect("read notification server functions");
 

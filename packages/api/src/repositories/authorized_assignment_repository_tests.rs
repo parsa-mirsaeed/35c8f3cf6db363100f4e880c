@@ -1,9 +1,27 @@
 use super::{AuthorizedAssignmentRepository, RepositoryError};
 use crate::models::{CreateAssignmentRequest, UpdateAssignmentRequest};
+use crate::rls_context::{AuthorizedActor, AuthorizedTx};
 use chrono::{Duration, Utc};
 use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::future::Future;
 use std::sync::Arc;
 use uuid::Uuid;
+
+async fn run_as<T, F>(pool: &PgPool, actor: AuthorizedActor, future: F) -> T
+where
+    F: Future<Output = T>,
+{
+    AuthorizedTx::begin(pool, actor)
+        .await
+        .expect("begin authorized assignment test transaction")
+        .scope(future, |_| true)
+        .await
+        .expect("finish authorized assignment test transaction")
+}
+
+fn actor(user_id: Uuid, role: &str, school_id: Uuid) -> AuthorizedActor {
+    AuthorizedActor::new(user_id, role, Some(school_id)).expect("valid assignment test actor")
+}
 
 async fn role_id(pool: &PgPool, name: &str) -> Uuid {
     sqlx::query_scalar("SELECT id FROM roles WHERE name::text = $1 LIMIT 1")
@@ -212,44 +230,61 @@ async fn required_teacher_mutation_matrix_is_enforced() {
     .await
     .expect("insert enrollment");
 
-    let actor_a = repository
-        .resolve_active_teacher(teacher_a_user, "Teacher")
-        .await
-        .expect("resolve Teacher A");
-    let actor_a2 = repository
-        .resolve_active_teacher(teacher_a2_user, "Teacher")
-        .await
-        .expect("resolve same-school Teacher A2");
-    let actor_b = repository
-        .resolve_active_teacher(teacher_b_user, "Teacher")
-        .await
-        .expect("resolve cross-school Teacher B");
+    let actor_a = run_as(
+        pool.as_ref(),
+        actor(teacher_a_user, "Teacher", school_a),
+        repository.resolve_active_teacher(teacher_a_user, "Teacher"),
+    )
+    .await
+    .expect("resolve Teacher A");
+    let actor_a2 = run_as(
+        pool.as_ref(),
+        actor(teacher_a2_user, "Teacher", school_a),
+        repository.resolve_active_teacher(teacher_a2_user, "Teacher"),
+    )
+    .await
+    .expect("resolve same-school Teacher A2");
+    let actor_b = run_as(
+        pool.as_ref(),
+        actor(teacher_b_user, "Teacher", school_b),
+        repository.resolve_active_teacher(teacher_b_user, "Teacher"),
+    )
+    .await
+    .expect("resolve cross-school Teacher B");
 
-    for (user_id, role) in [
-        (student_user, "Student"),
-        (parent_user, "Parent"),
-        (manager_user, "SchoolManager"),
-        (inactive_teacher_user, "Teacher"),
+    for (user_id, role, school_id) in [
+        (student_user, "Student", school_a),
+        (parent_user, "Parent", school_a),
+        (manager_user, "SchoolManager", school_a),
+        (inactive_teacher_user, "Teacher", school_a),
     ] {
+        let result = run_as(
+            pool.as_ref(),
+            actor(user_id, role, school_id),
+            repository.resolve_active_teacher(user_id, role),
+        )
+        .await;
         assert!(
-            matches!(
-                repository.resolve_active_teacher(user_id, role).await,
-                Err(RepositoryError::Unauthorized)
-            ),
+            matches!(result, Err(RepositoryError::Unauthorized)),
             "{role} must not obtain a teacher mutation actor"
         );
     }
 
-    let assignment = repository
-        .create_for_teacher(
+    let assignment = run_as(
+        pool.as_ref(),
+        actor(teacher_a_user, "Teacher", school_a),
+        repository.create_for_teacher(
             actor_a,
             assignment_request(class_a, subject_id, "Owned assignment"),
-        )
-        .await
-        .expect("Teacher A creates own assignment");
+        ),
+    )
+    .await
+    .expect("Teacher A creates own assignment");
 
-    let updated = repository
-        .update_for_teacher(
+    let updated = run_as(
+        pool.as_ref(),
+        actor(teacher_a_user, "Teacher", school_a),
+        repository.update_for_teacher(
             actor_a,
             assignment.id,
             UpdateAssignmentRequest {
@@ -259,54 +294,75 @@ async fn required_teacher_mutation_matrix_is_enforced() {
                 lecture_title: None,
                 lecture_number: None,
             },
-        )
-        .await
-        .expect("Teacher A updates own assignment");
+        ),
+    )
+    .await
+    .expect("Teacher A updates own assignment");
     assert_eq!(updated.title, "Owned assignment updated");
 
-    for actor in [actor_a2, actor_b] {
-        assert!(matches!(
-            repository
-                .update_for_teacher(
-                    actor,
-                    assignment.id,
-                    UpdateAssignmentRequest {
-                        title: Some("Unauthorized update".into()),
-                        body: None,
-                        due_at: None,
-                        lecture_title: None,
-                        lecture_number: None,
-                    },
-                )
-                .await,
-            Err(RepositoryError::NotFound { .. })
-        ));
-        assert!(matches!(
-            repository.publish_for_teacher(actor, assignment.id).await,
-            Err(RepositoryError::NotFound { .. })
-        ));
+    for (db_actor, repository_actor) in [
+        (actor(teacher_a2_user, "Teacher", school_a), actor_a2),
+        (actor(teacher_b_user, "Teacher", school_b), actor_b),
+    ] {
+        let update = run_as(
+            pool.as_ref(),
+            db_actor.clone(),
+            repository.update_for_teacher(
+                repository_actor,
+                assignment.id,
+                UpdateAssignmentRequest {
+                    title: Some("Unauthorized update".into()),
+                    body: None,
+                    due_at: None,
+                    lecture_title: None,
+                    lecture_number: None,
+                },
+            ),
+        )
+        .await;
+        assert!(matches!(update, Err(RepositoryError::NotFound { .. })));
+
+        let publish = run_as(
+            pool.as_ref(),
+            db_actor,
+            repository.publish_for_teacher(repository_actor, assignment.id),
+        )
+        .await;
+        assert!(matches!(publish, Err(RepositoryError::NotFound { .. })));
     }
 
-    repository
-        .publish_for_teacher(actor_a, assignment.id)
-        .await
-        .expect("Teacher A publishes own assignment");
+    run_as(
+        pool.as_ref(),
+        actor(teacher_a_user, "Teacher", school_a),
+        repository.publish_for_teacher(actor_a, assignment.id),
+    )
+    .await
+    .expect("Teacher A publishes own assignment");
 
-    let delete_target = repository
-        .create_for_teacher(
+    let delete_target = run_as(
+        pool.as_ref(),
+        actor(teacher_a_user, "Teacher", school_a),
+        repository.create_for_teacher(
             actor_a,
             assignment_request(class_a, subject_id, "Owned delete target"),
-        )
-        .await
-        .expect("Teacher A creates delete target");
-    repository
-        .delete_for_teacher(actor_a, delete_target.id)
-        .await
-        .expect("Teacher A deletes own assignment");
-    assert!(matches!(
-        repository.find_for_teacher(actor_a, delete_target.id).await,
-        Err(RepositoryError::NotFound { .. })
-    ));
+        ),
+    )
+    .await
+    .expect("Teacher A creates delete target");
+    run_as(
+        pool.as_ref(),
+        actor(teacher_a_user, "Teacher", school_a),
+        repository.delete_for_teacher(actor_a, delete_target.id),
+    )
+    .await
+    .expect("Teacher A deletes own assignment");
+    let deleted = run_as(
+        pool.as_ref(),
+        actor(teacher_a_user, "Teacher", school_a),
+        repository.find_for_teacher(actor_a, delete_target.id),
+    )
+    .await;
+    assert!(matches!(deleted, Err(RepositoryError::NotFound { .. })));
 
     assert_ne!(teacher_a2_id, teacher_a_id);
 }
@@ -363,4 +419,3 @@ fn production_dashboard_assignment_routes_use_actor_scoped_repository() {
     }
     assert!(!teacher_handler.contains("SELECT id FROM teachers WHERE user_id = $1"));
 }
-

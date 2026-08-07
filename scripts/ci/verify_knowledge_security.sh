@@ -192,3 +192,5 @@ ROLLBACK;
 
 SELECT 'governed knowledge security invariants verified' AS result;
 SQL
+
+bash scripts/ci/verify_transaction_scoped_rls.sh

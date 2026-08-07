@@ -1,13 +1,13 @@
-use crate::domain::{Role, UserId, RoleId, SchoolId};
-use crate::models::{User, CreateUserRequest, UpdateUserRequest, UserWithRole};
+use crate::domain::{Role, RoleId, SchoolId, UserId};
+use crate::models::{CreateUserRequest, UpdateUserRequest, User, UserWithRole};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
-use sqlx::{PgPool, postgres::PgRow, Row};
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+use sqlx::{postgres::PgRow, Row};
 use std::sync::Arc;
 use uuid::Uuid;
-use serde_json::Value;
-use chrono::{DateTime, Utc};
 
 /// User repository for handling user-related database operations
 #[derive(Clone)]
@@ -17,7 +17,7 @@ pub struct UserRepository {
 
 impl UserRepository {
     /// Create a new user repository
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }
@@ -96,7 +96,12 @@ impl UserRepository {
     }
 
     /// Create a teacher record - returns the teacher ID (not user ID)
-    pub async fn create_teacher(&self, user_id: UserId, school_id: SchoolId, subject: Option<String>) -> RepositoryResult<Uuid> {
+    pub async fn create_teacher(
+        &self,
+        user_id: UserId,
+        school_id: SchoolId,
+        subject: Option<String>,
+    ) -> RepositoryResult<Uuid> {
         let teacher_id = Uuid::new_v4();
         sqlx::query!(
             r#"
@@ -114,7 +119,13 @@ impl UserRepository {
     }
 
     /// Create a student record
-    pub async fn create_student(&self, user_id: UserId, school_id: SchoolId, parent_id: Option<UserId>, talent_profile_ref: Option<String>) -> RepositoryResult<()> {
+    pub async fn create_student(
+        &self,
+        user_id: UserId,
+        school_id: SchoolId,
+        parent_id: Option<UserId>,
+        talent_profile_ref: Option<String>,
+    ) -> RepositoryResult<()> {
         sqlx::query!(
             r#"
             INSERT INTO students (id, user_id, school_id, parent_id, talent_profile_ref, created_at)
@@ -132,7 +143,11 @@ impl UserRepository {
     }
 
     /// Link students to a parent
-    pub async fn link_students_to_parent(&self, parent_id: UserId, student_ids: Vec<UserId>) -> RepositoryResult<()> {
+    pub async fn link_students_to_parent(
+        &self,
+        parent_id: UserId,
+        student_ids: Vec<UserId>,
+    ) -> RepositoryResult<()> {
         let parent_uuid = Uuid::from(parent_id);
         let student_uuids: Vec<Uuid> = student_ids.into_iter().map(Uuid::from).collect();
 
@@ -152,7 +167,11 @@ impl UserRepository {
 
     /// Assign classes to a teacher
     /// NOTE: teacher_id here is the ID from the `teachers` table, NOT the user_id
-    pub async fn assign_classes_to_teacher(&self, teacher_id: Uuid, class_ids: Vec<Uuid>) -> RepositoryResult<()> {
+    pub async fn assign_classes_to_teacher(
+        &self,
+        teacher_id: Uuid,
+        class_ids: Vec<Uuid>,
+    ) -> RepositoryResult<()> {
         sqlx::query!(
             r#"
             INSERT INTO teaching_assignments (id, teacher_id, class_section_id)
@@ -163,7 +182,7 @@ impl UserRepository {
         )
         .execute(&*self.base.pool())
         .await?;
-        
+
         Ok(())
     }
 
@@ -251,8 +270,12 @@ impl UserRepository {
             id: user_id.to_string(),
         })?;
 
-        let role_name: Role = row.role_name.parse()
-            .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse role '{}': {}", row.role_name, e))))?;
+        let role_name: Role = row.role_name.parse().map_err(|e| {
+            RepositoryError::Database(sqlx::Error::Protocol(format!(
+                "Failed to parse role '{}': {}",
+                row.role_name, e
+            )))
+        })?;
 
         Ok(UserWithRole {
             id: row.id.into(),
@@ -270,7 +293,10 @@ impl UserRepository {
     }
 
     /// Get all users in a school with their roles
-    pub async fn find_by_school_with_roles(&self, school_id: SchoolId) -> RepositoryResult<Vec<UserWithRole>> {
+    pub async fn find_by_school_with_roles(
+        &self,
+        school_id: SchoolId,
+    ) -> RepositoryResult<Vec<UserWithRole>> {
         let uuid = Uuid::from(school_id);
         let rows = sqlx::query!(
             r#"
@@ -291,8 +317,12 @@ impl UserRepository {
 
         let mut users = Vec::new();
         for row in rows {
-            let role_name: Role = row.role_name.parse()
-                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse role '{}': {}", row.role_name, e))))?;
+            let role_name: Role = row.role_name.parse().map_err(|e| {
+                RepositoryError::Database(sqlx::Error::Protocol(format!(
+                    "Failed to parse role '{}': {}",
+                    row.role_name, e
+                )))
+            })?;
 
             users.push(UserWithRole {
                 id: row.id.into(),
@@ -314,16 +344,16 @@ impl UserRepository {
 
     /// Get users in a school with filters
     pub async fn find_by_school_with_filters(
-        &self, 
+        &self,
         school_id: SchoolId,
         role_filter: Option<String>,
         status_filter: Option<String>, // "active", "inactive", "all"
-        search_query: Option<String>
+        search_query: Option<String>,
     ) -> RepositoryResult<Vec<UserWithRole>> {
         let uuid = Uuid::from(school_id);
-        
+
         let search_pattern = search_query.map(|s| format!("%{}%", s));
-        
+
         let rows = sqlx::query!(
             r#"
             SELECT
@@ -353,8 +383,12 @@ impl UserRepository {
 
         let mut users = Vec::new();
         for row in rows {
-            let role_name: Role = row.role_name.parse()
-                .map_err(|e| RepositoryError::Database(sqlx::Error::Protocol(format!("Failed to parse role '{}': {}", row.role_name, e))))?;
+            let role_name: Role = row.role_name.parse().map_err(|e| {
+                RepositoryError::Database(sqlx::Error::Protocol(format!(
+                    "Failed to parse role '{}': {}",
+                    row.role_name, e
+                )))
+            })?;
 
             users.push(UserWithRole {
                 id: row.id.into(),
@@ -375,7 +409,11 @@ impl UserRepository {
     }
 
     /// Update user's active status
-    pub async fn update_active_status(&self, user_id: UserId, is_active: bool) -> RepositoryResult<()> {
+    pub async fn update_active_status(
+        &self,
+        user_id: UserId,
+        is_active: bool,
+    ) -> RepositoryResult<()> {
         let uuid = Uuid::from(user_id);
         let result = sqlx::query!(
             r#"
@@ -400,7 +438,11 @@ impl UserRepository {
     }
 
     /// Update a user
-    pub async fn update_internal(&self, user_id: UserId, request: UpdateUserRequest) -> RepositoryResult<User> {
+    pub async fn update_internal(
+        &self,
+        user_id: UserId,
+        request: UpdateUserRequest,
+    ) -> RepositoryResult<User> {
         let uuid = Uuid::from(user_id);
         let row = sqlx::query!(
             r#"
@@ -533,11 +575,9 @@ impl UserRepository {
 
     /// Count total users
     pub async fn count(&self) -> RepositoryResult<i64> {
-        let row: PgRow = sqlx::query(
-            "SELECT COUNT(*) as count FROM users"
-        )
-        .fetch_one(&*self.base.pool())
-        .await?;
+        let row: PgRow = sqlx::query("SELECT COUNT(*) as count FROM users")
+            .fetch_one(&*self.base.pool())
+            .await?;
 
         Ok(row.get("count"))
     }
@@ -545,7 +585,7 @@ impl UserRepository {
     /// Get user counts by role for a school
     pub async fn get_user_counts(&self, school_id: SchoolId) -> RepositoryResult<(i64, i64, i64)> {
         let uuid = Uuid::from(school_id);
-        
+
         let row = sqlx::query!(
             r#"
             SELECT
@@ -564,18 +604,16 @@ impl UserRepository {
         Ok((
             row.student_count.unwrap_or(0),
             row.teacher_count.unwrap_or(0),
-            row.parent_count.unwrap_or(0)
+            row.parent_count.unwrap_or(0),
         ))
     }
 
     /// Check if email exists
     pub async fn email_exists(&self, email: &str) -> RepositoryResult<bool> {
-        let row: Option<PgRow> = sqlx::query(
-            "SELECT id FROM users WHERE email = $1"
-        )
-        .bind(email)
-        .fetch_optional(&*self.base.pool())
-        .await?;
+        let row: Option<PgRow> = sqlx::query("SELECT id FROM users WHERE email = $1")
+            .bind(email)
+            .fetch_optional(&*self.base.pool())
+            .await?;
 
         Ok(row.is_some())
     }
@@ -588,15 +626,23 @@ impl crate::repositories::traits::UserRepository for UserRepository {
     }
 
     async fn find_by_id(&self, id: UserId) -> Result<Option<User>, AppError> {
-        self.find_by_id_internal(id).await.map(Some).map_err(AppError::from)
+        self.find_by_id_internal(id)
+            .await
+            .map(Some)
+            .map_err(AppError::from)
     }
 
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AppError> {
-        self.find_by_email_internal(email).await.map(Some).map_err(AppError::from)
+        self.find_by_email_internal(email)
+            .await
+            .map(Some)
+            .map_err(AppError::from)
     }
 
     async fn update(&self, id: UserId, request: UpdateUserRequest) -> Result<User, AppError> {
-        self.update_internal(id, request).await.map_err(AppError::from)
+        self.update_internal(id, request)
+            .await
+            .map_err(AppError::from)
     }
 
     async fn delete(&self, id: UserId) -> Result<(), AppError> {

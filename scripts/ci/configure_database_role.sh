@@ -17,37 +17,34 @@ if [[ ! "${DATABASE_APP_PASSWORD}" =~ ^[A-Za-z0-9._~-]{32,128}$ ]]; then
     exit 1
 fi
 
-# Supabase's hardened postgres role is deliberately not a superuser. It has the
-# CREATEROLE, CREATEDB, REPLICATION, and BYPASSRLS attributes needed to create
-# and reconcile this constrained backend role, but PostgreSQL does not allow a
-# non-superuser to specify either SUPERUSER or NOSUPERUSER in ALTER ROLE.
-# Refuse an unexpectedly privileged pre-existing target instead of trying to
-# demote it or silently continuing with a compromised trust boundary.
-#
-# Feed SQL through stdin rather than --command so psql performs its safe
-# :'app_role' variable substitution before sending the query to PostgreSQL.
-# Boolean values explicitly cast to text are rendered as "true" or "false";
-# they are not psql's native abbreviated "t" or "f" display values. Keep every
-# cast postcondition on this normalized representation.
-existing_super="$(
+# Supabase's hardened postgres role is deliberately not a superuser. Refuse an
+# unexpectedly privileged or role-member target instead of silently preserving
+# a SET ROLE path outside the long-running application boundary.
+existing_state="$(
     psql "${DATABASE_ADMIN_URL}" \
         --tuples-only \
         --no-align \
+        --field-separator='|' \
         --set=ON_ERROR_STOP=1 \
         --set=app_role="${DATABASE_APP_USER}" <<'SQL'
-SELECT rolsuper::text
-FROM pg_roles
-WHERE rolname = :'app_role';
+SELECT role_entry.rolsuper::text,
+       EXISTS (
+           SELECT 1
+           FROM pg_auth_members membership
+           WHERE membership.member = role_entry.oid
+       )::text
+FROM pg_roles AS role_entry
+WHERE role_entry.rolname = :'app_role';
 SQL
 )"
-case "${existing_super}" in
-    ""|false) ;;
-    true)
-        echo "Refusing to configure superuser role ${DATABASE_APP_USER}" >&2
+case "${existing_state}" in
+    ""|"false|false") ;;
+    "true|"*|"false|true")
+        echo "Refusing to configure privileged or role-member identity ${DATABASE_APP_USER}: ${existing_state}" >&2
         exit 1
         ;;
     *)
-        echo "Unable to verify existing role attributes for ${DATABASE_APP_USER}: ${existing_super}" >&2
+        echo "Unable to verify existing role attributes for ${DATABASE_APP_USER}: ${existing_state}" >&2
         exit 1
         ;;
 esac
@@ -56,13 +53,11 @@ psql "${DATABASE_ADMIN_URL}" \
     --set=ON_ERROR_STOP=1 \
     --set=app_role="${DATABASE_APP_USER}" \
     --set=app_password="${DATABASE_APP_PASSWORD}" <<'SQL'
--- EduTalent's current repository layer performs authenticated server-side
--- authorization and does not set transaction-local RLS claims. Therefore the
--- backend role is deliberately BYPASSRLS, matching a Supabase service role, but
--- is not a superuser and receives no DDL/role/database/replication privileges.
--- Supabase browser/client roles remain subject to the existing RLS policies.
+-- The long-running application/worker identity is deliberately NOBYPASSRLS.
+-- Every protected query must execute through a transaction carrying canonical
+-- app.user_id, app.user_role, and app.school_id context.
 SELECT format(
-    'CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS',
+    'CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',
     :'app_role',
     :'app_password'
 )
@@ -71,10 +66,9 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'app_role')
 
 -- Do not include NOSUPERUSER here. The pinned Supabase postgres role is a
 -- non-superuser, and PostgreSQL reserves changes to the SUPERUSER property for
--- superusers even when the requested value is NOSUPERUSER. The explicit check
--- above guarantees an existing target is not privileged before reconciliation.
+-- superusers. The explicit precondition above rejects a privileged target.
 SELECT format(
-    'ALTER ROLE %I WITH LOGIN PASSWORD %L NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS',
+    'ALTER ROLE %I WITH LOGIN PASSWORD %L NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS',
     :'app_role',
     :'app_password'
 )
@@ -98,11 +92,7 @@ SELECT format(
 \gexec
 
 -- PostgreSQL has no "ALL TYPES IN SCHEMA" grant syntax. Grant each concrete
--- application type with the correct object class. Table-created row types and
--- array helper types are excluded; standalone composites, enums, ranges,
--- multiranges, base types, and domains are included. Only types owned by the
--- migration identity are modified. Extension-owned types must already expose
--- USAGE (normally through PUBLIC) and are covered by the postcondition below.
+-- repository-owned application type with the correct object class.
 SELECT format(
     'GRANT USAGE ON %s %I.%I TO %I',
     CASE WHEN type_entry.typtype = 'd' THEN 'DOMAIN' ELSE 'TYPE' END,
@@ -131,6 +121,15 @@ ORDER BY type_entry.oid
 \gexec
 
 SELECT format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO %I', :'app_role')
+\gexec
+
+-- Pool-scoped context setup is retired. Runtime code sets transaction-local
+-- values only after beginning a pinned AuthorizedTx.
+SELECT format(
+    'REVOKE EXECUTE ON FUNCTION public.set_app_context(uuid, text, uuid) FROM %I',
+    :'app_role'
+)
+WHERE to_regprocedure('public.set_app_context(uuid,text,uuid)') IS NOT NULL
 \gexec
 
 -- Migration integrity state is never writable by the application process.
@@ -173,8 +172,27 @@ FROM pg_roles
 WHERE rolname = :'app_role';
 SQL
 )"
-if [[ "${role_state}" != "true|false|false|false|false|false|true" ]]; then
-    echo "Backend role attributes do not match the production security contract: ${role_state:-<missing>}" >&2
+if [[ "${role_state}" != "true|false|false|false|false|false|false" ]]; then
+    echo "Backend role attributes do not match the NOBYPASSRLS production contract: ${role_state:-<missing>}" >&2
+    exit 1
+fi
+
+membership_state="$(
+    psql "${DATABASE_ADMIN_URL}" \
+        --tuples-only \
+        --no-align \
+        --set=ON_ERROR_STOP=1 \
+        --set=app_role="${DATABASE_APP_USER}" <<'SQL'
+SELECT EXISTS (
+    SELECT 1
+    FROM pg_auth_members membership
+    JOIN pg_roles member_role ON member_role.oid = membership.member
+    WHERE member_role.rolname = :'app_role'
+)::text;
+SQL
+)"
+if [[ "${membership_state}" != "false" ]]; then
+    echo "Backend role retains prohibited role memberships" >&2
     exit 1
 fi
 
@@ -207,4 +225,21 @@ if [[ "${type_usage_state}" != "true" ]]; then
     exit 1
 fi
 
-echo "Configured dedicated non-superuser EduTalent database role."
+legacy_context_execute="$(
+    psql "${DATABASE_ADMIN_URL}" \
+        --tuples-only \
+        --no-align \
+        --set=ON_ERROR_STOP=1 \
+        --set=app_role="${DATABASE_APP_USER}" <<'SQL'
+SELECT COALESCE(
+    has_function_privilege(:'app_role', 'public.set_app_context(uuid,text,uuid)', 'EXECUTE'),
+    false
+)::text;
+SQL
+)"
+if [[ "${legacy_context_execute}" != "false" ]]; then
+    echo "Backend role can still execute retired pool-scoped set_app_context" >&2
+    exit 1
+fi
+
+echo "Configured dedicated NOBYPASSRLS EduTalent database role."

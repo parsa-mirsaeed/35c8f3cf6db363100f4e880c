@@ -1,9 +1,10 @@
 use crate::domain::{ClassSectionId, Role, SchoolId, StudentId, UserId};
 use crate::models::{CreateInviteRequest, Invite};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
+use crate::rls_context::AuthorizedPool;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -14,7 +15,7 @@ pub struct InviteRepository {
 }
 
 impl InviteRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }

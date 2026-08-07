@@ -13,8 +13,9 @@ use crate::models::{
     UpdateAssignmentRequest,
 };
 use crate::repositories::{RepositoryError, RepositoryResult};
+use crate::rls_context::AuthorizedPool;
 use chrono::Utc;
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{postgres::PgRow, Row};
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -37,12 +38,15 @@ pub struct AuthorizedStudent {
 
 #[derive(Clone)]
 pub struct AuthorizedAssignmentRepository {
-    pool: Arc<PgPool>,
+    pool: Arc<AuthorizedPool>,
 }
 
 impl AuthorizedAssignmentRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
-        Self { pool }
+    pub fn new<T>(pool: T) -> Self {
+        let _ = pool;
+        Self {
+            pool: Arc::new(AuthorizedPool::new()),
+        }
     }
 
     pub async fn resolve_active_teacher(
@@ -805,6 +809,25 @@ fn row_to_custom_assignment_details(row: &PgRow) -> RepositoryResult<CustomAssig
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rls_context::{AuthorizedActor, AuthorizedTx};
+    use std::future::Future;
+
+    async fn run_as<T, F>(pool: &sqlx::PgPool, actor: AuthorizedActor, future: F) -> T
+    where
+        F: Future<Output = T>,
+    {
+        AuthorizedTx::begin(pool, actor)
+            .await
+            .expect("begin authorized assignment repository test transaction")
+            .scope(future, |_| true)
+            .await
+            .expect("finish authorized assignment repository test transaction")
+    }
+
+    fn actor(user_id: Uuid, role: &str, school_id: Uuid) -> AuthorizedActor {
+        AuthorizedActor::new(user_id, role, Some(school_id))
+            .expect("valid assignment repository test actor")
+    }
 
     #[test]
     fn rejects_non_teacher_claim_before_database_access() {
@@ -1079,26 +1102,42 @@ mod tests {
             .expect("insert enrollment");
         }
 
-        let actor_a = repository
-            .resolve_active_teacher(teacher_a_user, "Teacher")
-            .await
-            .expect("resolve Teacher A");
-        let actor_a2 = repository
-            .resolve_active_teacher(teacher_a2_user, "Teacher")
-            .await
-            .expect("resolve Teacher A2");
-        let actor_b = repository
-            .resolve_active_teacher(teacher_b_user, "Teacher")
-            .await
-            .expect("resolve Teacher B");
-        assert!(repository
-            .resolve_active_teacher(student_a_user, "Student")
-            .await
-            .is_err());
-        assert!(repository
-            .resolve_active_teacher(inactive_teacher_user, "Teacher")
-            .await
-            .is_err());
+        let actor_a = run_as(
+            pool.as_ref(),
+            actor(teacher_a_user, "Teacher", school_a),
+            repository.resolve_active_teacher(teacher_a_user, "Teacher"),
+        )
+        .await
+        .expect("resolve Teacher A");
+        let actor_a2 = run_as(
+            pool.as_ref(),
+            actor(teacher_a2_user, "Teacher", school_a),
+            repository.resolve_active_teacher(teacher_a2_user, "Teacher"),
+        )
+        .await
+        .expect("resolve Teacher A2");
+        let actor_b = run_as(
+            pool.as_ref(),
+            actor(teacher_b_user, "Teacher", school_b),
+            repository.resolve_active_teacher(teacher_b_user, "Teacher"),
+        )
+        .await
+        .expect("resolve Teacher B");
+
+        let wrong_role = run_as(
+            pool.as_ref(),
+            actor(student_a_user, "Student", school_a),
+            repository.resolve_active_teacher(student_a_user, "Student"),
+        )
+        .await;
+        assert!(wrong_role.is_err());
+        let inactive = run_as(
+            pool.as_ref(),
+            actor(inactive_teacher_user, "Teacher", school_a),
+            repository.resolve_active_teacher(inactive_teacher_user, "Teacher"),
+        )
+        .await;
+        assert!(inactive.is_err());
 
         let request = CreateAssignmentRequest {
             class_section_id: class_a.into(),
@@ -1111,25 +1150,44 @@ mod tests {
             due_at: Utc::now() + Duration::days(7),
             material_ids: None,
         };
-        let assignment = repository
-            .create_for_teacher(actor_a, request)
-            .await
-            .expect("Teacher A creates own assignment");
+        let assignment = run_as(
+            pool.as_ref(),
+            actor(teacher_a_user, "Teacher", school_a),
+            repository.create_for_teacher(actor_a, request),
+        )
+        .await
+        .expect("Teacher A creates own assignment");
 
-        assert!(repository
-            .find_for_teacher(actor_a, assignment.id)
-            .await
-            .is_ok());
+        assert!(run_as(
+            pool.as_ref(),
+            actor(teacher_a_user, "Teacher", school_a),
+            repository.find_for_teacher(actor_a, assignment.id),
+        )
+        .await
+        .is_ok());
         assert!(matches!(
-            repository.find_for_teacher(actor_a2, assignment.id).await,
+            run_as(
+                pool.as_ref(),
+                actor(teacher_a2_user, "Teacher", school_a),
+                repository.find_for_teacher(actor_a2, assignment.id),
+            )
+            .await,
             Err(RepositoryError::NotFound { .. })
         ));
         assert!(matches!(
-            repository.find_for_teacher(actor_b, assignment.id).await,
+            run_as(
+                pool.as_ref(),
+                actor(teacher_b_user, "Teacher", school_b),
+                repository.find_for_teacher(actor_b, assignment.id),
+            )
+            .await,
             Err(RepositoryError::NotFound { .. })
         ));
-        assert!(repository
-            .update_for_teacher(
+
+        let unauthorized_update = run_as(
+            pool.as_ref(),
+            actor(teacher_a2_user, "Teacher", school_a),
+            repository.update_for_teacher(
                 actor_a2,
                 assignment.id,
                 UpdateAssignmentRequest {
@@ -1139,30 +1197,63 @@ mod tests {
                     lecture_title: None,
                     lecture_number: None,
                 },
-            )
-            .await
-            .is_err());
-        assert!(repository
-            .delete_for_teacher(actor_b, assignment.id)
-            .await
-            .is_err());
-        assert!(repository
-            .authorize_personalization_target(actor_a, assignment.id, student_a_id.into())
-            .await
-            .is_ok());
-        assert!(repository
-            .authorize_personalization_target(actor_a, assignment.id, student_a2_id.into())
-            .await
-            .is_err());
-        assert!(repository
-            .authorize_personalization_target(actor_a, assignment.id, student_b_id.into())
-            .await
-            .is_err());
+            ),
+        )
+        .await;
+        assert!(unauthorized_update.is_err());
+        let unauthorized_delete = run_as(
+            pool.as_ref(),
+            actor(teacher_b_user, "Teacher", school_b),
+            repository.delete_for_teacher(actor_b, assignment.id),
+        )
+        .await;
+        assert!(unauthorized_delete.is_err());
 
-        let (first, second) = tokio::join!(
-            repository.publish_for_teacher(actor_a, assignment.id),
+        assert!(run_as(
+            pool.as_ref(),
+            actor(teacher_a_user, "Teacher", school_a),
+            repository.authorize_personalization_target(
+                actor_a,
+                assignment.id,
+                student_a_id.into()
+            ),
+        )
+        .await
+        .is_ok());
+        assert!(run_as(
+            pool.as_ref(),
+            actor(teacher_a_user, "Teacher", school_a),
+            repository.authorize_personalization_target(
+                actor_a,
+                assignment.id,
+                student_a2_id.into()
+            ),
+        )
+        .await
+        .is_err());
+        assert!(run_as(
+            pool.as_ref(),
+            actor(teacher_a_user, "Teacher", school_a),
+            repository.authorize_personalization_target(
+                actor_a,
+                assignment.id,
+                student_b_id.into()
+            ),
+        )
+        .await
+        .is_err());
+
+        let first_publish = run_as(
+            pool.as_ref(),
+            actor(teacher_a_user, "Teacher", school_a),
             repository.publish_for_teacher(actor_a, assignment.id),
         );
+        let second_publish = run_as(
+            pool.as_ref(),
+            actor(teacher_a_user, "Teacher", school_a),
+            repository.publish_for_teacher(actor_a, assignment.id),
+        );
+        let (first, second) = tokio::join!(first_publish, second_publish);
         first.expect("first authorized publish");
         second.expect("concurrent idempotent publish");
 
@@ -1192,7 +1283,12 @@ mod tests {
             AssignmentId::from(Uuid::new_v4()),
         ] {
             assert!(matches!(
-                repository.find_for_teacher(actor_a, id).await,
+                run_as(
+                    pool.as_ref(),
+                    actor(teacher_a_user, "Teacher", school_a),
+                    repository.find_for_teacher(actor_a, id),
+                )
+                .await,
                 Err(RepositoryError::NotFound { .. })
             ));
         }

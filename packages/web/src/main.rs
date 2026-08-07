@@ -99,8 +99,10 @@ async fn main() {
         .expect("App state should be initialized")
         .clone();
 
-    let _knowledge_ingestion_worker =
-        api::services::start_knowledge_ingestion_worker(app_state.services.pool.clone());
+    let _knowledge_ingestion_worker = api::services::start_knowledge_ingestion_worker(
+        app_state.services.raw_pool.clone(),
+        app_state.services.pool.clone(),
+    );
 
     let router = axum::Router::new()
         .route("/healthz", axum::routing::get(|| async { "ok" }))

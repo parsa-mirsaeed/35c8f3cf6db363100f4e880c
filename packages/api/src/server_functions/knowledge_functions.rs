@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Role-scoped server functions for the governed knowledge workflow.
 
 use dioxus::prelude::*;
@@ -16,7 +17,7 @@ use crate::repositories::{
     KnowledgeAssetWithSelection, KnowledgeIngestionJobRepository,
 };
 #[cfg(feature = "server")]
-use crate::rls_context::RlsContext;
+use crate::rls_context::AuthorizedPool;
 #[cfg(feature = "server")]
 use crate::services::{KnowledgeAssetService, KnowledgeSearchResult};
 #[cfg(feature = "server")]
@@ -165,14 +166,12 @@ impl From<KnowledgeSearchResult> for KnowledgeSearchResultDto {
 struct AuthorizedActor {
     user_id: Uuid,
     school_id: Option<Uuid>,
-    pool: Arc<sqlx::PgPool>,
+    pool: Arc<AuthorizedPool>,
 }
 
 #[cfg(feature = "server")]
 async fn authorize(allowed_roles: &[&str]) -> Result<AuthorizedActor, ServerFnError> {
-    let Extension(user): Extension<UserInfo> = extract()
-        .await
-        .map_err(|_| ServerFnError::new("Unauthorized: no active session"))?;
+    let (user, pool) = crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
 
     if !allowed_roles
         .iter()
@@ -181,11 +180,8 @@ async fn authorize(allowed_roles: &[&str]) -> Result<AuthorizedActor, ServerFnEr
         return Err(ServerFnError::new("Forbidden: insufficient role"));
     }
 
-    let state = extract_server_state()?;
-    let pool = Arc::clone(&state.services.pool);
     let user_id = Uuid::parse_str(&user.id)
         .map_err(|_| ServerFnError::new("Invalid authenticated user ID"))?;
-
     let school_id =
         sqlx::query_scalar::<_, Option<Uuid>>("SELECT school_id FROM users WHERE id = $1")
             .bind(user_id)
@@ -193,17 +189,6 @@ async fn authorize(allowed_roles: &[&str]) -> Result<AuthorizedActor, ServerFnEr
             .await
             .map_err(|error| ServerFnError::new(format!("Failed to resolve school: {error}")))?
             .flatten();
-
-    let school_id_string = school_id.map(|id| id.to_string());
-
-    // Explicit endpoint authorization is the primary application control. This
-    // context additionally supports RLS when queries execute in the same database
-    // transaction/session, and the policies use the canonical get_* helpers.
-    RlsContext::set(&pool, &user.id, &user.role, school_id_string.as_deref())
-        .await
-        .map_err(|error| {
-            ServerFnError::new(format!("Failed to set authorization context: {error}"))
-        })?;
 
     Ok(AuthorizedActor {
         user_id,

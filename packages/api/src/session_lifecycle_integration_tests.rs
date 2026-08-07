@@ -209,11 +209,11 @@ async fn session_lifecycle_is_enforced_end_to_end() {
     sqlx::query("INSERT INTO schools (id, name) VALUES ($1, $2)")
         .bind(school_id)
         .bind(format!("PR-02 Session School {suffix}"))
-        .execute(&*app_state.services.pool)
+        .execute(&*app_state.services.raw_pool)
         .await
         .expect("insert session test school");
     let role_id: Uuid = sqlx::query("SELECT id FROM roles WHERE name::text = 'Student' LIMIT 1")
-        .fetch_one(&*app_state.services.pool)
+        .fetch_one(&*app_state.services.raw_pool)
         .await
         .expect("fetch Student role")
         .get("id");
@@ -233,7 +233,7 @@ async fn session_lifecycle_is_enforced_end_to_end() {
         .bind(role_id)
         .bind(school_id)
         .bind(active)
-        .execute(&*app_state.services.pool)
+        .execute(&*app_state.services.raw_pool)
         .await
         .expect("insert session test user");
     }
@@ -291,7 +291,7 @@ async fn session_lifecycle_is_enforced_end_to_end() {
 
     sqlx::query("UPDATE users SET is_active = FALSE WHERE id = $1")
         .bind(active_user_id)
-        .execute(&*app_state.services.pool)
+        .execute(&*app_state.services.raw_pool)
         .await
         .expect("disable active user");
     let disabled_request = client
@@ -305,7 +305,7 @@ async fn session_lifecycle_is_enforced_end_to_end() {
 
     sqlx::query("UPDATE users SET is_active = TRUE WHERE id = $1")
         .bind(active_user_id)
-        .execute(&*app_state.services.pool)
+        .execute(&*app_state.services.raw_pool)
         .await
         .expect("reactivate user for refresh proof");
     let expired_access = issue_token(

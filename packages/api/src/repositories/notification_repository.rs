@@ -1,17 +1,21 @@
-use crate::domain::{UserId, SchoolId};
+use crate::domain::{SchoolId, UserId};
 use crate::error::{AppError, AppResult};
-use crate::models::notification::{Notification, CreateNotificationRequest, NotificationSummary};
-use sqlx::PgPool;
+use crate::models::notification::{CreateNotificationRequest, Notification, NotificationSummary};
+use crate::rls_context::AuthorizedPool;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct NotificationRepository {
-    pool: PgPool,
+    pool: Arc<AuthorizedPool>,
 }
 
 impl NotificationRepository {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new<T>(pool: T) -> Self {
+        let _ = pool;
+        Self {
+            pool: Arc::new(AuthorizedPool::new()),
+        }
     }
 
     /// Create a new notification
@@ -24,7 +28,7 @@ impl NotificationRepository {
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
-            "#
+            "#,
         )
         .bind(request.user_id)
         .bind(request.school_id)
@@ -34,7 +38,7 @@ impl NotificationRepository {
         .bind(&request.notification_type)
         .bind(&request.resource_type)
         .bind(request.resource_id)
-        .fetch_one(&self.pool)
+        .fetch_one(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to create notification: {}", e)))?;
 
@@ -42,7 +46,12 @@ impl NotificationRepository {
     }
 
     /// Get notifications for a user
-    pub async fn find_by_user(&self, user_id: UserId, limit: i64, offset: i64) -> AppResult<Vec<Notification>> {
+    pub async fn find_by_user(
+        &self,
+        user_id: UserId,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<Vec<Notification>> {
         let user_uuid: Uuid = user_id.into();
         let notifications = sqlx::query_as::<_, Notification>(
             r#"
@@ -50,12 +59,12 @@ impl NotificationRepository {
             WHERE user_id = $1
             ORDER BY created_at DESC
             LIMIT $2 OFFSET $3
-            "#
+            "#,
         )
         .bind(user_uuid)
         .bind(limit)
         .bind(offset)
-        .fetch_all(&self.pool)
+        .fetch_all(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch notifications: {}", e)))?;
 
@@ -63,7 +72,11 @@ impl NotificationRepository {
     }
 
     /// Get unread notifications for a user
-    pub async fn find_unread_by_user(&self, user_id: UserId, limit: i64) -> AppResult<Vec<Notification>> {
+    pub async fn find_unread_by_user(
+        &self,
+        user_id: UserId,
+        limit: i64,
+    ) -> AppResult<Vec<Notification>> {
         let user_uuid: Uuid = user_id.into();
         let notifications = sqlx::query_as::<_, Notification>(
             r#"
@@ -71,11 +84,11 @@ impl NotificationRepository {
             WHERE user_id = $1 AND is_read = FALSE
             ORDER BY created_at DESC
             LIMIT $2
-            "#
+            "#,
         )
         .bind(user_uuid)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch unread notifications: {}", e)))?;
 
@@ -92,10 +105,10 @@ impl NotificationRepository {
                 COUNT(*) as total_count
             FROM notifications
             WHERE user_id = $1
-            "#
+            "#,
         )
         .bind(user_uuid)
-        .fetch_one(&self.pool)
+        .fetch_one(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch notification summary: {}", e)))?;
 
@@ -113,11 +126,11 @@ impl NotificationRepository {
             UPDATE notifications
             SET is_read = TRUE, read_at = NOW()
             WHERE id = $1 AND user_id = $2
-            "#
+            "#,
         )
         .bind(notification_id)
         .bind(user_uuid)
-        .execute(&self.pool)
+        .execute(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to mark notification as read: {}", e)))?;
 
@@ -136,12 +149,14 @@ impl NotificationRepository {
             UPDATE notifications
             SET is_read = TRUE, read_at = NOW()
             WHERE user_id = $1 AND is_read = FALSE
-            "#
+            "#,
         )
         .bind(user_uuid)
-        .execute(&self.pool)
+        .execute(&*self.pool)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to mark all notifications as read: {}", e)))?;
+        .map_err(|e| {
+            AppError::Internal(format!("Failed to mark all notifications as read: {}", e))
+        })?;
 
         Ok(result.rows_affected())
     }
@@ -153,11 +168,11 @@ impl NotificationRepository {
             r#"
             DELETE FROM notifications
             WHERE id = $1 AND user_id = $2
-            "#
+            "#,
         )
         .bind(notification_id)
         .bind(user_uuid)
-        .execute(&self.pool)
+        .execute(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to delete notification: {}", e)))?;
 
@@ -175,10 +190,10 @@ impl NotificationRepository {
             r#"
             DELETE FROM notifications
             WHERE user_id = $1 AND is_read = TRUE
-            "#
+            "#,
         )
         .bind(user_uuid)
-        .execute(&self.pool)
+        .execute(&*self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to delete read notifications: {}", e)))?;
 

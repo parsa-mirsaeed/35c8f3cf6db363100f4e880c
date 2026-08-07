@@ -1,7 +1,8 @@
 use crate::repositories::{BaseRepository, Repository, RepositoryResult};
+use crate::rls_context::AuthorizedPool;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -25,7 +26,7 @@ pub struct KnowledgeAuditRepository {
 }
 
 impl KnowledgeAuditRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }

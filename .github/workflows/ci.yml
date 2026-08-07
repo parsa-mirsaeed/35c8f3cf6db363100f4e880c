@@ -46,18 +46,13 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BEFORE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
 
           comparison=repository
-          if [[ "$EVENT_NAME" == "pull_request" && "$EVENT_ACTION" == "synchronize" && -n "${BEFORE_SHA:-}" && "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]]; then
-            git diff --name-only "$BEFORE_SHA" "$HEAD_SHA" > changed-files.txt
-            comparison=commit
-          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
             git diff --name-only "$BASE_SHA"..."$HEAD_SHA" > changed-files.txt
             comparison=pull-request
           elif git rev-parse HEAD^ >/dev/null 2>&1; then
@@ -112,7 +107,7 @@ jobs:
             workspace=true
           fi
 
-          if grep -Eq '^(migrations/|packages/api/migration/|scripts/ci/(apply_migrations|verify_knowledge_schema|verify_knowledge_security)\.sh)' changed-files.txt; then
+          if grep -Eq '^(migrations/|packages/api/migration/|scripts/ci/(apply_migrations|verify_knowledge_schema|verify_knowledge_security|verify_transaction_scoped_rls)\.sh)' changed-files.txt; then
             database=true
           fi
 

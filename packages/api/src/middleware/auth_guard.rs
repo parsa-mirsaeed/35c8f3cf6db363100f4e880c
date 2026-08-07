@@ -13,6 +13,7 @@ use tracing::{debug, error, warn};
 
 use crate::app_state::AppState;
 use crate::error::AppError;
+use crate::rls_context::{AuthorizedActor, AuthorizedTx};
 use crate::session_security::{
     access_cookie, append_cookie, append_session_removals, refresh_cookie, refresh_rate_limit_key,
     resolve_active_session, AuthRateLimiter, SessionValidationError, ACCESS_COOKIE_NAME,
@@ -47,9 +48,9 @@ pub async fn auth_middleware(
     if let Some(access_token) = jar.get(ACCESS_COOKIE_NAME) {
         match token_user_id(&state, access_token.value()).await {
             Ok(user_id) => match resolve_active_session(&state, &user_id).await {
-                Ok(user) => {
-                    request.extensions_mut().insert(user);
-                    return Ok(next.run(request).await);
+                Ok(session) => {
+                    request.extensions_mut().insert(session.user.clone());
+                    return run_with_session(&state, request, next, session).await;
                 }
                 Err(SessionValidationError::AccountUnavailable) => {
                     warn!("Access token belongs to a disabled, deleted, or invalid account");
@@ -153,10 +154,10 @@ pub async fn auth_middleware(
         };
 
         match resolve_active_session(&state, &user_id).await {
-            Ok(user) => {
+            Ok(session) => {
                 REFRESH_RATE_LIMITER.clear(&rate_key).await;
-                request.extensions_mut().insert(user);
-                let mut response = next.run(request).await;
+                request.extensions_mut().insert(session.user.clone());
+                let mut response = run_with_session(&state, request, next, session).await?;
                 append_cookie(response.headers_mut(), &access_cookie(grant.access_token))
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                 append_cookie(response.headers_mut(), &refresh_cookie(new_refresh_token))
@@ -189,6 +190,32 @@ fn refresh_rejection_invalidates_session(status: u16) -> bool {
 
 fn refresh_response_records_failure(status: u16) -> bool {
     refresh_rejection_invalidates_session(status) || status == 429
+}
+
+async fn run_with_session(
+    state: &AppState,
+    request: Request,
+    next: Next,
+    session: crate::session_security::ActiveSession,
+) -> Result<Response, StatusCode> {
+    let user_id = uuid::Uuid::parse_str(&session.user.id).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let actor = AuthorizedActor::new(user_id, session.user.role.clone(), Some(session.school_id))
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let tx = AuthorizedTx::begin(&state.services.raw_pool, actor)
+        .await
+        .map_err(|error| {
+            error!(%error, "Failed to begin authorized request transaction");
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+
+    tx.scope(next.run(request), |response| {
+        !response.status().is_client_error() && !response.status().is_server_error()
+    })
+    .await
+    .map_err(|error| {
+        error!(%error, "Failed to finalize authorized request transaction");
+        StatusCode::SERVICE_UNAVAILABLE
+    })
 }
 
 async fn token_user_id(state: &AppState, token: &str) -> Result<String, SessionValidationError> {

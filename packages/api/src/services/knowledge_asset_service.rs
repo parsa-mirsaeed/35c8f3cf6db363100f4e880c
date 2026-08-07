@@ -1,8 +1,10 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Application service for reviewed knowledge ingestion and filtered retrieval.
 
 use crate::repositories::{
     KnowledgeAssetRepository, KnowledgeIngestionJobRepository, PersistedChunk, RepositoryError,
 };
+use crate::rls_context::AuthorizedPool;
 use crate::services::embedding_service::{
     chunk_document, ChunkMetadata, EmbeddingClient, EmbeddingConfig, EmbeddingError,
 };
@@ -11,7 +13,7 @@ use crate::services::knowledge_vector_store_service::{
 };
 use crate::services::vector_store_service::VectorStoreError;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
@@ -34,7 +36,7 @@ pub enum KnowledgeAssetError {
 
 #[derive(Clone)]
 pub struct KnowledgeAssetService {
-    pool: Arc<PgPool>,
+    pool: Arc<AuthorizedPool>,
     repository: KnowledgeAssetRepository,
     embedding_client: EmbeddingClient,
     embedding_config: EmbeddingConfig,
@@ -42,7 +44,7 @@ pub struct KnowledgeAssetService {
 }
 
 impl KnowledgeAssetService {
-    pub async fn new(pool: Arc<PgPool>) -> Result<Self, KnowledgeAssetError> {
+    pub async fn new(pool: Arc<AuthorizedPool>) -> Result<Self, KnowledgeAssetError> {
         let embedding_config = EmbeddingConfig::from_env()?;
         let embedding_client = EmbeddingClient::with_config(embedding_config.clone())?;
         let vector_store = KnowledgeVectorStoreService::new().await?;
@@ -173,12 +175,7 @@ impl KnowledgeAssetService {
                 token_count: estimate_token_count(&chunk.text) as i32,
                 vector_id: format!("knowledge:{}:{}", asset_id, chunk.chunk_index),
                 text: chunk.text,
-                embedding_provider: self
-                    .embedding_config
-                    .profile
-                    .provider
-                    .as_str()
-                    .to_string(),
+                embedding_provider: self.embedding_config.profile.provider.as_str().to_string(),
                 embedding_model: self.embedding_config.model.clone(),
                 metadata: metadata_base.clone(),
             })

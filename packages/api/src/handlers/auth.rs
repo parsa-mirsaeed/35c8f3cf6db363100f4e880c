@@ -213,7 +213,9 @@ async fn verify_and_get_user(
         .supabase_service
         .extract_user_from_token(&claims)
         .map_err(map_token_validation_error)?;
-    resolve_active_session(state, &user_id).await
+    resolve_active_session(state, &user_id)
+        .await
+        .map(|session| session.user)
 }
 
 fn map_token_validation_error(error: AppError) -> SessionValidationError {

@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Dashboard server functions for role-specific data.
 //!
 //! Provides endpoints for student, teacher, and parent dashboards to fetch
@@ -9,102 +10,36 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use crate::app_state::extract_server_state;
 #[cfg(feature = "server")]
-use crate::domain::UserInfo;
-#[cfg(feature = "server")]
-use axum::Extension;
-#[cfg(feature = "server")]
 use crate::dioxus_fullstack::extract;
 #[cfg(feature = "server")]
-use uuid::Uuid;
-#[cfg(feature = "server")]
-use std::time::Instant;
+use crate::domain::UserInfo;
 #[cfg(feature = "server")]
 use crate::repositories::{AuthorizedAssignmentRepository, RepositoryError};
 #[cfg(feature = "server")]
-use crate::rls_context::RlsContext;
+use crate::rls_context::AuthorizedPool;
+#[cfg(feature = "server")]
+use axum::Extension;
 #[cfg(feature = "server")]
 use sqlx::Row;
 #[cfg(feature = "server")]
 use std::collections::HashMap;
+#[cfg(feature = "server")]
+use std::sync::Arc;
+#[cfg(feature = "server")]
+use std::time::Instant;
+#[cfg(feature = "server")]
+use uuid::Uuid;
 
 // ==================== RLS Context Helper ====================
 
-/// Extract authenticated user from request and set RLS context for database queries.
-///
-/// This helper combines user extraction with RLS context setup, ensuring that
-/// all subsequent database queries in this server function are properly scoped
-/// by Row Level Security policies.
-///
-/// # Returns
-/// Returns the user information and a reference to the database pool.
-/// 
-/// # Errors
-/// Returns an error if user is not authenticated or RLS context cannot be set.
 #[cfg(feature = "server")]
-async fn extract_user_with_rls() -> Result<(UserInfo, std::sync::Arc<sqlx::PgPool>), ServerFnError> {
-    let Extension(user): Extension<UserInfo> = extract().await
-        .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-    
-    let state = extract_server_state()?;
-    let pool = state.services.pool.clone();
-    
-    // Set RLS context for this session
-    // This enables Row Level Security policies to filter data based on user identity
-    RlsContext::set(
-        &pool,
-        &user.id,
-        &user.role,
-        // UserInfo doesn't have school_id, we'll need to fetch it
-        None, // We'll fetch school_id from the database if needed
-    )
-    .await
-    .map_err(|e| ServerFnError::new(format!("Failed to set RLS context: {}", e)))?;
-    
-    Ok((user, pool))
+async fn extract_user_with_rls() -> Result<(UserInfo, Arc<AuthorizedPool>), ServerFnError> {
+    crate::server_functions::rls_helpers::extract_user().await
 }
 
-/// Extract authenticated user with full RLS context including school_id.
-/// 
-/// This version fetches the user's school_id from the database before setting
-/// the RLS context, which is required for policies that filter by school.
 #[cfg(feature = "server")]
-async fn extract_user_with_full_rls() -> Result<(UserInfo, std::sync::Arc<sqlx::PgPool>), ServerFnError> {
-    let Extension(user): Extension<UserInfo> = extract().await
-        .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-    
-    let state = extract_server_state()?;
-    let pool = state.services.pool.clone();
-    
-    // Fetch school_id from users table
-    let user_uuid = Uuid::parse_str(&user.id)
-        .map_err(|_| ServerFnError::new("Invalid user ID"))?;
-    
-    let school_id: Option<Uuid> = sqlx::query_scalar!(
-        r#"SELECT school_id FROM users WHERE id = $1"#,
-        user_uuid
-    )
-    .fetch_optional(&*pool)
-    .await
-    .map_err(|e| ServerFnError::new(format!("Failed to fetch school_id: {}", e)))?;
-    
-    // Set RLS context with school_id
-    RlsContext::set(
-        &pool,
-        &user.id,
-        &user.role,
-        school_id.as_ref().map(|id| id.to_string()).as_deref(),
-    )
-    .await
-    .map_err(|e| ServerFnError::new(format!("Failed to set RLS context: {}", e)))?;
-    
-    tracing::debug!(
-        user_id = %user.id,
-        role = %user.role,
-        school_id = ?school_id,
-        "RLS context set for server function"
-    );
-    
-    Ok((user, pool))
+async fn extract_user_with_full_rls() -> Result<(UserInfo, Arc<AuthorizedPool>), ServerFnError> {
+    crate::server_functions::rls_helpers::extract_user_with_full_rls().await
 }
 
 // ==================== Query Timing Helper ====================
@@ -291,34 +226,32 @@ pub async fn get_student_dashboard_stats() -> Result<StudentDashboardStats, Serv
     #[cfg(feature = "server")]
     {
         let fn_start = Instant::now();
-        
+
         // Extract user and set RLS context for Row Level Security
         let (user, pool) = extract_user_with_full_rls().await?;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get student ID from user ID (must be sequential - needed for parallel queries)
         let start = Instant::now();
-        let student_row = sqlx::query!(
-            r#"SELECT id FROM students WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&*pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Student record not found"))?;
+        let student_row = sqlx::query!(r#"SELECT id FROM students WHERE user_id = $1"#, user_id)
+            .fetch_optional(&*pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Student record not found"))?;
         log_query_timing("students.lookup_by_user_id", start);
-        
+
         let student_id = student_row.id;
-        
+
         // Execute remaining 3 queries IN PARALLEL to reduce total latency
         let parallel_start = Instant::now();
-        
+
         let enrolled_future = sqlx::query_scalar!(
             r#"SELECT COUNT(*) as "count!" FROM enrollments WHERE student_id = $1"#,
             student_id
         )
         .fetch_one(&*pool);
-        
+
         let pending_future = sqlx::query_scalar!(
             r#"
             SELECT COUNT(*) as "count!"
@@ -330,7 +263,7 @@ pub async fn get_student_dashboard_stats() -> Result<StudentDashboardStats, Serv
             student_id
         )
         .fetch_one(&*pool);
-        
+
         let avg_grade_future = sqlx::query_scalar!(
             r#"
             SELECT CAST(COALESCE(AVG(s.grade), 0.0) AS DOUBLE PRECISION) as "avg!"
@@ -341,27 +274,30 @@ pub async fn get_student_dashboard_stats() -> Result<StudentDashboardStats, Serv
             student_id
         )
         .fetch_one(&*pool);
-        
+
         // Run all 3 queries concurrently - single network round trip window
-        let (enrolled_result, pending_result, avg_grade_result): (Result<i64, sqlx::Error>, Result<i64, sqlx::Error>, Result<f64, sqlx::Error>) = 
-            tokio::join!(enrolled_future, pending_future, avg_grade_future);
-        
+        let (enrolled_result, pending_result, avg_grade_result): (
+            Result<i64, sqlx::Error>,
+            Result<i64, sqlx::Error>,
+            Result<f64, sqlx::Error>,
+        ) = tokio::join!(enrolled_future, pending_future, avg_grade_future);
+
         log_query_timing("parallel_queries.total", parallel_start);
-        
-        let enrolled_classes = enrolled_result
-            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        let pending_assignments = pending_result
-            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        let avg_grade = avg_grade_result
-            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
+        let enrolled_classes =
+            enrolled_result.map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
+        let pending_assignments =
+            pending_result.map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
+        let avg_grade =
+            avg_grade_result.map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
+
         let current_gpa = calculate_gpa_from_percentage(avg_grade);
-        
+
         // Attendance rate (placeholder - would need attendance table)
         let attendance_rate = 95.0;
-        
+
         log_query_timing("get_student_dashboard_stats.total", fn_start);
-        
+
         Ok(StudentDashboardStats {
             enrolled_classes,
             pending_assignments,
@@ -382,25 +318,24 @@ pub async fn get_student_dashboard_stats() -> Result<StudentDashboardStats, Serv
 pub async fn get_student_classes() -> Result<Vec<StudentClassInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get student ID
-        let student_row = sqlx::query!(
-            r#"SELECT id FROM students WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Student record not found"))?;
-        
+        let student_row = sqlx::query!(r#"SELECT id FROM students WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Student record not found"))?;
+
         let student_id = student_row.id;
-        
+
         // Get enrolled classes with details
         let rows = sqlx::query!(
             r#"
@@ -426,19 +361,22 @@ pub async fn get_student_classes() -> Result<Vec<StudentClassInfo>, ServerFnErro
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let classes = rows.into_iter().map(|row| {
-            let avg = row.avg_grade;
-            StudentClassInfo {
-                id: row.id.to_string(),
-                name: row.name,
-                subject_name: row.subject_name,
-                teacher_name: row.teacher_name,
-                progress_percent: 75, // Would need more data to calculate properly
-                current_grade: percentage_to_letter_grade(avg),
-            }
-        }).collect();
-        
+
+        let classes = rows
+            .into_iter()
+            .map(|row| {
+                let avg = row.avg_grade;
+                StudentClassInfo {
+                    id: row.id.to_string(),
+                    name: row.name,
+                    subject_name: row.subject_name,
+                    teacher_name: row.teacher_name,
+                    progress_percent: 75, // Would need more data to calculate properly
+                    current_grade: percentage_to_letter_grade(avg),
+                }
+            })
+            .collect();
+
         Ok(classes)
     }
     #[cfg(not(feature = "server"))]
@@ -454,8 +392,8 @@ pub async fn get_student_assignments() -> Result<Vec<StudentAssignmentInfo>, Ser
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
         let state = extract_server_state()?;
         let pool = state.services.pool.clone();
-        let user_id = Uuid::parse_str(&user.id)
-            .map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
 
         let repository = AuthorizedAssignmentRepository::new(pool.clone());
         let actor = repository
@@ -533,9 +471,8 @@ pub async fn get_student_assignments() -> Result<Vec<StudentAssignmentInfo>, Ser
             .into_iter()
             .map(|assignment| {
                 let assignment_id: Uuid = assignment.id.into();
-                let (class_name, grade_value) = metadata
-                    .remove(&assignment_id)
-                    .ok_or_else(|| {
+                let (class_name, grade_value) =
+                    metadata.remove(&assignment_id).ok_or_else(|| {
                         tracing::error!(
                             custom_assignment_id = %assignment_id,
                             "authorized student assignment lost its scoped dashboard metadata"
@@ -574,25 +511,24 @@ pub async fn get_student_assignments() -> Result<Vec<StudentAssignmentInfo>, Ser
 pub async fn get_teacher_dashboard_stats() -> Result<TeacherDashboardStats, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get teacher ID
-        let teacher_row = sqlx::query!(
-            r#"SELECT id FROM teachers WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
-        
+        let teacher_row = sqlx::query!(r#"SELECT id FROM teachers WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
+
         let teacher_id = teacher_row.id;
-        
+
         // Get total classes count
         let total_classes = sqlx::query_scalar!(
             r#"SELECT COUNT(*) as "count!" FROM teaching_assignments WHERE teacher_id = $1"#,
@@ -601,7 +537,7 @@ pub async fn get_teacher_dashboard_stats() -> Result<TeacherDashboardStats, Serv
         .fetch_one(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         // Get total students count across all classes
         let total_students = sqlx::query_scalar!(
             r#"
@@ -615,7 +551,7 @@ pub async fn get_teacher_dashboard_stats() -> Result<TeacherDashboardStats, Serv
         .fetch_one(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         // Get pending grading count
         let pending_grading = sqlx::query_scalar!(
             r#"
@@ -631,7 +567,7 @@ pub async fn get_teacher_dashboard_stats() -> Result<TeacherDashboardStats, Serv
         .fetch_one(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         Ok(TeacherDashboardStats {
             total_classes,
             total_students,
@@ -650,25 +586,24 @@ pub async fn get_teacher_dashboard_stats() -> Result<TeacherDashboardStats, Serv
 pub async fn get_teacher_classes() -> Result<Vec<TeacherClassInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get teacher ID
-        let teacher_row = sqlx::query!(
-            r#"SELECT id FROM teachers WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
-        
+        let teacher_row = sqlx::query!(r#"SELECT id FROM teachers WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
+
         let teacher_id = teacher_row.id;
-        
+
         // Get classes with student count
         let rows = sqlx::query!(
             r#"
@@ -689,17 +624,20 @@ pub async fn get_teacher_classes() -> Result<Vec<TeacherClassInfo>, ServerFnErro
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let classes = rows.into_iter().map(|row| {
-            TeacherClassInfo {
-                id: row.id.to_string(),
-                name: row.name,
-                subject_name: row.subject_name,
-                student_count: row.student_count,
-                progress_percent: 60, // Would need syllabus data to calculate
-            }
-        }).collect();
-        
+
+        let classes = rows
+            .into_iter()
+            .map(|row| {
+                TeacherClassInfo {
+                    id: row.id.to_string(),
+                    name: row.name,
+                    subject_name: row.subject_name,
+                    student_count: row.student_count,
+                    progress_percent: 60, // Would need syllabus data to calculate
+                }
+            })
+            .collect();
+
         Ok(classes)
     }
     #[cfg(not(feature = "server"))]
@@ -715,8 +653,8 @@ pub async fn get_teacher_assignments() -> Result<Vec<TeacherAssignmentInfo>, Ser
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
         let state = extract_server_state()?;
         let pool = state.services.pool.clone();
-        let user_id = Uuid::parse_str(&user.id)
-            .map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
 
         let repository = AuthorizedAssignmentRepository::new(pool.clone());
         let actor = repository
@@ -789,9 +727,8 @@ pub async fn get_teacher_assignments() -> Result<Vec<TeacherAssignmentInfo>, Ser
             .into_iter()
             .map(|assignment| {
                 let assignment_id: Uuid = assignment.id.into();
-                let (submitted_count, total_count) = counts
-                    .remove(&assignment_id)
-                    .ok_or_else(|| {
+                let (submitted_count, total_count) =
+                    counts.remove(&assignment_id).ok_or_else(|| {
                         tracing::error!(
                             assignment_id = %assignment_id,
                             "authorized teacher assignment lost its scoped dashboard counts"
@@ -828,25 +765,24 @@ pub async fn get_teacher_assignments() -> Result<Vec<TeacherAssignmentInfo>, Ser
 pub async fn get_parent_dashboard_stats() -> Result<ParentDashboardStats, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get parent ID
-        let parent_row = sqlx::query!(
-            r#"SELECT id FROM parents WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
-        
+        let parent_row = sqlx::query!(r#"SELECT id FROM parents WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
+
         let parent_id = parent_row.id;
-        
+
         // Get children count (students linked to this parent)
         let children_count = sqlx::query_scalar!(
             r#"SELECT COUNT(*) as "count!" FROM students WHERE parent_id = $1"#,
@@ -855,7 +791,7 @@ pub async fn get_parent_dashboard_stats() -> Result<ParentDashboardStats, Server
         .fetch_one(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         // Calculate average GPA across all children
         let avg_grade = sqlx::query_scalar!(
             r#"
@@ -870,9 +806,9 @@ pub async fn get_parent_dashboard_stats() -> Result<ParentDashboardStats, Server
         .fetch_one(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         let avg_gpa = calculate_gpa_from_percentage(avg_grade);
-        
+
         Ok(ParentDashboardStats {
             children_count,
             avg_gpa,
@@ -893,25 +829,24 @@ pub async fn get_parent_dashboard_stats() -> Result<ParentDashboardStats, Server
 pub async fn get_parent_children() -> Result<Vec<ChildInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get parent ID
-        let parent_row = sqlx::query!(
-            r#"SELECT id FROM parents WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
-        
+        let parent_row = sqlx::query!(r#"SELECT id FROM parents WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
+
         let parent_id = parent_row.id;
-        
+
         // Get children with their grades
         let rows = sqlx::query!(
             r#"
@@ -932,29 +867,32 @@ pub async fn get_parent_children() -> Result<Vec<ChildInfo>, ServerFnError> {
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let children = rows.into_iter().map(|row| {
-            let gpa = calculate_gpa_from_percentage(row.avg_grade);
-            let status = if gpa >= 3.5 {
-                "Excellent Progress".to_string()
-            } else if gpa >= 2.5 {
-                "Good Progress".to_string()
-            } else if gpa >= 1.5 {
-                "Needs Improvement".to_string()
-            } else {
-                "At Risk".to_string()
-            };
-            
-            ChildInfo {
-                id: row.id.to_string(),
-                name: row.name,
-                grade_level: "Grade".to_string(), // Would need additional field
-                gpa,
-                status,
-                enrolled_classes: row.enrolled_classes,
-            }
-        }).collect();
-        
+
+        let children = rows
+            .into_iter()
+            .map(|row| {
+                let gpa = calculate_gpa_from_percentage(row.avg_grade);
+                let status = if gpa >= 3.5 {
+                    "Excellent Progress".to_string()
+                } else if gpa >= 2.5 {
+                    "Good Progress".to_string()
+                } else if gpa >= 1.5 {
+                    "Needs Improvement".to_string()
+                } else {
+                    "At Risk".to_string()
+                };
+
+                ChildInfo {
+                    id: row.id.to_string(),
+                    name: row.name,
+                    grade_level: "Grade".to_string(), // Would need additional field
+                    gpa,
+                    status,
+                    enrolled_classes: row.enrolled_classes,
+                }
+            })
+            .collect();
+
         Ok(children)
     }
     #[cfg(not(feature = "server"))]
@@ -988,25 +926,24 @@ pub struct StudentClassView {
 pub async fn get_teacher_classes_view() -> Result<Vec<TeacherClassView>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get teacher ID
-        let teacher_row = sqlx::query!(
-            r#"SELECT id FROM teachers WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
-        
+        let teacher_row = sqlx::query!(r#"SELECT id FROM teachers WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
+
         let teacher_id = teacher_row.id;
-        
+
         // Get classes through teaching assignments
         let rows = sqlx::query!(
             r#"
@@ -1027,17 +964,18 @@ pub async fn get_teacher_classes_view() -> Result<Vec<TeacherClassView>, ServerF
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let classes = rows.into_iter().map(|row| {
-            TeacherClassView {
+
+        let classes = rows
+            .into_iter()
+            .map(|row| TeacherClassView {
                 id: row.id.to_string(),
                 name: row.name,
                 subject_name: row.subject_name,
                 term: row.term.clone(),
                 student_count: row.student_count,
-            }
-        }).collect();
-        
+            })
+            .collect();
+
         Ok(classes)
     }
     #[cfg(not(feature = "server"))]
@@ -1049,25 +987,24 @@ pub async fn get_teacher_classes_view() -> Result<Vec<TeacherClassView>, ServerF
 pub async fn get_student_classes_view() -> Result<Vec<StudentClassView>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get student ID
-        let student_row = sqlx::query!(
-            r#"SELECT id FROM students WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Student record not found"))?;
-        
+        let student_row = sqlx::query!(r#"SELECT id FROM students WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Student record not found"))?;
+
         let student_id = student_row.id;
-        
+
         // Get enrolled classes with teacher info
         let rows = sqlx::query!(
             r#"
@@ -1095,17 +1032,18 @@ pub async fn get_student_classes_view() -> Result<Vec<StudentClassView>, ServerF
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let classes = rows.into_iter().map(|row| {
-            StudentClassView {
+
+        let classes = rows
+            .into_iter()
+            .map(|row| StudentClassView {
                 id: row.id.to_string(),
                 name: row.name,
                 subject_name: row.subject_name,
                 term: row.term.clone(),
                 teacher_name: row.teacher_name,
-            }
-        }).collect();
-        
+            })
+            .collect();
+
         Ok(classes)
     }
     #[cfg(not(feature = "server"))]
@@ -1140,25 +1078,24 @@ pub struct StudentGradeDetail {
 pub async fn get_teacher_students() -> Result<Vec<TeacherStudentInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get teacher ID
-        let teacher_row = sqlx::query!(
-            r#"SELECT id FROM teachers WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
-        
+        let teacher_row = sqlx::query!(r#"SELECT id FROM teachers WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
+
         let teacher_id = teacher_row.id;
-        
+
         // Get all students enrolled in teacher's classes with their stats
         let rows = sqlx::query!(
             r#"
@@ -1200,21 +1137,24 @@ pub async fn get_teacher_students() -> Result<Vec<TeacherStudentInfo>, ServerFnE
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let students = rows.into_iter().map(|row| {
-            let avg = row.avg_grade;
-            let letter = percentage_to_letter_grade(avg);
-            
-            TeacherStudentInfo {
-                id: row.id.to_string(),
-                name: row.name,
-                email: row.email,
-                average_grade: letter,
-                submitted_count: row.submitted_count,
-                classes: row.classes,
-            }
-        }).collect();
-        
+
+        let students = rows
+            .into_iter()
+            .map(|row| {
+                let avg = row.avg_grade;
+                let letter = percentage_to_letter_grade(avg);
+
+                TeacherStudentInfo {
+                    id: row.id.to_string(),
+                    name: row.name,
+                    email: row.email,
+                    average_grade: letter,
+                    submitted_count: row.submitted_count,
+                    classes: row.classes,
+                }
+            })
+            .collect();
+
         Ok(students)
     }
     #[cfg(not(feature = "server"))]
@@ -1223,29 +1163,31 @@ pub async fn get_teacher_students() -> Result<Vec<TeacherStudentInfo>, ServerFnE
 
 /// Get specific student's grades for teacher view
 #[server(endpoint = "teacher/student/grades")]
-pub async fn get_student_grades_for_teacher(student_id: String) -> Result<Vec<StudentGradeDetail>, ServerFnError> {
+pub async fn get_student_grades_for_teacher(
+    student_id: String,
+) -> Result<Vec<StudentGradeDetail>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let student_uuid = Uuid::parse_str(&student_id).map_err(|_| ServerFnError::new("Invalid student ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let student_uuid =
+            Uuid::parse_str(&student_id).map_err(|_| ServerFnError::new("Invalid student ID"))?;
+
         // Get teacher ID
-        let teacher_row = sqlx::query!(
-            r#"SELECT id FROM teachers WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
-        
+        let teacher_row = sqlx::query!(r#"SELECT id FROM teachers WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
+
         let teacher_id = teacher_row.id;
-        
+
         // Get student grades for classes this teacher teaches
         let rows = sqlx::query!(
             r#"
@@ -1271,20 +1213,26 @@ pub async fn get_student_grades_for_teacher(student_id: String) -> Result<Vec<St
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let grades = rows.into_iter().map(|row| {
-            let grade_f64 = row.grade.unwrap_or(0.0);
-            let letter = percentage_to_letter_grade(grade_f64);
-            
-            StudentGradeDetail {
-                assignment_title: row.title,
-                class_name: row.class_name,
-                grade: letter,
-                points: format!("{:.0}/100", grade_f64),
-                graded_at: row.graded_at.map(|d| d.format("%b %d").to_string()).unwrap_or_default(),
-            }
-        }).collect();
-        
+
+        let grades = rows
+            .into_iter()
+            .map(|row| {
+                let grade_f64 = row.grade.unwrap_or(0.0);
+                let letter = percentage_to_letter_grade(grade_f64);
+
+                StudentGradeDetail {
+                    assignment_title: row.title,
+                    class_name: row.class_name,
+                    grade: letter,
+                    points: format!("{:.0}/100", grade_f64),
+                    graded_at: row
+                        .graded_at
+                        .map(|d| d.format("%b %d").to_string())
+                        .unwrap_or_default(),
+                }
+            })
+            .collect();
+
         Ok(grades)
     }
     #[cfg(not(feature = "server"))]
@@ -1318,7 +1266,6 @@ pub struct ClassMaterialInfo {
     pub progress_percent: Option<i32>,
 }
 
-
 /// Grade info for class detail view
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClassGradeInfo {
@@ -1340,29 +1287,31 @@ pub struct ClassStudentInfo {
 
 /// Get student's assignments for a specific class
 #[server(endpoint = "classes/student/assignments")]
-pub async fn get_class_assignments_for_student(class_id: String) -> Result<Vec<ClassAssignmentInfo>, ServerFnError> {
+pub async fn get_class_assignments_for_student(
+    class_id: String,
+) -> Result<Vec<ClassAssignmentInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let class_uuid = Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let class_uuid =
+            Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
+
         // Get student ID
-        let student_row = sqlx::query!(
-            r#"SELECT id FROM students WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Student record not found"))?;
-        
+        let student_row = sqlx::query!(r#"SELECT id FROM students WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Student record not found"))?;
+
         let student_id = student_row.id;
-        
+
         // Get assignments for this class
         let rows = sqlx::query!(
             r#"
@@ -1384,20 +1333,23 @@ pub async fn get_class_assignments_for_student(class_id: String) -> Result<Vec<C
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let assignments = rows.into_iter().map(|row| {
-            let status = row.status.to_lowercase();
-            let grade = row.grade.map(|g| format!("{}%", g as i32));
-            
-            ClassAssignmentInfo {
-                id: row.id.to_string(),
-                title: row.title,
-                due_date: row.due_at.format("%b %d, %Y").to_string(),
-                status,
-                grade,
-            }
-        }).collect();
-        
+
+        let assignments = rows
+            .into_iter()
+            .map(|row| {
+                let status = row.status.to_lowercase();
+                let grade = row.grade.map(|g| format!("{}%", g as i32));
+
+                ClassAssignmentInfo {
+                    id: row.id.to_string(),
+                    title: row.title,
+                    due_date: row.due_at.format("%b %d, %Y").to_string(),
+                    status,
+                    grade,
+                }
+            })
+            .collect();
+
         Ok(assignments)
     }
     #[cfg(not(feature = "server"))]
@@ -1406,29 +1358,31 @@ pub async fn get_class_assignments_for_student(class_id: String) -> Result<Vec<C
 
 /// Get student's grades for a specific class
 #[server(endpoint = "classes/student/grades")]
-pub async fn get_class_grades_for_student(class_id: String) -> Result<Vec<ClassGradeInfo>, ServerFnError> {
+pub async fn get_class_grades_for_student(
+    class_id: String,
+) -> Result<Vec<ClassGradeInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let class_uuid = Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let class_uuid =
+            Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
+
         // Get student ID
-        let student_row = sqlx::query!(
-            r#"SELECT id FROM students WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Student record not found"))?;
-        
+        let student_row = sqlx::query!(r#"SELECT id FROM students WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Student record not found"))?;
+
         let student_id = student_row.id;
-        
+
         // Get graded assignments
         let rows = sqlx::query!(
             r#"
@@ -1448,19 +1402,25 @@ pub async fn get_class_grades_for_student(class_id: String) -> Result<Vec<ClassG
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let grades = rows.into_iter().map(|row| {
-            let grade_pct = row.grade as i32;
-            let letter = percentage_to_letter_grade(row.grade);
-            
-            ClassGradeInfo {
-                assignment_title: row.title,
-                grade: letter,
-                points: format!("{}/100", grade_pct),
-                graded_at: row.graded_at.map(|d| d.format("%b %d").to_string()).unwrap_or_default(),
-            }
-        }).collect();
-        
+
+        let grades = rows
+            .into_iter()
+            .map(|row| {
+                let grade_pct = row.grade as i32;
+                let letter = percentage_to_letter_grade(row.grade);
+
+                ClassGradeInfo {
+                    assignment_title: row.title,
+                    grade: letter,
+                    points: format!("{}/100", grade_pct),
+                    graded_at: row
+                        .graded_at
+                        .map(|d| d.format("%b %d").to_string())
+                        .unwrap_or_default(),
+                }
+            })
+            .collect();
+
         Ok(grades)
     }
     #[cfg(not(feature = "server"))]
@@ -1469,29 +1429,31 @@ pub async fn get_class_grades_for_student(class_id: String) -> Result<Vec<ClassG
 
 /// Get materials for a specific class (student view)
 #[server(endpoint = "classes/student/materials")]
-pub async fn get_class_materials_for_student(class_id: String) -> Result<Vec<ClassMaterialInfo>, ServerFnError> {
+pub async fn get_class_materials_for_student(
+    class_id: String,
+) -> Result<Vec<ClassMaterialInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let class_uuid = Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let class_uuid =
+            Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
+
         // Verify student is enrolled in this class
-        let student_row = sqlx::query!(
-            r#"SELECT id FROM students WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Student record not found"))?;
-        
+        let student_row = sqlx::query!(r#"SELECT id FROM students WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Student record not found"))?;
+
         let student_id = student_row.id;
-        
+
         // Verify enrollment
         let enrollment_check = sqlx::query!(
             r#"SELECT id FROM enrollments WHERE student_id = $1 AND class_section_id = $2"#,
@@ -1501,11 +1463,13 @@ pub async fn get_class_materials_for_student(class_id: String) -> Result<Vec<Cla
         .fetch_optional(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         if enrollment_check.is_none() {
-            return Err(ServerFnError::new("Access denied: Not enrolled in this class"));
+            return Err(ServerFnError::new(
+                "Access denied: Not enrolled in this class",
+            ));
         }
-        
+
         // Query class_materials table (will return empty until migration runs)
         // Using raw query to handle potential missing table gracefully
         let rows: Vec<serde_json::Value> = sqlx::query_scalar(
@@ -1526,17 +1490,18 @@ pub async fn get_class_materials_for_student(class_id: String) -> Result<Vec<Cla
             FROM class_materials
             WHERE class_section_id = $1
             ORDER BY display_order ASC, created_at DESC
-            "#
+            "#,
         )
         .bind(class_uuid)
         .fetch_all(&**pool)
         .await
         .unwrap_or_else(|_| vec![]); // Return empty if table doesn't exist yet
-        
-        let materials = rows.into_iter().filter_map(|row| {
-            serde_json::from_value::<ClassMaterialInfo>(row).ok()
-        }).collect();
-        
+
+        let materials = rows
+            .into_iter()
+            .filter_map(|row| serde_json::from_value::<ClassMaterialInfo>(row).ok())
+            .collect();
+
         Ok(materials)
     }
     #[cfg(not(feature = "server"))]
@@ -1545,16 +1510,20 @@ pub async fn get_class_materials_for_student(class_id: String) -> Result<Vec<Cla
 
 /// Get enrolled students for a class (teacher view)
 #[server(endpoint = "classes/teacher/students")]
-pub async fn get_class_students_for_teacher(class_id: String) -> Result<Vec<ClassStudentInfo>, ServerFnError> {
+pub async fn get_class_students_for_teacher(
+    class_id: String,
+) -> Result<Vec<ClassStudentInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(_user): Extension<UserInfo> = extract().await
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let class_uuid = Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
-        
+        let class_uuid =
+            Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
+
         let rows = sqlx::query!(
             r#"
             SELECT 
@@ -1580,17 +1549,18 @@ pub async fn get_class_students_for_teacher(class_id: String) -> Result<Vec<Clas
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let students = rows.into_iter().map(|row| {
-            ClassStudentInfo {
+
+        let students = rows
+            .into_iter()
+            .map(|row| ClassStudentInfo {
                 id: row.id.to_string(),
                 name: row.name,
                 email: row.email,
                 submitted_count: row.submitted_count,
                 graded_count: row.graded_count,
-            }
-        }).collect();
-        
+            })
+            .collect();
+
         Ok(students)
     }
     #[cfg(not(feature = "server"))]
@@ -1599,16 +1569,20 @@ pub async fn get_class_students_for_teacher(class_id: String) -> Result<Vec<Clas
 
 /// Get class assignments for teacher (grading view)
 #[server(endpoint = "classes/teacher/assignments")]
-pub async fn get_class_assignments_for_teacher(class_id: String) -> Result<Vec<serde_json::Value>, ServerFnError> {
+pub async fn get_class_assignments_for_teacher(
+    class_id: String,
+) -> Result<Vec<serde_json::Value>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(_user): Extension<UserInfo> = extract().await
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let class_uuid = Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
-        
+        let class_uuid =
+            Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
+
         let rows = sqlx::query!(
             r#"
             SELECT 
@@ -1627,18 +1601,21 @@ pub async fn get_class_assignments_for_teacher(class_id: String) -> Result<Vec<s
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let assignments: Vec<serde_json::Value> = rows.into_iter().map(|row| {
-            serde_json::json!({
-                "id": row.id.to_string(),
-                "title": row.title,
-                "due_date": row.due_at.format("%b %d, %Y").to_string(),
-                "status": row.status,
-                "total_count": row.total_count,
-                "pending_grading": row.pending_grading
+
+        let assignments: Vec<serde_json::Value> = rows
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.id.to_string(),
+                    "title": row.title,
+                    "due_date": row.due_at.format("%b %d, %Y").to_string(),
+                    "status": row.status,
+                    "total_count": row.total_count,
+                    "pending_grading": row.pending_grading
+                })
             })
-        }).collect();
-        
+            .collect();
+
         Ok(assignments)
     }
     #[cfg(not(feature = "server"))]
@@ -1680,29 +1657,31 @@ pub struct ChildAttendanceInfo {
 
 /// Get child's grades for parent view
 #[server(endpoint = "parent/child/grades")]
-pub async fn get_child_grades_for_parent(child_id: String) -> Result<Vec<ChildGradeInfo>, ServerFnError> {
+pub async fn get_child_grades_for_parent(
+    child_id: String,
+) -> Result<Vec<ChildGradeInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let child_uuid = Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let child_uuid =
+            Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
+
         // Verify parent owns this child
-        let parent_row = sqlx::query!(
-            r#"SELECT id FROM parents WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
-        
+        let parent_row = sqlx::query!(r#"SELECT id FROM parents WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
+
         let parent_id = parent_row.id;
-        
+
         // Verify child belongs to this parent
         let child_check = sqlx::query!(
             r#"SELECT id FROM students WHERE id = $1 AND parent_id = $2"#,
@@ -1712,11 +1691,13 @@ pub async fn get_child_grades_for_parent(child_id: String) -> Result<Vec<ChildGr
         .fetch_optional(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         if child_check.is_none() {
-            return Err(ServerFnError::new("Access denied: Child not found or not linked to your account"));
+            return Err(ServerFnError::new(
+                "Access denied: Child not found or not linked to your account",
+            ));
         }
-        
+
         // Get child's grades
         let rows = sqlx::query!(
             r#"
@@ -1739,20 +1720,26 @@ pub async fn get_child_grades_for_parent(child_id: String) -> Result<Vec<ChildGr
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let grades = rows.into_iter().map(|row| {
-            let grade_f64 = row.grade.unwrap_or(0.0);
-            let letter = percentage_to_letter_grade(grade_f64);
-            
-            ChildGradeInfo {
-                assignment_title: row.title,
-                class_name: row.class_name,
-                grade: letter,
-                points: format!("{:.0}/100", grade_f64),
-                graded_at: row.graded_at.map(|d| d.format("%b %d").to_string()).unwrap_or_default(),
-            }
-        }).collect();
-        
+
+        let grades = rows
+            .into_iter()
+            .map(|row| {
+                let grade_f64 = row.grade.unwrap_or(0.0);
+                let letter = percentage_to_letter_grade(grade_f64);
+
+                ChildGradeInfo {
+                    assignment_title: row.title,
+                    class_name: row.class_name,
+                    grade: letter,
+                    points: format!("{:.0}/100", grade_f64),
+                    graded_at: row
+                        .graded_at
+                        .map(|d| d.format("%b %d").to_string())
+                        .unwrap_or_default(),
+                }
+            })
+            .collect();
+
         Ok(grades)
     }
     #[cfg(not(feature = "server"))]
@@ -1761,29 +1748,31 @@ pub async fn get_child_grades_for_parent(child_id: String) -> Result<Vec<ChildGr
 
 /// Get child's pending assignments for parent view
 #[server(endpoint = "parent/child/assignments")]
-pub async fn get_child_assignments_for_parent(child_id: String) -> Result<Vec<ChildAssignmentInfo>, ServerFnError> {
+pub async fn get_child_assignments_for_parent(
+    child_id: String,
+) -> Result<Vec<ChildAssignmentInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let child_uuid = Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let child_uuid =
+            Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
+
         // Verify parent owns this child
-        let parent_row = sqlx::query!(
-            r#"SELECT id FROM parents WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
-        
+        let parent_row = sqlx::query!(r#"SELECT id FROM parents WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
+
         let parent_id = parent_row.id;
-        
+
         // Verify child belongs to this parent
         let child_check = sqlx::query!(
             r#"SELECT id FROM students WHERE id = $1 AND parent_id = $2"#,
@@ -1793,11 +1782,13 @@ pub async fn get_child_assignments_for_parent(child_id: String) -> Result<Vec<Ch
         .fetch_optional(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         if child_check.is_none() {
-            return Err(ServerFnError::new("Access denied: Child not found or not linked to your account"));
+            return Err(ServerFnError::new(
+                "Access denied: Child not found or not linked to your account",
+            ));
         }
-        
+
         // Get child's assignments
         let rows = sqlx::query!(
             r#"
@@ -1821,21 +1812,24 @@ pub async fn get_child_assignments_for_parent(child_id: String) -> Result<Vec<Ch
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
-        let assignments = rows.into_iter().map(|row| {
-            let status = row.status.to_lowercase();
-            let grade = row.grade.map(|g| percentage_to_letter_grade(g));
-            
-            ChildAssignmentInfo {
-                id: row.id.to_string(),
-                title: row.title,
-                class_name: row.class_name,
-                due_date: row.due_at.format("%b %d, %Y").to_string(),
-                status,
-                grade,
-            }
-        }).collect();
-        
+
+        let assignments = rows
+            .into_iter()
+            .map(|row| {
+                let status = row.status.to_lowercase();
+                let grade = row.grade.map(|g| percentage_to_letter_grade(g));
+
+                ChildAssignmentInfo {
+                    id: row.id.to_string(),
+                    title: row.title,
+                    class_name: row.class_name,
+                    due_date: row.due_at.format("%b %d, %Y").to_string(),
+                    status,
+                    grade,
+                }
+            })
+            .collect();
+
         Ok(assignments)
     }
     #[cfg(not(feature = "server"))]
@@ -1844,29 +1838,31 @@ pub async fn get_child_assignments_for_parent(child_id: String) -> Result<Vec<Ch
 
 /// Get child's attendance for parent view
 #[server(endpoint = "parent/child/attendance")]
-pub async fn get_child_attendance_for_parent(child_id: String) -> Result<ChildAttendanceInfo, ServerFnError> {
+pub async fn get_child_attendance_for_parent(
+    child_id: String,
+) -> Result<ChildAttendanceInfo, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let child_uuid = Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let child_uuid =
+            Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
+
         // Verify parent owns this child
-        let parent_row = sqlx::query!(
-            r#"SELECT id FROM parents WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
-        
+        let parent_row = sqlx::query!(r#"SELECT id FROM parents WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Parent record not found"))?;
+
         let parent_id = parent_row.id;
-        
+
         // Verify child belongs to this parent
         let child_check = sqlx::query!(
             r#"SELECT id FROM students WHERE id = $1 AND parent_id = $2"#,
@@ -1876,11 +1872,13 @@ pub async fn get_child_attendance_for_parent(child_id: String) -> Result<ChildAt
         .fetch_optional(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         if child_check.is_none() {
-            return Err(ServerFnError::new("Access denied: Child not found or not linked to your account"));
+            return Err(ServerFnError::new(
+                "Access denied: Child not found or not linked to your account",
+            ));
         }
-        
+
         // Note: Attendance tracking table doesn't exist yet, returning placeholder data
         // TODO: Implement proper attendance tracking in database
         Ok(ChildAttendanceInfo {
@@ -1915,7 +1913,7 @@ pub struct TeacherSubmissionInfo {
     pub class_name: String,
     pub student_id: String,
     pub student_name: String,
-    pub student_email: String,  
+    pub student_email: String,
     pub content: String,
     pub submitted_at: String,
     pub status: String, // "pending", "graded"
@@ -1925,29 +1923,29 @@ pub struct TeacherSubmissionInfo {
 
 /// Get all pending submissions for a teacher to grade
 #[server(endpoint = "teacher/submissions/pending")]
-pub async fn get_pending_submissions_for_teacher() -> Result<Vec<TeacherSubmissionInfo>, ServerFnError> {
+pub async fn get_pending_submissions_for_teacher(
+) -> Result<Vec<TeacherSubmissionInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
         let start = Instant::now();
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+
         // Get teacher ID
-        let teacher_row = sqlx::query!(
-            r#"SELECT id FROM teachers WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
-        
+        let teacher_row = sqlx::query!(r#"SELECT id FROM teachers WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
+
         let teacher_id = teacher_row.id;
-        
+
         // Get pending submissions (submitted but not graded)
         let rows: Vec<sqlx::postgres::PgRow> = sqlx::query(
             r#"
@@ -1973,41 +1971,49 @@ pub async fn get_pending_submissions_for_teacher() -> Result<Vec<TeacherSubmissi
             AND s.grade IS NULL
             ORDER BY s.submitted_at ASC
             LIMIT 50
-            "#
+            "#,
         )
         .bind(teacher_id)
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         use sqlx::Row;
-        let submissions: Vec<TeacherSubmissionInfo> = rows.into_iter().map(|row| {
-            let content_json: serde_json::Value = row.get("content");
-            let content_text = content_json.get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            
-            let submitted_at: chrono::DateTime<chrono::Utc> = row.get("submitted_at");
-            let grade: Option<f64> = row.try_get("grade").ok().flatten();
-            let feedback: Option<String> = row.try_get("feedback").ok().flatten();
-            
-            TeacherSubmissionInfo {
-                id: row.get::<Uuid, _>("submission_id").to_string(),
-                custom_assignment_id: row.get::<Uuid, _>("custom_assignment_id").to_string(),
-                assignment_title: row.get("assignment_title"),
-                class_name: row.get("class_name"),
-                student_id: row.get::<Uuid, _>("student_id").to_string(),
-                student_name: row.get("student_name"),
-                student_email: row.get("student_email"),
-                content: content_text,
-                submitted_at: submitted_at.format("%Y-%m-%d %H:%M").to_string(),
-                status: if grade.is_some() { "graded".to_string() } else { "pending".to_string() },
-                grade,
-                feedback,
-            }
-        }).collect();
-        
+        let submissions: Vec<TeacherSubmissionInfo> = rows
+            .into_iter()
+            .map(|row| {
+                let content_json: serde_json::Value = row.get("content");
+                let content_text = content_json
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let submitted_at: chrono::DateTime<chrono::Utc> = row.get("submitted_at");
+                let grade: Option<f64> = row.try_get("grade").ok().flatten();
+                let feedback: Option<String> = row.try_get("feedback").ok().flatten();
+
+                TeacherSubmissionInfo {
+                    id: row.get::<Uuid, _>("submission_id").to_string(),
+                    custom_assignment_id: row.get::<Uuid, _>("custom_assignment_id").to_string(),
+                    assignment_title: row.get("assignment_title"),
+                    class_name: row.get("class_name"),
+                    student_id: row.get::<Uuid, _>("student_id").to_string(),
+                    student_name: row.get("student_name"),
+                    student_email: row.get("student_email"),
+                    content: content_text,
+                    submitted_at: submitted_at.format("%Y-%m-%d %H:%M").to_string(),
+                    status: if grade.is_some() {
+                        "graded".to_string()
+                    } else {
+                        "pending".to_string()
+                    },
+                    grade,
+                    feedback,
+                }
+            })
+            .collect();
+
         log_query_timing("get_pending_submissions_for_teacher", start);
         Ok(submissions)
     }
@@ -2017,18 +2023,23 @@ pub async fn get_pending_submissions_for_teacher() -> Result<Vec<TeacherSubmissi
 
 /// Get all submissions for a specific assignment
 #[server(endpoint = "teacher/submissions/by_assignment")]
-pub async fn get_submissions_for_assignment(assignment_id: String) -> Result<Vec<TeacherSubmissionInfo>, ServerFnError> {
+pub async fn get_submissions_for_assignment(
+    assignment_id: String,
+) -> Result<Vec<TeacherSubmissionInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
         let start = Instant::now();
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let assignment_uuid = Uuid::parse_str(&assignment_id).map_err(|_| ServerFnError::new("Invalid assignment ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let assignment_uuid = Uuid::parse_str(&assignment_id)
+            .map_err(|_| ServerFnError::new("Invalid assignment ID"))?;
+
         // Verify teacher owns this assignment
         let _teacher_row = sqlx::query!(
             r#"
@@ -2044,7 +2055,7 @@ pub async fn get_submissions_for_assignment(assignment_id: String) -> Result<Vec
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
         .ok_or_else(|| ServerFnError::new("Assignment not found or not owned by you"))?;
-        
+
         // Get all submissions for this assignment
         let rows: Vec<sqlx::postgres::PgRow> = sqlx::query(
             r#"
@@ -2068,41 +2079,49 @@ pub async fn get_submissions_for_assignment(assignment_id: String) -> Result<Vec
             JOIN users u ON st.user_id = u.id
             WHERE a.id = $1
             ORDER BY s.submitted_at ASC
-            "#
+            "#,
         )
         .bind(assignment_uuid)
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         use sqlx::Row;
-        let submissions: Vec<TeacherSubmissionInfo> = rows.into_iter().map(|row| {
-            let content_json: serde_json::Value = row.get("content");
-            let content_text = content_json.get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            
-            let submitted_at: chrono::DateTime<chrono::Utc> = row.get("submitted_at");
-            let grade: Option<f64> = row.get("grade");
-            let feedback: Option<String> = row.get("feedback");
-            
-            TeacherSubmissionInfo {
-                id: row.get::<Uuid, _>("submission_id").to_string(),
-                custom_assignment_id: row.get::<Uuid, _>("custom_assignment_id").to_string(),
-                assignment_title: row.get("assignment_title"),
-                class_name: row.get("class_name"),
-                student_id: row.get::<Uuid, _>("student_id").to_string(),
-                student_name: row.get("student_name"),
-                student_email: row.get("student_email"),
-                content: content_text,
-                submitted_at: submitted_at.format("%Y-%m-%d %H:%M").to_string(),
-                status: if grade.is_some() { "graded".to_string() } else { "pending".to_string() },
-                grade,
-                feedback,
-            }
-        }).collect();
-        
+        let submissions: Vec<TeacherSubmissionInfo> = rows
+            .into_iter()
+            .map(|row| {
+                let content_json: serde_json::Value = row.get("content");
+                let content_text = content_json
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let submitted_at: chrono::DateTime<chrono::Utc> = row.get("submitted_at");
+                let grade: Option<f64> = row.get("grade");
+                let feedback: Option<String> = row.get("feedback");
+
+                TeacherSubmissionInfo {
+                    id: row.get::<Uuid, _>("submission_id").to_string(),
+                    custom_assignment_id: row.get::<Uuid, _>("custom_assignment_id").to_string(),
+                    assignment_title: row.get("assignment_title"),
+                    class_name: row.get("class_name"),
+                    student_id: row.get::<Uuid, _>("student_id").to_string(),
+                    student_name: row.get("student_name"),
+                    student_email: row.get("student_email"),
+                    content: content_text,
+                    submitted_at: submitted_at.format("%Y-%m-%d %H:%M").to_string(),
+                    status: if grade.is_some() {
+                        "graded".to_string()
+                    } else {
+                        "pending".to_string()
+                    },
+                    grade,
+                    feedback,
+                }
+            })
+            .collect();
+
         log_query_timing("get_submissions_for_assignment", start);
         Ok(submissions)
     }
@@ -2119,31 +2138,31 @@ pub async fn grade_submission(
 ) -> Result<bool, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let submission_uuid = Uuid::parse_str(&submission_id).map_err(|_| ServerFnError::new("Invalid submission ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let submission_uuid = Uuid::parse_str(&submission_id)
+            .map_err(|_| ServerFnError::new("Invalid submission ID"))?;
+
         // Validate grade range
         if grade < 0.0 || grade > 100.0 {
             return Err(ServerFnError::new("Grade must be between 0 and 100"));
         }
-        
+
         // Get teacher ID
-        let teacher_row = sqlx::query!(
-            r#"SELECT id FROM teachers WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
-        .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
-        
+        let teacher_row = sqlx::query!(r#"SELECT id FROM teachers WHERE user_id = $1"#, user_id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .ok_or_else(|| ServerFnError::new("Teacher record not found"))?;
+
         let teacher_id = teacher_row.id;
-        
+
         // Verify teacher owns this submission's assignment
         let _check = sqlx::query(
             r#"
@@ -2152,7 +2171,7 @@ pub async fn grade_submission(
             JOIN custom_assignments ca ON s.custom_assignment_id = ca.id
             JOIN assignments a ON ca.assignment_id = a.id
             WHERE s.id = $1 AND a.teacher_id = $2
-            "#
+            "#,
         )
         .bind(submission_uuid)
         .bind(teacher_id)
@@ -2160,14 +2179,14 @@ pub async fn grade_submission(
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
         .ok_or_else(|| ServerFnError::new("Submission not found or not owned by you"))?;
-        
+
         // Update submission with grade and feedback
         sqlx::query(
             r#"
             UPDATE submissions 
             SET grade = $1, feedback = $2, graded_by = $3
             WHERE id = $4
-            "#
+            "#,
         )
         .bind(grade)
         .bind(&feedback)
@@ -2176,20 +2195,20 @@ pub async fn grade_submission(
         .execute(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Failed to save grade: {}", e)))?;
-        
+
         // Update custom_assignment status to Graded
         sqlx::query(
             r#"
             UPDATE custom_assignments 
             SET status = 'Graded'::custom_status, graded_at = NOW()
             WHERE id = (SELECT custom_assignment_id FROM submissions WHERE id = $1)
-            "#
+            "#,
         )
         .bind(submission_uuid)
         .execute(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Failed to update assignment status: {}", e)))?;
-        
+
         Ok(true)
     }
     #[cfg(not(feature = "server"))]
@@ -2226,22 +2245,29 @@ pub struct UpdateMaterialRequestDto {
 
 /// Create a new class material (teacher only)
 #[server(endpoint = "teacher/materials/create")]
-pub async fn create_class_material(request: CreateMaterialRequest) -> Result<ClassMaterialInfo, ServerFnError> {
+pub async fn create_class_material(
+    request: CreateMaterialRequest,
+) -> Result<ClassMaterialInfo, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        use crate::repositories::{MaterialRepository, CreateMaterialRequest as RepoCreate, MaterialType};
+        use crate::repositories::{
+            CreateMaterialRequest as RepoCreate, MaterialRepository, MaterialType,
+        };
         use crate::services::DocumentExtractionService;
         use base64::Engine;
         use std::sync::Arc;
 
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let class_uuid = Uuid::parse_str(&request.class_section_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let class_uuid = Uuid::parse_str(&request.class_section_id)
+            .map_err(|_| ServerFnError::new("Invalid class ID"))?;
+
         // Get teacher ID and verify they teach this class
         let _teacher_row = sqlx::query!(
             r#"
@@ -2257,16 +2283,16 @@ pub async fn create_class_material(request: CreateMaterialRequest) -> Result<Cla
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
         .ok_or_else(|| ServerFnError::new("Access denied: You do not teach this class"))?;
-        
+
         // Handle file upload: extract content from base64-encoded file
-        let extracted_text = if let (Some(file_bytes_b64), Some(file_name)) = 
-            (&request.file_bytes_base64, &request.file_name) 
+        let extracted_text = if let (Some(file_bytes_b64), Some(file_name)) =
+            (&request.file_bytes_base64, &request.file_name)
         {
             // Decode base64 to bytes
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(file_bytes_b64)
                 .map_err(|e| ServerFnError::new(format!("Invalid file encoding: {}", e)))?;
-            
+
             // Extract text content using DocumentExtractionService
             let doc_service = DocumentExtractionService::new();
             match doc_service.extract_from_bytes(&bytes, file_name) {
@@ -2287,47 +2313,54 @@ pub async fn create_class_material(request: CreateMaterialRequest) -> Result<Cla
         } else {
             None
         };
-        
+
         // Determine if this is a document type material
         let is_document = request.material_type.to_lowercase() == "document";
         let has_content = extracted_text.is_some() || request.file_url.is_some();
-        
+
         // Create material using repository
         let material_repo = MaterialRepository::new(Arc::clone(pool));
-        
-        let material = material_repo.create(RepoCreate {
-            class_section_id: class_uuid,
-            title: request.title,
-            description: request.description,
-            material_type: MaterialType::from_str(&request.material_type),
-            file_url: request.file_url.clone(),
-            file_size_bytes: request.file_size_bytes,
-            mime_type: request.mime_type,
-            external_link: request.external_link,
-            is_required: request.is_required,
-            display_order: None,
-            created_by: user_id,
-            extracted_text: extracted_text.clone(),
-        })
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to create material: {}", e)))?;
-        
+
+        let material = material_repo
+            .create(RepoCreate {
+                class_section_id: class_uuid,
+                title: request.title,
+                description: request.description,
+                material_type: MaterialType::from_str(&request.material_type),
+                file_url: request.file_url.clone(),
+                file_size_bytes: request.file_size_bytes,
+                mime_type: request.mime_type,
+                external_link: request.external_link,
+                is_required: request.is_required,
+                display_order: None,
+                created_by: user_id,
+                extracted_text: extracted_text.clone(),
+            })
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to create material: {}", e)))?;
+
         // Trigger automatic vectorization for document types with content
         if is_document && has_content {
             let pool_clone = Arc::clone(pool);
             let material_id = material.id;
             tokio::spawn(async move {
                 // Run vectorization in background
-                if let Ok(vec_service) = crate::services::MaterialVectorizationService::new(pool_clone).await {
+                if let Ok(vec_service) =
+                    crate::services::MaterialVectorizationService::new(pool_clone).await
+                {
                     if let Err(e) = vec_service.vectorize_material(material_id).await {
-                        tracing::warn!("Background vectorization failed for material {}: {}", material_id, e);
+                        tracing::warn!(
+                            "Background vectorization failed for material {}: {}",
+                            material_id,
+                            e
+                        );
                     } else {
                         tracing::info!("Material {} vectorized successfully", material_id);
                     }
                 }
             });
         }
-        
+
         Ok(ClassMaterialInfo {
             id: material.id.to_string(),
             title: material.title,
@@ -2337,8 +2370,16 @@ pub async fn create_class_material(request: CreateMaterialRequest) -> Result<Cla
             external_link: material.external_link,
             is_required: material.is_required,
             created_at: material.created_at.format("%b %d, %Y").to_string(),
-            status: if is_document && has_content { Some("pending".to_string()) } else { None },
-            progress_percent: if is_document && has_content { Some(0) } else { None },
+            status: if is_document && has_content {
+                Some("pending".to_string())
+            } else {
+                None
+            },
+            progress_percent: if is_document && has_content {
+                Some(0)
+            } else {
+                None
+            },
         })
     }
     #[cfg(not(feature = "server"))]
@@ -2347,46 +2388,59 @@ pub async fn create_class_material(request: CreateMaterialRequest) -> Result<Cla
 
 /// Update an existing class material (teacher only)
 #[server(endpoint = "teacher/materials/update")]
-pub async fn update_class_material(material_id: String, request: UpdateMaterialRequestDto) -> Result<ClassMaterialInfo, ServerFnError> {
+pub async fn update_class_material(
+    material_id: String,
+    request: UpdateMaterialRequestDto,
+) -> Result<ClassMaterialInfo, ServerFnError> {
     #[cfg(feature = "server")]
     {
         use crate::repositories::{MaterialRepository, UpdateMaterialRequest as RepoUpdate};
         use std::sync::Arc;
 
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let material_uuid = Uuid::parse_str(&material_id).map_err(|_| ServerFnError::new("Invalid material ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let material_uuid =
+            Uuid::parse_str(&material_id).map_err(|_| ServerFnError::new("Invalid material ID"))?;
+
         let material_repo = MaterialRepository::new(Arc::clone(pool));
-        
+
         // Verify teacher has access
-        let has_access = material_repo.check_teacher_access(material_uuid, user_id)
+        let has_access = material_repo
+            .check_teacher_access(material_uuid, user_id)
             .await
             .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         if !has_access {
-            return Err(ServerFnError::new("Access denied: You cannot edit this material"));
+            return Err(ServerFnError::new(
+                "Access denied: You cannot edit this material",
+            ));
         }
-        
+
         // Update material
-        let material = material_repo.update(material_uuid, RepoUpdate {
-            title: request.title,
-            description: request.description,
-            material_type: None,
-            file_url: None,
-            file_size_bytes: None,
-            mime_type: None,
-            external_link: None,
-            is_required: request.is_required,
-            display_order: None,
-        })
-        .await
-        .map_err(|e| ServerFnError::new(format!("Failed to update material: {}", e)))?;
-        
+        let material = material_repo
+            .update(
+                material_uuid,
+                RepoUpdate {
+                    title: request.title,
+                    description: request.description,
+                    material_type: None,
+                    file_url: None,
+                    file_size_bytes: None,
+                    mime_type: None,
+                    external_link: None,
+                    is_required: request.is_required,
+                    display_order: None,
+                },
+            )
+            .await
+            .map_err(|e| ServerFnError::new(format!("Failed to update material: {}", e)))?;
+
         Ok(ClassMaterialInfo {
             id: material.id.to_string(),
             title: material.title,
@@ -2397,10 +2451,10 @@ pub async fn update_class_material(material_id: String, request: UpdateMaterialR
             is_required: material.is_required,
             created_at: material.created_at.format("%b %d, %Y").to_string(),
             // Preserve existing status/progress? Since this is update, we might not know it easily without querying.
-            // But usually metadata update doesn't change vectorization status. 
+            // But usually metadata update doesn't change vectorization status.
             // We can return None or query it. Returning None gives no info.
             // Let's return None for now as this is just the return value of update, and the list view will refresh separately.
-            status: None, 
+            status: None,
             progress_percent: None,
         })
     }
@@ -2416,41 +2470,48 @@ pub async fn delete_class_material(material_id: String) -> Result<bool, ServerFn
         use crate::repositories::MaterialRepository;
         use std::sync::Arc;
 
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let material_uuid = Uuid::parse_str(&material_id).map_err(|_| ServerFnError::new("Invalid material ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let material_uuid =
+            Uuid::parse_str(&material_id).map_err(|_| ServerFnError::new("Invalid material ID"))?;
+
         let material_repo = MaterialRepository::new(Arc::clone(pool));
-        
+
         // Verify teacher has access
-        let has_access = material_repo.check_teacher_access(material_uuid, user_id)
+        let has_access = material_repo
+            .check_teacher_access(material_uuid, user_id)
             .await
             .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         if !has_access {
-            return Err(ServerFnError::new("Access denied: You cannot delete this material"));
+            return Err(ServerFnError::new(
+                "Access denied: You cannot delete this material",
+            ));
         }
-        
+
         // Also delete from vector store if vectorized
         if let Ok(qdrant) = crate::services::QdrantService::new().await {
             let _ = qdrant.delete_by_material_id(&material_id).await;
         }
-        
+
         // Delete material from database
-        material_repo.delete(material_uuid)
+        material_repo
+            .delete(material_uuid)
             .await
             .map_err(|e| ServerFnError::new(format!("Failed to delete material: {}", e)))?;
-        
+
         // Also delete embedding tracking record
         let _ = sqlx::query("DELETE FROM material_embeddings WHERE material_id = $1")
             .bind(material_uuid)
             .execute(&**pool)
             .await;
-        
+
         Ok(true)
     }
     #[cfg(not(feature = "server"))]
@@ -2459,20 +2520,25 @@ pub async fn delete_class_material(material_id: String) -> Result<bool, ServerFn
 
 /// Get materials for a specific class (teacher view with additional info)
 #[server(endpoint = "teacher/materials/list")]
-pub async fn get_class_materials_for_teacher(class_id: String) -> Result<Vec<ClassMaterialInfo>, ServerFnError> {
+pub async fn get_class_materials_for_teacher(
+    class_id: String,
+) -> Result<Vec<ClassMaterialInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
         use crate::repositories::MaterialRepository;
         use std::sync::Arc;
 
-        let Extension(user): Extension<UserInfo> = extract().await
+        let Extension(user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
-        let class_uuid = Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
-        
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let class_uuid =
+            Uuid::parse_str(&class_id).map_err(|_| ServerFnError::new("Invalid class ID"))?;
+
         // Verify teacher teaches this class
         let teacher_check = sqlx::query!(
             r#"
@@ -2487,11 +2553,13 @@ pub async fn get_class_materials_for_teacher(class_id: String) -> Result<Vec<Cla
         .fetch_optional(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         if teacher_check.is_none() {
-            return Err(ServerFnError::new("Access denied: You do not teach this class"));
+            return Err(ServerFnError::new(
+                "Access denied: You do not teach this class",
+            ));
         }
-        
+
         let materials = sqlx::query!(
             r#"
             SELECT 
@@ -2509,32 +2577,41 @@ pub async fn get_class_materials_for_teacher(class_id: String) -> Result<Vec<Cla
         .fetch_all(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Failed to fetch materials: {}", e)))?;
-        
-        Ok(materials.into_iter().map(|m| {
-            let progress_percent = if let (Some(current), Some(total)) = (m.current_batch, m.total_batches) {
-                if total > 0 { (current * 100) / total } else { 0 }
-            } else {
-                0
-            };
 
-            let status = if m.cancelled.unwrap_or(false) {
-                Some("cancelled".to_string())
-            } else {
-                m.status
-            };
+        Ok(materials
+            .into_iter()
+            .map(|m| {
+                let progress_percent =
+                    if let (Some(current), Some(total)) = (m.current_batch, m.total_batches) {
+                        if total > 0 {
+                            (current * 100) / total
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    };
 
-            ClassMaterialInfo {
-            id: m.id.to_string(),
-            title: m.title,
-            description: m.description,
-            material_type: m.material_type,
-            file_url: m.file_url,
-            external_link: m.external_link,
-            is_required: m.is_required,
-            created_at: m.created_at.format("%b %d, %Y").to_string(),
-            status,
-            progress_percent: Some(progress_percent),
-        }}).collect())
+                let status = if m.cancelled.unwrap_or(false) {
+                    Some("cancelled".to_string())
+                } else {
+                    m.status
+                };
+
+                ClassMaterialInfo {
+                    id: m.id.to_string(),
+                    title: m.title,
+                    description: m.description,
+                    material_type: m.material_type,
+                    file_url: m.file_url,
+                    external_link: m.external_link,
+                    is_required: m.is_required,
+                    created_at: m.created_at.format("%b %d, %Y").to_string(),
+                    status,
+                    progress_percent: Some(progress_percent),
+                }
+            })
+            .collect())
     }
     #[cfg(not(feature = "server"))]
     Ok(vec![])
@@ -2554,16 +2631,20 @@ pub struct VectorizationStatusResponse {
 
 /// Get vectorization status for a material
 #[server(endpoint = "teacher/materials/vectorization_status")]
-pub async fn get_vectorization_status(material_id: String) -> Result<VectorizationStatusResponse, ServerFnError> {
+pub async fn get_vectorization_status(
+    material_id: String,
+) -> Result<VectorizationStatusResponse, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let Extension(_user): Extension<UserInfo> = extract().await
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-        
+
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        let material_uuid = Uuid::parse_str(&material_id).map_err(|_| ServerFnError::new("Invalid material ID"))?;
-        
+        let material_uuid =
+            Uuid::parse_str(&material_id).map_err(|_| ServerFnError::new("Invalid material ID"))?;
+
         // Query vectorization status from material_embeddings table
         let row = sqlx::query!(
             r#"
@@ -2581,24 +2662,28 @@ pub async fn get_vectorization_status(material_id: String) -> Result<Vectorizati
         .fetch_optional(&**pool)
         .await
         .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
-        
+
         match row {
             Some(r) => {
                 let current = r.current_batch.unwrap_or(0);
                 let total = r.total_batches.unwrap_or(1).max(1);
-                let progress_percent = if total > 0 { (current * 100) / total } else { 0 };
-                
+                let progress_percent = if total > 0 {
+                    (current * 100) / total
+                } else {
+                    0
+                };
+
                 // Each batch takes ~21 seconds (rate limit delay)
                 let remaining_batches = total - current;
                 let estimated_seconds = remaining_batches * 21;
-                
+
                 // Determine status
                 let status = if r.cancelled.unwrap_or(false) {
                     "cancelled".to_string()
                 } else {
                     r.status
                 };
-                
+
                 Ok(VectorizationStatusResponse {
                     material_id,
                     status,
@@ -2617,7 +2702,7 @@ pub async fn get_vectorization_status(material_id: String) -> Result<Vectorizati
                 total_batches: 0,
                 estimated_seconds_remaining: 0,
                 error_message: None,
-            })
+            }),
         }
     }
     #[cfg(not(feature = "server"))]
@@ -2630,23 +2715,27 @@ pub async fn cancel_vectorization(material_id: String) -> Result<bool, ServerFnE
     #[cfg(feature = "server")]
     {
         use crate::services::material_vectorization_service::request_cancellation;
-        
-        let Extension(_user): Extension<UserInfo> = extract().await
+
+        let Extension(_user): Extension<UserInfo> = extract()
+            .await
             .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
 
         let state = extract_server_state()?;
         let pool = &state.services.pool;
-        
-        let material_uuid = Uuid::parse_str(&material_id)
-            .map_err(|_| ServerFnError::new("Invalid material ID"))?;
-        
+
+        let material_uuid =
+            Uuid::parse_str(&material_id).map_err(|_| ServerFnError::new("Invalid material ID"))?;
+
         // Request cancellation via the global token (for in-memory background tasks)
         let token_cancelled = request_cancellation(material_uuid);
-        
+
         if token_cancelled {
-            println!("[VECTORIZE] Cancellation token set for material {}", material_id);
+            println!(
+                "[VECTORIZE] Cancellation token set for material {}",
+                material_id
+            );
         }
-        
+
         // ALWAYS update DB to mark as cancelled, regardless of whether there's an active token
         // This handles cases where:
         // 1. Server was restarted and there's no in-memory token
@@ -2662,29 +2751,32 @@ pub async fn cancel_vectorization(material_id: String) -> Result<bool, ServerFnE
             println!("[ERROR] Failed to update cancellation status: {}", e);
             ServerFnError::new(format!("Failed to update cancellation status: {}", e))
         })?;
-        
+
         let db_cancelled = rows_affected.rows_affected() > 0;
         if db_cancelled {
-            println!("[VECTORIZE] Database updated to cancelled for material {}", material_id);
+            println!(
+                "[VECTORIZE] Database updated to cancelled for material {}",
+                material_id
+            );
         }
-        
+
         // Auto-delete the material from class_materials so user doesn't have to manually delete
         // The material_embeddings row will be cascade deleted due to ON DELETE CASCADE
-        let deleted = sqlx::query!(
-            "DELETE FROM class_materials WHERE id = $1",
-            material_uuid
-        )
-        .execute(&**pool)
-        .await
-        .map_err(|e| {
-            println!("[ERROR] Failed to delete cancelled material: {}", e);
-            ServerFnError::new(format!("Failed to delete cancelled material: {}", e))
-        })?;
-        
+        let deleted = sqlx::query!("DELETE FROM class_materials WHERE id = $1", material_uuid)
+            .execute(&**pool)
+            .await
+            .map_err(|e| {
+                println!("[ERROR] Failed to delete cancelled material: {}", e);
+                ServerFnError::new(format!("Failed to delete cancelled material: {}", e))
+            })?;
+
         if deleted.rows_affected() > 0 {
-            println!("[VECTORIZE] Cancelled material {} deleted from class_materials", material_id);
+            println!(
+                "[VECTORIZE] Cancelled material {} deleted from class_materials",
+                material_id
+            );
         }
-        
+
         Ok(token_cancelled || db_cancelled)
     }
     #[cfg(not(feature = "server"))]

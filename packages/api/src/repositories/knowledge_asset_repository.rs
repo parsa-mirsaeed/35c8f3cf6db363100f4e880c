@@ -1,10 +1,12 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Persistence boundary for governed knowledge assets.
 
 use crate::repositories::{BaseRepository, Repository, RepositoryError, RepositoryResult};
+use crate::rls_context::AuthorizedPool;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{postgres::PgConnection, Row};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -125,7 +127,7 @@ pub struct KnowledgeAssetRepository {
 }
 
 impl KnowledgeAssetRepository {
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }
@@ -192,7 +194,7 @@ impl KnowledgeAssetRepository {
         .await?;
 
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             request.created_by,
             "SchoolManager",
             "knowledge_asset.submitted",
@@ -392,7 +394,7 @@ impl KnowledgeAssetRepository {
         let school_id: Uuid = row.try_get("school_id")?;
 
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             verified_by,
             "PlatformAdmin",
             "knowledge_asset.ocr_verified",
@@ -479,7 +481,7 @@ impl KnowledgeAssetRepository {
         .execute(&mut *tx)
         .await?;
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             actor_id,
             "PlatformAdmin",
             "knowledge_asset.embedded",
@@ -514,7 +516,7 @@ impl KnowledgeAssetRepository {
         })?;
         let school_id: Uuid = row.try_get("school_id")?;
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             actor_id,
             "PlatformAdmin",
             "knowledge_asset.published",
@@ -546,7 +548,7 @@ impl KnowledgeAssetRepository {
             .execute(&mut *tx)
             .await?;
         Self::append_audit_in_tx(
-            &mut tx,
+            &mut *tx,
             actor_id,
             "PlatformAdmin",
             "knowledge_asset.archived",
@@ -617,7 +619,7 @@ impl KnowledgeAssetRepository {
     }
 
     async fn append_audit_in_tx(
-        tx: &mut Transaction<'_, Postgres>,
+        tx: &mut PgConnection,
         actor_id: Uuid,
         actor_role: &str,
         action: &str,
@@ -638,7 +640,7 @@ impl KnowledgeAssetRepository {
         .bind(target_id)
         .bind(school_id)
         .bind(details)
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?;
         Ok(())
     }
@@ -668,7 +670,7 @@ impl KnowledgeAssetRepository {
 }
 
 impl Repository for KnowledgeAssetRepository {
-    fn pool(&self) -> Arc<PgPool> {
+    fn pool(&self) -> Arc<AuthorizedPool> {
         self.base.pool()
     }
 }

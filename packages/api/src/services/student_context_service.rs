@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Student Context Service for aggregating student data for LLM personalization.
 //!
 //! This service gathers all relevant information about a student including:
@@ -9,10 +10,10 @@
 use crate::domain::StudentId;
 use crate::repositories::student_repository::StudentRepository;
 use crate::repositories::{CustomAssignmentRepository, ReportRepository, SubmissionRepository};
+use crate::rls_context::AuthorizedPool;
 use crate::services::llm_service::{
     PerformanceMetrics, StudentContext, TalentProfile, TeacherReport,
 };
-use sqlx::PgPool;
 use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
@@ -47,7 +48,7 @@ pub struct StudentContextService {
 
 impl StudentContextService {
     /// Create a new student context service.
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new(pool: Arc<AuthorizedPool>) -> Self {
         Self {
             student_repo: StudentRepository::new(pool.clone()),
             report_repo: ReportRepository::new(pool.clone()),

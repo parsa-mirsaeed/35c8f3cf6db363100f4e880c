@@ -1,9 +1,12 @@
-use crate::domain::{TeachingAssignmentId, ClassSectionId, TeacherId};
-use crate::models::{TeachingAssignment, TeachingAssignmentWithDetails, CreateTeachingAssignmentRequest};
+use crate::domain::{ClassSectionId, TeacherId, TeachingAssignmentId};
+use crate::models::{
+    CreateTeachingAssignmentRequest, TeachingAssignment, TeachingAssignmentWithDetails,
+};
 use crate::repositories::{base::*, RepositoryError, RepositoryResult};
+use crate::rls_context::AuthorizedPool;
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
-use sqlx::{PgPool, Row};
+use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -15,20 +18,23 @@ pub struct TeachingAssignmentRepository {
 
 impl TeachingAssignmentRepository {
     /// Create a new teaching assignment repository
-    pub fn new(pool: Arc<PgPool>) -> Self {
+    pub fn new<T>(pool: T) -> Self {
         Self {
             base: BaseRepository::new(pool),
         }
     }
 
     /// Create a new teaching assignment
-    pub async fn create_internal(&self, request: CreateTeachingAssignmentRequest) -> RepositoryResult<TeachingAssignment> {
+    pub async fn create_internal(
+        &self,
+        request: CreateTeachingAssignmentRequest,
+    ) -> RepositoryResult<TeachingAssignment> {
         let row = sqlx::query(
             r#"
             INSERT INTO teaching_assignments (class_section_id, teacher_id)
             VALUES ($1, $2)
             RETURNING id, class_section_id, teacher_id
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(request.class_section_id.into())
         .bind::<uuid::Uuid>(request.teacher_id.into())
@@ -45,13 +51,16 @@ impl TeachingAssignmentRepository {
     }
 
     /// Get teaching assignment by ID
-    pub async fn find_by_id(&self, assignment_id: TeachingAssignmentId) -> RepositoryResult<TeachingAssignment> {
+    pub async fn find_by_id(
+        &self,
+        assignment_id: TeachingAssignmentId,
+    ) -> RepositoryResult<TeachingAssignment> {
         let row = sqlx::query(
             r#"
             SELECT id, class_section_id, teacher_id
             FROM teaching_assignments
             WHERE id = $1
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(assignment_id.into())
         .fetch_optional(&*self.base.pool())
@@ -71,7 +80,10 @@ impl TeachingAssignmentRepository {
     }
 
     /// List teaching assignments by class section with details
-    pub async fn list_by_class_section(&self, class_section_id: ClassSectionId) -> RepositoryResult<Vec<TeachingAssignmentWithDetails>> {
+    pub async fn list_by_class_section(
+        &self,
+        class_section_id: ClassSectionId,
+    ) -> RepositoryResult<Vec<TeachingAssignmentWithDetails>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -87,7 +99,7 @@ impl TeachingAssignmentRepository {
             JOIN subjects sub ON cs.subject_id = sub.id
             WHERE ta.class_section_id = $1
             ORDER BY u.name
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(class_section_id.into())
         .fetch_all(&*self.base.pool())
@@ -110,7 +122,10 @@ impl TeachingAssignmentRepository {
     }
 
     /// List teaching assignments by teacher with details
-    pub async fn list_by_teacher(&self, teacher_id: TeacherId) -> RepositoryResult<Vec<TeachingAssignmentWithDetails>> {
+    pub async fn list_by_teacher(
+        &self,
+        teacher_id: TeacherId,
+    ) -> RepositoryResult<Vec<TeachingAssignmentWithDetails>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -126,7 +141,7 @@ impl TeachingAssignmentRepository {
             JOIN subjects sub ON cs.subject_id = sub.id
             WHERE ta.teacher_id = $1
             ORDER BY cs.name
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(teacher_id.into())
         .fetch_all(&*self.base.pool())
@@ -149,7 +164,12 @@ impl TeachingAssignmentRepository {
     }
 
     /// List all teaching assignments by school (through class sections)
-    pub async fn list_by_school(&self, school_id: Uuid, limit: i64, offset: i64) -> RepositoryResult<Vec<TeachingAssignmentWithDetails>> {
+    pub async fn list_by_school(
+        &self,
+        school_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> RepositoryResult<Vec<TeachingAssignmentWithDetails>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -166,7 +186,7 @@ impl TeachingAssignmentRepository {
             WHERE cs.school_id = $1
             ORDER BY cs.name, u.name
             LIMIT $2 OFFSET $3
-            "#
+            "#,
         )
         .bind(school_id)
         .bind(limit)
@@ -196,7 +216,7 @@ impl TeachingAssignmentRepository {
             r#"
             DELETE FROM teaching_assignments
             WHERE id = $1
-            "#
+            "#,
         )
         .bind::<uuid::Uuid>(assignment_id.into())
         .execute(&*self.base.pool())
@@ -214,7 +234,7 @@ impl TeachingAssignmentRepository {
 }
 
 impl Repository for TeachingAssignmentRepository {
-    fn pool(&self) -> Arc<PgPool> {
+    fn pool(&self) -> Arc<AuthorizedPool> {
         self.base.pool()
     }
 }

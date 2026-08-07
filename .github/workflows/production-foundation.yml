@@ -125,8 +125,20 @@ jobs:
           grep -Fxq 'd863da8680f24ceb4bb6e13134bc8a2d8835bcf4' deploy/production/runtime/supabase/UPSTREAM_COMMIT
           ! grep -R --line-number --fixed-strings '/var/run/docker.sock' deploy/production/compose.production.yaml
           ! grep -R --line-number --fixed-strings 'rm -rf "${RUNTIME_DIR}"' deploy/production/bootstrap-supabase.sh
-          ! grep -R --line-number --fixed-strings 'AI_GATEWAY_DEFAULT_SCHOOL_ID' deploy/production .env.example compose.yaml compose.release.yaml
-          ! grep -R --line-number -E 'AI_ALLOWED_(EMBEDDING|LLM)_BASE_URLS' deploy/production .env.example compose.yaml compose.release.yaml
+          ! grep -H --line-number --fixed-strings 'AI_GATEWAY_DEFAULT_SCHOOL_ID=' \
+            deploy/production/.env.edutalent \
+            deploy/production/runtime/supabase/.env \
+            .env.example \
+            compose.yaml \
+            compose.release.yaml \
+            deploy/production/compose.production.yaml
+          ! grep -H --line-number -E 'AI_ALLOWED_(EMBEDDING|LLM)_BASE_URLS=' \
+            deploy/production/.env.edutalent \
+            deploy/production/runtime/supabase/.env \
+            .env.example \
+            compose.yaml \
+            compose.release.yaml \
+            deploy/production/compose.production.yaml
           grep -Fq 'ports: !reset []' deploy/production/compose.production.yaml
           grep -Fq 'internal: true' deploy/production/compose.production.yaml
           grep -Fq 'SUPABASE_JWT_ISSUER' deploy/production/compose.production.yaml
@@ -137,8 +149,8 @@ jobs:
           grep -Fq 'chown -R "$${GATEWAY_UID}:$${GATEWAY_GID}" /data /config' deploy/production/compose.production.yaml
           grep -Fq 'caddy-data:/data' deploy/production/compose.production.yaml
           grep -Fq 'caddy-config:/config' deploy/production/compose.production.yaml
-          grep -Fq 'NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS' scripts/ci/configure_database_role.sh
-          grep -Fq 'true|false|false|false|false|false|true' scripts/ci/configure_database_role.sh
+          grep -Fq 'NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS' scripts/ci/configure_database_role.sh
+          grep -Fq 'true|false|false|false|false|false|false' scripts/ci/configure_database_role.sh
           grep -Fq '[ "${super}" = "false" ]' deploy/production/edutalent-production
           grep -Fq 'compose stop ai-gateway' deploy/production/edutalent-production
           grep -Fq 'Core application remained healthy during complete AI gateway outage.' deploy/production/edutalent-production
@@ -244,7 +256,7 @@ jobs:
           test "${createdb}" = "false"
           test "${createrole}" = "false"
           test "${replication}" = "false"
-          test "${bypassrls}" = "true"
+          test "${bypassrls}" = "false"
           test "$(docker exec --env "PGPASSWORD=${app_password}" supabase-db \
             psql -h 127.0.0.1 -U "${app_user}" -d "${postgres_db:-postgres}" -Atc \
             "SELECT has_schema_privilege(current_user, 'public', 'CREATE')")" = "f"
@@ -254,7 +266,7 @@ jobs:
           test "$(docker exec --env "PGPASSWORD=${app_password}" supabase-db \
             psql -h 127.0.0.1 -U "${app_user}" -d "${postgres_db:-postgres}" -Atc \
             "SELECT has_table_privilege(current_user, 'public.edutalent_migration_files', 'INSERT')")" = "f"
-          echo "Dedicated backend database role verified." | tee -a supabase-migrations.log
+          echo "Dedicated NOBYPASSRLS backend database role verified." | tee -a supabase-migrations.log
 
       - name: Upload Supabase migration diagnostics
         if: always()

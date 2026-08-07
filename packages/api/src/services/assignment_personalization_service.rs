@@ -1,3 +1,4 @@
+// PR-03: protected database access is transaction-scoped through AuthorizedPool.
 //! Assignment personalization orchestration.
 //!
 //! The service retrieves only authorized local context, passes a minimized prompt
@@ -7,6 +8,7 @@
 
 use crate::domain::{AssignmentId, ClassSectionId, CustomAssignmentId, StudentId};
 use crate::repositories::{AssignmentRepository, CustomAssignmentRepository, EnrollmentRepository};
+use crate::rls_context::AuthorizedPool;
 use crate::services::llm_service::{
     AssignmentScope, BaseAssignment, DeepSeekClient, LlmError, MaterialContext,
     PersonalizedAssignment, PersonalizedRubric,
@@ -14,7 +16,6 @@ use crate::services::llm_service::{
 use crate::services::material_vectorization_service::MaterialVectorizationService;
 use crate::services::student_context_service::{StudentContextError, StudentContextService};
 use serde_json::{json, Value};
-use sqlx::PgPool;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -59,7 +60,7 @@ pub struct PersonalizationProgress {
 
 #[derive(Clone)]
 pub struct AssignmentPersonalizationService {
-    pool: Arc<PgPool>,
+    pool: Arc<AuthorizedPool>,
     assignment_repo: AssignmentRepository,
     custom_assignment_repo: CustomAssignmentRepository,
     enrollment_repo: EnrollmentRepository,
@@ -68,7 +69,7 @@ pub struct AssignmentPersonalizationService {
 }
 
 impl AssignmentPersonalizationService {
-    pub fn new(pool: Arc<PgPool>) -> Result<Self, PersonalizationError> {
+    pub fn new(pool: Arc<AuthorizedPool>) -> Result<Self, PersonalizationError> {
         let llm_client = match DeepSeekClient::new() {
             Ok(client) => Some(client),
             Err(error) => {

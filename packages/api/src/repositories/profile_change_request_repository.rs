@@ -220,9 +220,7 @@ fn row_to_request(row: &PgRow) -> ProfileChangeRequest {
         payload_diff: row.get("payload_diff"),
         requested_by: UserId::from(row.get::<Uuid, _>("requested_by")),
         status: row.get("status"),
-        decided_by: row
-            .get::<Option<Uuid>, _>("decided_by")
-            .map(UserId::from),
+        decided_by: row.get::<Option<Uuid>, _>("decided_by").map(UserId::from),
         decided_at: row.get("decided_at"),
         created_at: row.get("created_at"),
     }

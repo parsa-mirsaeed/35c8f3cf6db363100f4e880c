@@ -1,7 +1,7 @@
 //! Platform-scoped school server functions.
 
-use dioxus::prelude::*;
 use crate::models::{CreateSchoolRequest, School};
+use dioxus::prelude::*;
 
 #[cfg(feature = "server")]
 use crate::{app_state::extract_server_state, dioxus_fullstack::extract, domain::UserInfo};

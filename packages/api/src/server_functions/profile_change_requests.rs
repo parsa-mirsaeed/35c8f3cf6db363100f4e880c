@@ -67,7 +67,11 @@ fn validate_profile_diff(payload: &serde_json::Value) -> Result<(), ServerFnErro
     let object = payload
         .as_object()
         .ok_or_else(|| ServerFnError::new("Profile change payload must be an object"))?;
-    if object.is_empty() || object.keys().any(|key| !matches!(key.as_str(), "name" | "email")) {
+    if object.is_empty()
+        || object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "name" | "email"))
+    {
         return Err(ServerFnError::new(
             "Profile change may modify only name or email",
         ));
@@ -240,7 +244,9 @@ pub async fn decide_profile_change(
             UserRepository::new(state.services.pool.clone())
                 .update_internal(request.user_id, update)
                 .await
-                .map_err(|error| ServerFnError::new(format!("Failed to apply profile change: {error}")))?;
+                .map_err(|error| {
+                    ServerFnError::new(format!("Failed to apply profile change: {error}"))
+                })?;
         }
 
         Ok(())
@@ -256,10 +262,20 @@ mod tests {
 
     #[test]
     fn profile_diff_rejects_privileged_object_properties() {
-        for forbidden in ["role_id", "school_id", "is_active", "metadata", "status", "decided_by"] {
+        for forbidden in [
+            "role_id",
+            "school_id",
+            "is_active",
+            "metadata",
+            "status",
+            "decided_by",
+        ] {
             let payload = serde_json::json!({ forbidden: "attacker-controlled" });
             #[cfg(feature = "server")]
-            assert!(validate_profile_diff(&payload).is_err(), "accepted {forbidden}");
+            assert!(
+                validate_profile_diff(&payload).is_err(),
+                "accepted {forbidden}"
+            );
         }
     }
 }

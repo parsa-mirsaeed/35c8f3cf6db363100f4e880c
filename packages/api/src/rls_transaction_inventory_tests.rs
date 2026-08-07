@@ -22,13 +22,15 @@ fn rust_files(root: &Path) -> Vec<PathBuf> {
 #[test]
 fn pool_scoped_rls_context_cannot_return() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let legacy_context_set = ["RlsContext", "::set("].concat();
+    let legacy_helper = ["set_rls_", "context("].concat();
     let mut violations = Vec::new();
     for path in rust_files(&src) {
         if path.ends_with("rls_context.rs") {
             continue;
         }
         let source = fs::read_to_string(&path).expect("read Rust source");
-        if source.contains("RlsContext::set(") || source.contains("set_rls_context(") {
+        if source.contains(&legacy_context_set) || source.contains(&legacy_helper) {
             violations.push(path);
         }
     }
@@ -85,7 +87,8 @@ fn production_repositories_use_the_authorized_executor_facade() {
         }
         let path = root.join(format!("{module}.rs"));
         let source = fs::read_to_string(&path).expect("read repository source");
-        if source.contains("PgPool") || source.contains("Arc<sqlx::PgPool>") {
+        let production_source = source.split("\n#[cfg(test)]").next().unwrap_or(&source);
+        if production_source.contains("PgPool") || production_source.contains("Arc<sqlx::PgPool>") {
             violations.push(path);
         }
     }

@@ -476,6 +476,163 @@ fn env_i32(name: &str, default: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::llm_service::{
+        BaseAssignment, ExternalLlmClient, LlmConfig, PerformanceMetrics, StudentContext,
+    };
+    use axum::{
+        http::StatusCode,
+        response::IntoResponse,
+        routing::post,
+        Json, Router,
+    };
+    use serde_json::json;
+    use std::ffi::OsString;
+    use tokio::net::TcpListener;
+
+    static MOCK_GATEWAY_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[derive(Clone, Copy)]
+    enum MockGatewayFault {
+        Timeout,
+        RateLimited,
+        InvalidJson,
+        Outage,
+    }
+
+    async fn spawn_mock_gateway(fault: MockGatewayFault) -> String {
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(move || async move {
+                match fault {
+                    MockGatewayFault::Timeout => {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "model": "deepseek-chat",
+                                "choices": [{
+                                    "index": 0,
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "{}"
+                                    },
+                                    "finish_reason": "stop"
+                                }]
+                            })),
+                        )
+                            .into_response()
+                    }
+                    MockGatewayFault::RateLimited => (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        Json(json!({
+                            "error": {
+                                "code": "provider_rate_limited",
+                                "message": "rate limited",
+                                "retry_after_seconds": 19
+                            }
+                        })),
+                    )
+                        .into_response(),
+                    MockGatewayFault::InvalidJson => (
+                        StatusCode::OK,
+                        "not-json-provider-secret-sentinel",
+                    )
+                        .into_response(),
+                    MockGatewayFault::Outage => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({
+                            "error": {
+                                "code": "ai_temporarily_unavailable",
+                                "message": "offline",
+                                "retry_after_seconds": 30
+                            }
+                        })),
+                    )
+                        .into_response(),
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind local mock AI gateway");
+        let address = listener.local_addr().expect("mock gateway address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve local mock AI gateway");
+        });
+        format!("http://{address}")
+    }
+
+    fn restore_env(name: &str, previous: Option<OsString>) {
+        match previous {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
+
+    fn client_through_local_mock_proxy(
+        proxy_origin: &str,
+        request_timeout: Duration,
+    ) -> ExternalLlmClient {
+        let names = ["HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"];
+        let previous = names.map(|name| std::env::var_os(name));
+        std::env::set_var("HTTP_PROXY", proxy_origin);
+        std::env::set_var("http_proxy", proxy_origin);
+        std::env::set_var("NO_PROXY", "");
+        std::env::set_var("no_proxy", "");
+
+        let client = ExternalLlmClient::with_config(LlmConfig {
+            api_key: "abcdefghijklmnopqrstuvwxyz123456".to_string(),
+            base_url: "http://ai-gateway:8090".to_string(),
+            model: "deepseek-chat".to_string(),
+            max_tokens: 1_024,
+            temperature: 0.2,
+            request_timeout,
+            default_school_id: None,
+            max_prompt_chars: 20_000,
+        })
+        .expect("construct fixed-origin LLM client through local mock proxy");
+
+        for (name, value) in names.into_iter().zip(previous) {
+            restore_env(name, value);
+        }
+        client
+    }
+
+    fn base_assignment() -> BaseAssignment {
+        BaseAssignment {
+            title: "Mock gateway assignment".to_string(),
+            body: "Explain the concept".to_string(),
+            subject: "Science".to_string(),
+            due_date: "2030-01-01".to_string(),
+            lecture_title: None,
+            lecture_number: None,
+        }
+    }
+
+    fn student_context() -> StudentContext {
+        StudentContext {
+            school_id: Uuid::new_v4(),
+            student_id: "internal-test-student".to_string(),
+            student_name: "Internal Test Student".to_string(),
+            talent_profile: None,
+            teacher_reports: Vec::new(),
+            previous_performance: PerformanceMetrics::default(),
+        }
+    }
+
+    async fn mock_gateway_error(
+        fault: MockGatewayFault,
+        request_timeout: Duration,
+    ) -> LlmError {
+        let proxy_origin = spawn_mock_gateway(fault).await;
+        let client = client_through_local_mock_proxy(&proxy_origin, request_timeout);
+        client
+            .personalize_assignment(&base_assignment(), &student_context())
+            .await
+            .expect_err("mock gateway fault must fail personalization")
+    }
 
     #[test]
     fn gateway_failures_map_to_bounded_safe_retry_classes() {
@@ -514,6 +671,59 @@ mod tests {
             FailureAction::Record {
                 kind: PersonalizationFailureKind::ContentRejected,
                 retry_after_seconds: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn local_mock_gateway_faults_drive_worker_retry_policy() {
+        let _env_guard = MOCK_GATEWAY_ENV_LOCK.lock().await;
+
+        let timeout = mock_gateway_error(MockGatewayFault::Timeout, Duration::from_millis(40)).await;
+        assert!(matches!(timeout, LlmError::RequestFailed(_)));
+        assert_eq!(
+            classify_llm_failure(&timeout),
+            FailureAction::Record {
+                kind: PersonalizationFailureKind::GatewayUnavailable,
+                retry_after_seconds: 10,
+            }
+        );
+
+        let rate_limited =
+            mock_gateway_error(MockGatewayFault::RateLimited, Duration::from_secs(1)).await;
+        assert!(matches!(
+            rate_limited,
+            LlmError::RateLimited {
+                retry_after_seconds: 19
+            }
+        ));
+        assert_eq!(
+            classify_llm_failure(&rate_limited),
+            FailureAction::Record {
+                kind: PersonalizationFailureKind::RateLimited,
+                retry_after_seconds: 19,
+            }
+        );
+
+        let invalid =
+            mock_gateway_error(MockGatewayFault::InvalidJson, Duration::from_secs(1)).await;
+        assert!(matches!(invalid, LlmError::ParseError(_)));
+        assert!(!format!("{invalid}").contains("provider-secret-sentinel"));
+        assert_eq!(
+            classify_llm_failure(&invalid),
+            FailureAction::Record {
+                kind: PersonalizationFailureKind::InvalidGatewayResponse,
+                retry_after_seconds: 5,
+            }
+        );
+
+        let outage = mock_gateway_error(MockGatewayFault::Outage, Duration::from_secs(1)).await;
+        assert!(matches!(outage, LlmError::TemporarilyUnavailable));
+        assert_eq!(
+            classify_llm_failure(&outage),
+            FailureAction::Record {
+                kind: PersonalizationFailureKind::GatewayUnavailable,
+                retry_after_seconds: 10,
             }
         );
     }

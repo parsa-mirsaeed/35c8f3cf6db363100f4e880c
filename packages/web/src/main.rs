@@ -9,12 +9,15 @@ mod infrastructure;
 mod utils;
 mod views;
 
+#[cfg(test)]
+mod product_truthfulness_tests;
+
 // Re-export i18n for easy access
 pub use i18n::{t, use_locale, LanguageSwitcher, Locale, LocaleProvider, LocalizedGrade};
 
 // Import specific components
 use views::login::LoginPage;
-use views::role_based::components::role_guard::{AuthGuard, RoleGuard, RouteGuard};
+use views::role_based::components::role_guard::{AuthGuard, RoleGuard};
 use views::role_based::{
     ParentDashboard, PlatformAdminDashboard, SchoolManagerDashboard, StudentDashboard,
     TeacherDashboard,
@@ -38,7 +41,8 @@ enum Route {
     #[route("/admin")]
     AdminRedirect,
 
-    // Role-specific routes
+    // Guarded aliases. The rendered product dashboard remains the canonical
+    // role-aware implementation used by `/dashboard`.
     #[route("/dashboard/platform-admin")]
     PlatformAdminRoute,
     #[route("/dashboard/school-manager")]
@@ -58,8 +62,6 @@ const MAIN_CSS: Asset = asset!("/assets/main.css");
 async fn database_readiness(
     axum::Extension(state): axum::Extension<api::app_state::AppState>,
 ) -> Result<&'static str, axum::http::StatusCode> {
-    // The API-owned helper executes `sqlx::query_scalar::<_, i32>("SELECT 1")`
-    // through this application's configured pool.
     api::readiness::check_database(&state)
         .await
         .map(|_| "ready")
@@ -117,8 +119,6 @@ async fn main() {
         .layer(axum::middleware::from_fn(
             api::middleware::block_legacy_teacher_material_ingestion,
         ))
-        // Axum applies later layers first. Authentication therefore resolves the
-        // canonical active session before this deny-by-default endpoint policy.
         .layer(axum::middleware::from_fn(
             api::middleware::endpoint_authorization_middleware,
         ))
@@ -194,26 +194,6 @@ fn RoleBasedDashboard() -> Element {
 }
 
 #[component]
-fn DashboardPlaceholder(title: String, message: String) -> Element {
-    rsx! {
-        div {
-            style: "display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #f8fafc;",
-            div {
-                style: "text-align: center; padding: 3rem; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 500px;",
-                h1 {
-                    style: "color: #1f2937; margin-bottom: 1rem; font-size: 2rem;",
-                    "{title}"
-                }
-                p {
-                    style: "color: #6b7280; margin-bottom: 2rem; font-size: 1.125rem;",
-                    "{message}"
-                }
-            }
-        }
-    }
-}
-
-#[component]
 fn AdminRedirect() -> Element {
     let nav = use_navigator();
 
@@ -235,7 +215,7 @@ fn PlatformAdminRoute() -> Element {
         RoleGuard {
             required_role: domain::SystemRole::PlatformAdmin,
             fallback: None,
-            children: rsx! { PlatformAdminDashboard {} }
+            children: rsx! { RoleBasedDashboard {} }
         }
     }
 }
@@ -246,7 +226,7 @@ fn SchoolManagerRoute() -> Element {
         RoleGuard {
             required_role: domain::SystemRole::SchoolManager,
             fallback: None,
-            children: rsx! { SchoolManagerDashboard {} }
+            children: rsx! { RoleBasedDashboard {} }
         }
     }
 }
@@ -257,7 +237,7 @@ fn TeacherRoute() -> Element {
         RoleGuard {
             required_role: domain::SystemRole::Teacher,
             fallback: None,
-            children: rsx! { TeacherDashboard {} }
+            children: rsx! { RoleBasedDashboard {} }
         }
     }
 }
@@ -268,12 +248,7 @@ fn StudentRoute() -> Element {
         RoleGuard {
             required_role: domain::SystemRole::Student,
             fallback: None,
-            children: rsx! {
-                DashboardPlaceholder {
-                    title: "Student Dashboard".to_string(),
-                    message: "Student dashboard is under development.".to_string(),
-                }
-            }
+            children: rsx! { RoleBasedDashboard {} }
         }
     }
 }
@@ -284,12 +259,7 @@ fn ParentRoute() -> Element {
         RoleGuard {
             required_role: domain::SystemRole::Parent,
             fallback: None,
-            children: rsx! {
-                DashboardPlaceholder {
-                    title: "Parent Dashboard".to_string(),
-                    message: "Parent dashboard is under development.".to_string(),
-                }
-            }
+            children: rsx! { RoleBasedDashboard {} }
         }
     }
 }

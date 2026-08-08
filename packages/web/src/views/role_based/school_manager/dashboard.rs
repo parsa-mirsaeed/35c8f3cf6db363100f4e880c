@@ -37,7 +37,9 @@ pub fn SchoolManagerDashboard() -> Element {
             {
                 rsx! { ReportsSection {} }
             }
-            _ => rsx! { SchoolManagerOverviewSection { on_navigate: move |next| active_section.set(next) } },
+            _ => {
+                rsx! { SchoolManagerOverviewSection { on_navigate: move |next| active_section.set(next) } }
+            }
         };
 
         rsx! {

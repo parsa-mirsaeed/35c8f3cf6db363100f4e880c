@@ -362,7 +362,8 @@ END
 $$;
 
 CREATE OR REPLACE FUNCTION public.recover_stale_assignment_personalization_jobs(
-    p_stale_after_seconds BIGINT
+    p_stale_after_seconds BIGINT,
+    p_max_attempts INTEGER
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -370,7 +371,8 @@ SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
 DECLARE
-    recovered BIGINT;
+    reconciled BIGINT;
+    max_attempts INTEGER := GREATEST(1, LEAST(COALESCE(p_max_attempts, 5), 10));
 BEGIN
     IF public.get_role() <> 'system_job'
        OR NOT public.get_elevated_operation()
@@ -382,12 +384,29 @@ BEGIN
 
     WITH updated AS (
         UPDATE public.assignment_personalization_jobs AS job
-        SET status = 'queued',
-            available_at = NOW(),
+        SET status = CASE
+                WHEN job.attempt_count >= max_attempts THEN 'failed'
+                ELSE 'queued'
+            END,
+            available_at = CASE
+                WHEN job.attempt_count >= max_attempts THEN job.available_at
+                ELSE NOW()
+            END,
             lease_owner = NULL,
             heartbeat_at = NULL,
-            last_error_code = 'stale_lease_recovered',
-            last_error_summary = 'Recovered after stale personalization worker lease'
+            completed_at = CASE
+                WHEN job.attempt_count >= max_attempts THEN NOW()
+                ELSE NULL
+            END,
+            last_error_code = CASE
+                WHEN job.attempt_count >= max_attempts THEN 'worker_restart_limit'
+                ELSE 'stale_lease_recovered'
+            END,
+            last_error_summary = CASE
+                WHEN job.attempt_count >= max_attempts
+                    THEN 'Personalization stopped after repeated worker interruptions'
+                ELSE 'Recovered after stale personalization worker lease'
+            END
         WHERE job.status = 'running'
           AND COALESCE(job.heartbeat_at, job.started_at, job.created_at)
                 < NOW() - make_interval(
@@ -395,18 +414,18 @@ BEGIN
                 )
         RETURNING 1
     )
-    SELECT COUNT(*) INTO recovered FROM updated;
+    SELECT COUNT(*) INTO reconciled FROM updated;
 
-    RETURN recovered;
+    RETURN reconciled;
 END
 $$;
 
 REVOKE EXECUTE ON FUNCTION public.claim_next_assignment_personalization_job(UUID) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION public.recover_stale_assignment_personalization_jobs(BIGINT) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.recover_stale_assignment_personalization_jobs(BIGINT, INTEGER) FROM PUBLIC;
 
 COMMENT ON TABLE public.assignment_personalization_jobs IS
     'Durable, idempotent per-student assignment personalization jobs. No prompts, provider payloads, or secrets are stored here.';
 COMMENT ON FUNCTION public.claim_next_assignment_personalization_job(UUID) IS
     'Claims one globally discoverable personalization job only for the bounded system queue context; processing remains teacher/school scoped.';
-COMMENT ON FUNCTION public.recover_stale_assignment_personalization_jobs(BIGINT) IS
-    'Requeues assignment personalization jobs abandoned by a terminated worker.';
+COMMENT ON FUNCTION public.recover_stale_assignment_personalization_jobs(BIGINT, INTEGER) IS
+    'Requeues recoverable stale personalization jobs and terminally fails jobs that reached the bounded worker-attempt policy.';

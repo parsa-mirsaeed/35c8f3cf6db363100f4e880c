@@ -7,6 +7,7 @@ pub mod header;
 pub mod role_guard;
 pub mod loading_spinner;
 pub mod error_boundary;
+pub mod unavailable_feature;
 
 pub use dashboard_layout::*;
 pub use navigation::*;
@@ -15,3 +16,4 @@ pub use header::*;
 pub use role_guard::*;
 pub use loading_spinner::*;
 pub use error_boundary::*;
+pub use unavailable_feature::*;

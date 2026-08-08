@@ -189,12 +189,11 @@ pub async fn personalize_for_student(
             .map_err(repository_error)?;
 
         let state = extract_server_state()?;
-        let custom_assignment_id = AssignmentPersonalizationJobRepository::new(
-            state.services.pool.clone(),
-        )
-        .requeue_for_teacher(user_id, assignment_id.into(), student_id.into())
-        .await
-        .map_err(repository_error)?;
+        let custom_assignment_id =
+            AssignmentPersonalizationJobRepository::new(state.services.pool.clone())
+                .requeue_for_teacher(user_id, assignment_id.into(), student_id.into())
+                .await
+                .map_err(repository_error)?;
 
         let item = repository
             .find_custom_for_teacher(actor, CustomAssignmentId::from(custom_assignment_id))

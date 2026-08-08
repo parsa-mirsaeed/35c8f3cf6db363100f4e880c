@@ -235,10 +235,7 @@ async fn queue_fixture(student_count: usize) -> QueueFixture {
     }
 }
 
-async fn claim_next(
-    pool: &PgPool,
-    worker_id: Uuid,
-) -> Option<ClaimedAssignmentPersonalizationJob> {
+async fn claim_next(pool: &PgPool, worker_id: Uuid) -> Option<ClaimedAssignmentPersonalizationJob> {
     let authorized_pool = AuthorizedPool::new();
     run_as(pool, AuthorizedActor::system_queue(worker_id), async {
         let row = sqlx::query(
@@ -283,13 +280,12 @@ async fn claim_next(
 async fn publication_enqueues_atomically_and_duplicate_publish_is_idempotent() {
     let fixture = queue_fixture(2).await;
 
-    let custom_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM custom_assignments WHERE assignment_id = $1",
-    )
-    .bind(fixture.assignment_id)
-    .fetch_one(&*fixture.pool)
-    .await
-    .expect("count custom assignments");
+    let custom_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM custom_assignments WHERE assignment_id = $1")
+            .bind(fixture.assignment_id)
+            .fetch_one(&*fixture.pool)
+            .await
+            .expect("count custom assignments");
     let job_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM assignment_personalization_jobs WHERE assignment_id = $1",
     )
@@ -351,9 +347,7 @@ async fn publication_enqueues_atomically_and_duplicate_publish_is_idempotent() {
         );
         assert_eq!(row.get::<i32, _>("profile_version"), 1);
         assert!(row.get::<Option<String>, _>("last_error_code").is_none());
-        assert!(row
-            .get::<Option<String>, _>("last_error_summary")
-            .is_none());
+        assert!(row.get::<Option<String>, _>("last_error_summary").is_none());
     }
 }
 
@@ -405,22 +399,19 @@ async fn partial_completion_resumes_remaining_student_and_stale_lease_is_reclaim
     let recovered: i64 = run_as(
         fixture.pool.as_ref(),
         AuthorizedActor::system_queue(worker_id),
-        sqlx::query_scalar(
-            "SELECT public.recover_stale_assignment_personalization_jobs(60)",
-        )
-        .fetch_one(&authorized_pool),
+        sqlx::query_scalar("SELECT public.recover_stale_assignment_personalization_jobs(60)")
+            .fetch_one(&authorized_pool),
     )
     .await
     .expect("recover stale personalization job");
     assert_eq!(recovered, 1);
 
-    let status: String = sqlx::query_scalar(
-        "SELECT status FROM assignment_personalization_jobs WHERE id = $1",
-    )
-    .bind(claimed.id)
-    .fetch_one(&*fixture.pool)
-    .await
-    .expect("read recovered status");
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM assignment_personalization_jobs WHERE id = $1")
+            .bind(claimed.id)
+            .fetch_one(&*fixture.pool)
+            .await
+            .expect("read recovered status");
     assert_eq!(status, "queued");
 }
 
@@ -475,12 +466,7 @@ async fn retry_backoff_is_bounded_and_cross_school_status_is_isolated() {
     let disposition = run_as(
         fixture.pool.as_ref(),
         actor(fixture.teacher_user, "Teacher", fixture.school_id),
-        repository.record_failure(
-            &claimed,
-            PersonalizationFailureKind::RateLimited,
-            120,
-            5,
-        ),
+        repository.record_failure(&claimed, PersonalizationFailureKind::RateLimited, 120, 5),
     )
     .await
     .expect("record retryable failure");

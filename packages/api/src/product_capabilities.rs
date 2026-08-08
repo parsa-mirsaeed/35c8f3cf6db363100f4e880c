@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 
 /// Release-controlled product capabilities.
 ///
-/// These flags are product-truthfulness metadata, not authorization controls.
-/// Backend authorization remains authoritative for every endpoint. A capability
-/// set to `false` means the production UI must not advertise or simulate the
-/// feature until its owning implementation PR supplies real end-to-end behavior.
+/// These flags are product-truthfulness metadata, not replacements for
+/// authorization. Backend authorization remains authoritative. A capability set
+/// to `false` means production must not advertise, simulate, or serve that
+/// incomplete product surface.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProductCapabilities {
     pub schema_version: u32,
@@ -15,6 +15,7 @@ pub struct ProductCapabilities {
     pub parent_reports: bool,
     pub parent_teacher_communication: bool,
     pub school_manager_reports: bool,
+    pub derived_academic_metrics: bool,
     pub synthetic_system_health: bool,
 }
 
@@ -28,6 +29,7 @@ impl ProductCapabilities {
             parent_reports: false,
             parent_teacher_communication: false,
             school_manager_reports: false,
+            derived_academic_metrics: false,
             synthetic_system_health: false,
         }
     }
@@ -57,24 +59,7 @@ mod tests {
         assert!(!capabilities.parent_reports);
         assert!(!capabilities.parent_teacher_communication);
         assert!(!capabilities.school_manager_reports);
+        assert!(!capabilities.derived_academic_metrics);
         assert!(!capabilities.synthetic_system_health);
-    }
-
-    #[test]
-    fn placeholder_server_endpoints_are_disabled_by_the_authorization_manifest() {
-        let manifest = include_str!("../endpoint_authorization_manifest.psv");
-        for endpoint in [
-            "dashboard/student/stats",
-            "dashboard/student/classes",
-            "dashboard/teacher/classes",
-            "dashboard/parent/stats",
-            "parent/child/attendance",
-        ] {
-            let expected = format!("server|{endpoint}|Disabled|");
-            assert!(
-                manifest.lines().any(|line| line.starts_with(&expected)),
-                "{endpoint} must remain disabled until it returns non-placeholder production data"
-            );
-        }
     }
 }

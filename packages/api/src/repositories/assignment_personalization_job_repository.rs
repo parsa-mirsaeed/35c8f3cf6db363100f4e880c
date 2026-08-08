@@ -296,11 +296,7 @@ impl AssignmentPersonalizationJobRepository {
         Ok(())
     }
 
-    pub async fn heartbeat(
-        &self,
-        job_id: Uuid,
-        lease_owner: Uuid,
-    ) -> RepositoryResult<()> {
+    pub async fn heartbeat(&self, job_id: Uuid, lease_owner: Uuid) -> RepositoryResult<()> {
         let result = sqlx::query(
             r#"
             UPDATE assignment_personalization_jobs
@@ -322,11 +318,7 @@ impl AssignmentPersonalizationJobRepository {
         Ok(())
     }
 
-    pub async fn complete(
-        &self,
-        job_id: Uuid,
-        lease_owner: Uuid,
-    ) -> RepositoryResult<()> {
+    pub async fn complete(&self, job_id: Uuid, lease_owner: Uuid) -> RepositoryResult<()> {
         let result = sqlx::query(
             r#"
             UPDATE assignment_personalization_jobs
@@ -516,7 +508,12 @@ mod tests {
                 .all(|character| character.is_ascii_lowercase() || character == '_'));
             assert!(kind.safe_summary().len() <= 160);
             let lowered = kind.safe_summary().to_ascii_lowercase();
-            for forbidden in ["authorization: bearer", "api_key", "password", "postgresql://"] {
+            for forbidden in [
+                "authorization: bearer",
+                "api_key",
+                "password",
+                "postgresql://",
+            ] {
                 assert!(!lowered.contains(forbidden));
             }
         }

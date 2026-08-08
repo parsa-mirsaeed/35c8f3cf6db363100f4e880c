@@ -251,10 +251,21 @@ impl ExternalLlmClient {
         if config.api_key.len() < 32 || looks_like_placeholder(&config.api_key) {
             return Err(LlmError::MissingApiKey);
         }
-        let client = reqwest::Client::builder()
+        let client_builder = reqwest::Client::builder()
             .timeout(config.request_timeout)
-            .redirect(RedirectPolicy::none())
-            .build()?;
+            .redirect(RedirectPolicy::none());
+        #[cfg(test)]
+        let client_builder = match env::var("HTTP_PROXY")
+            .or_else(|_| env::var("http_proxy"))
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(proxy_url) => client_builder
+                .no_proxy()
+                .proxy(reqwest::Proxy::all(&proxy_url)?),
+            None => client_builder,
+        };
+        let client = client_builder.build()?;
         Ok(Self { client, config })
     }
 
@@ -297,7 +308,9 @@ impl ExternalLlmClient {
         student_context: &StudentContext,
         material_context: &[MaterialContext],
     ) -> Result<PersonalizedAssignment, LlmError> {
-        if school_id.is_nil() || (!student_context.school_id.is_nil() && school_id != student_context.school_id) {
+        if school_id.is_nil()
+            || (!student_context.school_id.is_nil() && school_id != student_context.school_id)
+        {
             return Err(LlmError::MissingSchoolId);
         }
         let messages = vec![

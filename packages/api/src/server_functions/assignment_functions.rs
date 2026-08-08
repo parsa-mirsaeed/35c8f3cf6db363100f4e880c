@@ -18,9 +18,9 @@ use {
         UpdateAssignmentRequest,
     },
     crate::repositories::{
-        AuthorizedAssignmentRepository, AuthorizedStudent, AuthorizedTeacher, RepositoryError,
+        AssignmentPersonalizationJobRepository, AuthorizedAssignmentRepository, AuthorizedStudent,
+        AuthorizedTeacher, RepositoryError,
     },
-    crate::services::AssignmentPersonalizationService,
     axum::Extension,
     uuid::Uuid,
     validator::Validate,
@@ -163,44 +163,9 @@ pub async fn publish_assignment(
             .await
             .map_err(repository_error)?;
 
-        let state = extract_server_state()?;
-        let pool = state.services.pool.clone();
-        let class_section_id = details.class_section_id;
-        let assignment_id_for_task = details.id;
-
-        // PR-05 replaces this process-local task with a durable queue. PR-01
-        // preserves current behavior while ensuring only the authorized teacher
-        // can reach it with an assignment/class pair proven by SQL.
-        tokio::spawn(async move {
-            match AssignmentPersonalizationService::new(pool) {
-                Ok(service) if service.is_llm_available() => {
-                    if let Err(error) = service
-                        .personalize_for_class_section(
-                            assignment_id_for_task,
-                            class_section_id,
-                            None,
-                        )
-                        .await
-                    {
-                        tracing::warn!(
-                            assignment_id = %assignment_id_for_task,
-                            error = %error,
-                            "assignment personalization failed after authorized publication"
-                        );
-                    }
-                }
-                Ok(_) => tracing::info!(
-                    assignment_id = %assignment_id_for_task,
-                    "AI unavailable; assignment remains published without personalization"
-                ),
-                Err(error) => tracing::warn!(
-                    assignment_id = %assignment_id_for_task,
-                    error = %error,
-                    "could not initialize assignment personalization"
-                ),
-            }
-        });
-
+        // PR-05 queue rows are created by the custom-assignment INSERT trigger
+        // inside the same publication transaction. Publication therefore does
+        // not depend on an in-process task or on AI availability.
         Ok(assignment_to_response(details))
     }
 
@@ -217,30 +182,21 @@ pub async fn personalize_for_student(
     {
         let assignment_id = parse_assignment_id(&assignment_id)?;
         let student_id: StudentId = parse_uuid(&student_id, "student")?.into();
-        let (repository, actor) = authorized_teacher().await?;
+        let (repository, actor, user_id) = authorized_teacher_with_user_id().await?;
         repository
             .authorize_personalization_target(actor, assignment_id, student_id)
             .await
             .map_err(repository_error)?;
 
         let state = extract_server_state()?;
-        let service = AssignmentPersonalizationService::new(state.services.pool.clone()).map_err(
-            |error| {
-                tracing::error!(error = %error, "failed to initialize personalization service");
-                ServerFnError::new("Personalization service is unavailable")
-            },
-        )?;
-
-        let result = service
-            .personalize_for_student(assignment_id, student_id, None)
-            .await
-            .map_err(|error| {
-                tracing::warn!(error = %error, "authorized personalization failed");
-                ServerFnError::new("Personalization failed")
-            })?;
+        let custom_assignment_id =
+            AssignmentPersonalizationJobRepository::new(state.services.pool.clone())
+                .requeue_for_teacher(user_id, assignment_id.into(), student_id.into())
+                .await
+                .map_err(repository_error)?;
 
         let item = repository
-            .find_custom_for_teacher(actor, result.custom_assignment_id)
+            .find_custom_for_teacher(actor, CustomAssignmentId::from(custom_assignment_id))
             .await
             .map_err(repository_error)?;
         Ok(custom_assignment_to_response(item))
@@ -388,8 +344,8 @@ pub async fn update_assignment(
 }
 
 #[cfg(feature = "server")]
-async fn authorized_teacher(
-) -> Result<(AuthorizedAssignmentRepository, AuthorizedTeacher), ServerFnError> {
+async fn authorized_teacher_with_user_id(
+) -> Result<(AuthorizedAssignmentRepository, AuthorizedTeacher, Uuid), ServerFnError> {
     let Extension(user): Extension<UserInfo> = extract()
         .await
         .map_err(|_| ServerFnError::new("Unauthorized: no active session"))?;
@@ -400,6 +356,13 @@ async fn authorized_teacher(
         .resolve_active_teacher(user_id, &user.role)
         .await
         .map_err(repository_error)?;
+    Ok((repository, actor, user_id))
+}
+
+#[cfg(feature = "server")]
+async fn authorized_teacher(
+) -> Result<(AuthorizedAssignmentRepository, AuthorizedTeacher), ServerFnError> {
+    let (repository, actor, _) = authorized_teacher_with_user_id().await?;
     Ok((repository, actor))
 }
 
@@ -559,6 +522,10 @@ mod tests {
             .split_once("\n#[cfg(test)]\n")
             .expect("assignment server module must keep tests separated from production code");
         assert!(production_source.contains("AuthorizedAssignmentRepository"));
+        assert!(production_source.contains("AssignmentPersonalizationJobRepository"));
+        assert!(production_source.contains("requeue_for_teacher"));
+        assert!(!production_source.contains("tokio::spawn"));
+        assert!(!production_source.contains("AssignmentPersonalizationService"));
         for forbidden in [
             "let assignment_repo = AssignmentRepository::new",
             "let custom_repo = CustomAssignmentRepository::new",

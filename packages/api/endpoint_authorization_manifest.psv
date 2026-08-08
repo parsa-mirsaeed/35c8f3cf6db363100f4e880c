@@ -9,6 +9,7 @@ server|assignments/get_by_id|TeacherOnly|Teacher|session_school|assignment_owner
 server|assignments/create|TeacherOnly|Teacher|session_school|teacher_class|write|bounded_payload|required|assignment_functions::create_assignment|-
 server|assignments/publish|TeacherOnly|Teacher|session_school|assignment_owner|write|expensive|required|assignment_functions::publish_assignment|-
 server|assignments/personalize|TeacherOnly|Teacher|session_school|teacher_class_student|write|expensive|required|assignment_functions::personalize_for_student|-
+server|assignments/personalization_status|TeacherOnly|Teacher|session_school|teacher_personalization_jobs|read|bounded_aggregate|none|assignment_personalization_functions::get_assignment_personalization_status|-
 server|assignments/get_personalized|TeacherOrStudent|Teacher;Student|session_school|custom_assignment_actor|read|standard|none|assignment_functions::get_personalized_assignment|-
 server|assignments/list_custom|TeacherOnly|Teacher|session_school|assignment_owner|read|bounded_list|none|assignment_functions::list_custom_assignments|-
 server|assignments/my_assignments|StudentOnly|Student|session_school|session_student|read|bounded_list|none|assignment_functions::get_my_assignments|-

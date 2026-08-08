@@ -479,12 +479,7 @@ mod tests {
     use crate::services::llm_service::{
         BaseAssignment, ExternalLlmClient, LlmConfig, PerformanceMetrics, StudentContext,
     };
-    use axum::{
-        http::StatusCode,
-        response::IntoResponse,
-        routing::post,
-        Json, Router,
-    };
+    use axum::{http::StatusCode, response::IntoResponse, routing::post, Json, Router};
     use serde_json::json;
     use std::ffi::OsString;
     use tokio::net::TcpListener;
@@ -533,11 +528,9 @@ mod tests {
                         })),
                     )
                         .into_response(),
-                    MockGatewayFault::InvalidJson => (
-                        StatusCode::OK,
-                        "not-json-provider-secret-sentinel",
-                    )
-                        .into_response(),
+                    MockGatewayFault::InvalidJson => {
+                        (StatusCode::OK, "not-json-provider-secret-sentinel").into_response()
+                    }
                     MockGatewayFault::Outage => (
                         StatusCode::SERVICE_UNAVAILABLE,
                         Json(json!({
@@ -622,10 +615,7 @@ mod tests {
         }
     }
 
-    async fn mock_gateway_error(
-        fault: MockGatewayFault,
-        request_timeout: Duration,
-    ) -> LlmError {
+    async fn mock_gateway_error(fault: MockGatewayFault, request_timeout: Duration) -> LlmError {
         let proxy_origin = spawn_mock_gateway(fault).await;
         let client = client_through_local_mock_proxy(&proxy_origin, request_timeout);
         client
@@ -679,7 +669,8 @@ mod tests {
     async fn local_mock_gateway_faults_drive_worker_retry_policy() {
         let _env_guard = MOCK_GATEWAY_ENV_LOCK.lock().await;
 
-        let timeout = mock_gateway_error(MockGatewayFault::Timeout, Duration::from_millis(40)).await;
+        let timeout =
+            mock_gateway_error(MockGatewayFault::Timeout, Duration::from_millis(40)).await;
         assert!(matches!(timeout, LlmError::RequestFailed(_)));
         assert_eq!(
             classify_llm_failure(&timeout),

@@ -225,11 +225,11 @@ case "${command}" in
       [ "${createdb}" = "false" ]
       [ "${createrole}" = "false" ]
       [ "${replication}" = "false" ]
-      [ "${bypassrls}" = "true" ]
+      [ "${bypassrls}" = "false" ]
       [ "$(psql "${DATABASE_URL}" -Atc "SELECT has_schema_privilege(current_user, '"'"'public'"'"', '"'"'CREATE'"'"')")" = "f" ]
       [ "$(psql "${DATABASE_URL}" -Atc "SELECT has_table_privilege(current_user, '"'"'public.users'"'"', '"'"'SELECT'"'"')")" = "t" ]
       [ "$(psql "${DATABASE_URL}" -Atc "SELECT NOT (has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'INSERT'"'"') OR has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'UPDATE'"'"') OR has_table_privilege(current_user, '"'"'public.edutalent_migration_files'"'"', '"'"'DELETE'"'"'))")" = "t" ]
-      echo "Dedicated non-superuser EduTalent database role verified."
+      echo "Dedicated NOBYPASSRLS non-superuser EduTalent database role verified."
     '
     ;;
   gateway-check)

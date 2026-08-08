@@ -11,13 +11,23 @@ pub fn TeacherDashboard() -> Element {
 
     if let Some(user) = current_user {
         let content = match section.as_str() {
-            "overview" => rsx! { super::dashboard::TeacherOverviewSection {} },
+            "overview" => rsx! {
+                div {
+                    super::personalization_status::PersonalizationQueueStatusPanel {}
+                    super::dashboard::TeacherOverviewSection {}
+                }
+            },
             "classes" => rsx! { super::classes::Classes {} },
             "assignments" => rsx! { super::assignments::Assignments {} },
             "students" => rsx! { super::students::Students {} },
             "submissions" => rsx! { super::submissions::Submissions {} },
             "knowledge-assets" => rsx! { TeacherKnowledgeAssetsSection {} },
-            _ => rsx! { super::dashboard::TeacherOverviewSection {} },
+            _ => rsx! {
+                div {
+                    super::personalization_status::PersonalizationQueueStatusPanel {}
+                    super::dashboard::TeacherOverviewSection {}
+                }
+            },
         };
 
         rsx! {

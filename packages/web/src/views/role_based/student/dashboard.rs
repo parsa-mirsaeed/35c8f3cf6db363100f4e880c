@@ -1,7 +1,9 @@
 use crate::application::AuthHooks;
 use crate::i18n::use_locale;
 use crate::views::role_based::components::ResponsiveDashboardLayout;
-use api::server_functions::dashboard_functions::{get_student_assignments, get_student_classes_view};
+use api::server_functions::dashboard_functions::{
+    get_student_assignments, get_student_classes_view,
+};
 use dioxus::prelude::*;
 
 #[component]

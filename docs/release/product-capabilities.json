@@ -6,5 +6,6 @@
   "parent_reports": false,
   "parent_teacher_communication": false,
   "school_manager_reports": false,
+  "derived_academic_metrics": false,
   "synthetic_system_health": false
 }

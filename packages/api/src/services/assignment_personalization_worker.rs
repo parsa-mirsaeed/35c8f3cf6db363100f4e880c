@@ -65,13 +65,14 @@ pub fn start_assignment_personalization_worker(
                 match run_authorized(
                     &raw_pool,
                     AuthorizedActor::system_queue(worker_id),
-                    recover_stale_jobs(&pool, stale_after_seconds),
+                    recover_stale_jobs(&pool, stale_after_seconds, max_attempts),
                 )
                 .await
                 {
-                    Ok(Ok(recovered)) if recovered > 0 => {
-                        tracing::warn!(recovered, "Recovered stale assignment personalization jobs")
-                    }
+                    Ok(Ok(reconciled)) if reconciled > 0 => tracing::warn!(
+                        reconciled,
+                        "Reconciled stale assignment personalization jobs"
+                    ),
                     Ok(Ok(_)) => {}
                     Ok(Err(error)) => tracing::error!(
                         error_code = repository_error_code(&error),
@@ -420,14 +421,16 @@ async fn claim_next_job(
 async fn recover_stale_jobs(
     pool: &AuthorizedPool,
     stale_after_seconds: i64,
+    max_attempts: i32,
 ) -> Result<u64, RepositoryError> {
-    let recovered = sqlx::query_scalar::<_, i64>(
-        "SELECT public.recover_stale_assignment_personalization_jobs($1)",
+    let reconciled = sqlx::query_scalar::<_, i64>(
+        "SELECT public.recover_stale_assignment_personalization_jobs($1, $2)",
     )
     .bind(stale_after_seconds.max(60))
+    .bind(max_attempts.clamp(1, 10))
     .fetch_one(pool)
     .await?;
-    Ok(recovered.max(0) as u64)
+    Ok(reconciled.max(0) as u64)
 }
 
 async fn run_authorized<T, E, F>(
@@ -479,10 +482,10 @@ mod tests {
     use crate::services::llm_service::{
         BaseAssignment, ExternalLlmClient, LlmConfig, PerformanceMetrics, StudentContext,
     };
-    use axum::{http::StatusCode, response::IntoResponse, routing::post, Json, Router};
-    use serde_json::json;
     use std::ffi::OsString;
-    use tokio::net::TcpListener;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     static MOCK_GATEWAY_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -494,66 +497,49 @@ mod tests {
         Outage,
     }
 
-    async fn spawn_mock_gateway(fault: MockGatewayFault) -> String {
-        let app = Router::new().route(
-            "/v1/chat/completions",
-            post(move || async move {
-                match fault {
-                    MockGatewayFault::Timeout => {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
-                        (
-                            StatusCode::OK,
-                            Json(json!({
-                                "model": "deepseek-chat",
-                                "choices": [{
-                                    "index": 0,
-                                    "message": {
-                                        "role": "assistant",
-                                        "content": "{}"
-                                    },
-                                    "finish_reason": "stop"
-                                }]
-                            })),
-                        )
-                            .into_response()
-                    }
-                    MockGatewayFault::RateLimited => (
-                        StatusCode::TOO_MANY_REQUESTS,
-                        Json(json!({
-                            "error": {
-                                "code": "provider_rate_limited",
-                                "message": "rate limited",
-                                "retry_after_seconds": 19
-                            }
-                        })),
-                    )
-                        .into_response(),
-                    MockGatewayFault::InvalidJson => {
-                        (StatusCode::OK, "not-json-provider-secret-sentinel").into_response()
-                    }
-                    MockGatewayFault::Outage => (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        Json(json!({
-                            "error": {
-                                "code": "ai_temporarily_unavailable",
-                                "message": "offline",
-                                "retry_after_seconds": 30
-                            }
-                        })),
-                    )
-                        .into_response(),
-                }
-            }),
-        );
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind local mock AI gateway");
+    fn spawn_mock_gateway(fault: MockGatewayFault) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local mock AI gateway");
         let address = listener.local_addr().expect("mock gateway address");
-        tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve local mock AI gateway");
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept mock AI gateway request");
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+            let mut request = [0_u8; 16_384];
+            let _ = stream.read(&mut request);
+
+            let (status, content_type, body) = match fault {
+                MockGatewayFault::Timeout => {
+                    thread::sleep(Duration::from_millis(250));
+                    (
+                        "200 OK",
+                        "application/json",
+                        r#"{"model":"deepseek-chat","choices":[{"index":0,"message":{"role":"assistant","content":"{}"},"finish_reason":"stop"}]}"#,
+                    )
+                }
+                MockGatewayFault::RateLimited => (
+                    "429 Too Many Requests",
+                    "application/json",
+                    r#"{"error":{"code":"provider_rate_limited","message":"rate limited","retry_after_seconds":19}}"#,
+                ),
+                MockGatewayFault::InvalidJson => (
+                    "200 OK",
+                    "application/json",
+                    "not-json-provider-secret-sentinel",
+                ),
+                MockGatewayFault::Outage => (
+                    "503 Service Unavailable",
+                    "application/json",
+                    r#"{"error":{"code":"ai_temporarily_unavailable","message":"offline","retry_after_seconds":30}}"#,
+                ),
+            };
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
         });
+
         format!("http://{address}")
     }
 
@@ -616,7 +602,7 @@ mod tests {
     }
 
     async fn mock_gateway_error(fault: MockGatewayFault, request_timeout: Duration) -> LlmError {
-        let proxy_origin = spawn_mock_gateway(fault).await;
+        let proxy_origin = spawn_mock_gateway(fault);
         let client = client_through_local_mock_proxy(&proxy_origin, request_timeout);
         client
             .personalize_assignment(&base_assignment(), &student_context())

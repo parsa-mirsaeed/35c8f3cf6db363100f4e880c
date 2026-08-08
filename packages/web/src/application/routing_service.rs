@@ -1,19 +1,20 @@
 use crate::domain::{AccessControl, SystemRole, User};
+use api::product_capabilities::PRODUCTION_PRODUCT_CAPABILITIES;
 use dioxus::prelude::*;
 
 /// Application routing service.
 pub struct RoutingService;
 
 impl RoutingService {
-    /// Get dashboard route for user based on their role.
-    pub fn get_role_based_route(user: &User) -> &'static str {
-        match user.role {
-            SystemRole::PlatformAdmin => "/dashboard/platform-admin",
-            SystemRole::SchoolManager => "/dashboard/school-manager",
-            SystemRole::Teacher => "/dashboard/teacher",
-            SystemRole::Student => "/dashboard/student",
-            SystemRole::Parent => "/dashboard/parent",
-        }
+    /// `/dashboard` is the canonical role-aware dashboard. Legacy/direct role
+    /// routes remain guarded aliases, but successful login and redirects always
+    /// converge on this one product entry point.
+    pub fn get_role_based_route(_user: &User) -> &'static str {
+        "/dashboard"
+    }
+
+    pub fn get_role_based_route_for_role(_role: SystemRole) -> &'static str {
+        "/dashboard"
     }
 
     /// Check if user can access a specific route.
@@ -22,8 +23,6 @@ impl RoutingService {
             return true;
         }
 
-        // Role-specific checks must run before the generic authenticated-route
-        // check, otherwise every authenticated user could access every dashboard.
         if let Some(required_role) = Self::get_required_role_for_route(route) {
             return user.role == required_role;
         }
@@ -80,6 +79,7 @@ impl RoutingService {
         user: &User,
         locale: &crate::i18n::LocaleContext,
     ) -> Vec<NavigationItem> {
+        let capabilities = PRODUCTION_PRODUCT_CAPABILITIES;
         let mut items = vec![NavigationItem {
             id: "overview".to_string(),
             label: locale.t("nav.overview"),
@@ -130,21 +130,23 @@ impl RoutingService {
                         route: "/dashboard/school-manager/knowledge-submissions".to_string(),
                         active: false,
                     },
-                    NavigationItem {
+                ]);
+                if capabilities.school_manager_reports {
+                    items.push(NavigationItem {
                         id: "reports".to_string(),
                         label: locale.t("nav.reports"),
                         icon: "bar_chart".to_string(),
                         route: "/dashboard/school-manager/reports".to_string(),
                         active: false,
-                    },
-                    NavigationItem {
-                        id: "settings".to_string(),
-                        label: locale.t("nav.settings"),
-                        icon: "settings".to_string(),
-                        route: "/dashboard/school-manager/settings".to_string(),
-                        active: false,
-                    },
-                ]);
+                    });
+                }
+                items.push(NavigationItem {
+                    id: "settings".to_string(),
+                    label: locale.t("nav.settings"),
+                    icon: "settings".to_string(),
+                    route: "/dashboard/school-manager/settings".to_string(),
+                    active: false,
+                });
             }
             SystemRole::Teacher => {
                 items.extend_from_slice(&[
@@ -209,31 +211,42 @@ impl RoutingService {
                         active: false,
                     },
                 ]);
+                if capabilities.timetable {
+                    items.push(NavigationItem {
+                        id: "schedule".to_string(),
+                        label: locale.t("schedule.title"),
+                        icon: "calendar_month".to_string(),
+                        route: "/dashboard/student/schedule".to_string(),
+                        active: false,
+                    });
+                }
             }
             SystemRole::Parent => {
-                items.extend_from_slice(&[
-                    NavigationItem {
-                        id: "children".to_string(),
-                        label: locale.t("nav.children"),
-                        icon: "child_care".to_string(),
-                        route: "/dashboard/parent/children".to_string(),
+                items.push(NavigationItem {
+                    id: "children".to_string(),
+                    label: locale.t("nav.children"),
+                    icon: "child_care".to_string(),
+                    route: "/dashboard/parent/children".to_string(),
+                    active: false,
+                });
+                if capabilities.parent_reports {
+                    items.push(NavigationItem {
+                        id: "reports".to_string(),
+                        label: locale.t("nav.reports"),
+                        icon: "description".to_string(),
+                        route: "/dashboard/parent/reports".to_string(),
                         active: false,
-                    },
-                    NavigationItem {
-                        id: "progress".to_string(),
-                        label: locale.t("nav.progress"),
-                        icon: "trending_up".to_string(),
-                        route: "/dashboard/parent/progress".to_string(),
-                        active: false,
-                    },
-                    NavigationItem {
+                    });
+                }
+                if capabilities.parent_teacher_communication {
+                    items.push(NavigationItem {
                         id: "communication".to_string(),
                         label: locale.t("nav.communication"),
                         icon: "chat".to_string(),
                         route: "/dashboard/parent/communication".to_string(),
                         active: false,
-                    },
-                ]);
+                    });
+                }
             }
         }
 
@@ -357,5 +370,18 @@ mod tests {
             ),
             Some(SystemRole::PlatformAdmin)
         );
+    }
+
+    #[test]
+    fn every_role_redirects_to_the_canonical_dashboard() {
+        for role in [
+            SystemRole::PlatformAdmin,
+            SystemRole::SchoolManager,
+            SystemRole::Teacher,
+            SystemRole::Student,
+            SystemRole::Parent,
+        ] {
+            assert_eq!(RoutingService::get_role_based_route_for_role(role), "/dashboard");
+        }
     }
 }

@@ -381,7 +381,10 @@ mod tests {
             SystemRole::Student,
             SystemRole::Parent,
         ] {
-            assert_eq!(RoutingService::get_role_based_route_for_role(role), "/dashboard");
+            assert_eq!(
+                RoutingService::get_role_based_route_for_role(role),
+                "/dashboard"
+            );
         }
     }
 }

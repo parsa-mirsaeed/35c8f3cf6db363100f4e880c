@@ -55,9 +55,8 @@ pub fn start_assignment_personalization_worker(
         let heartbeat_interval =
             Duration::from_secs(env_u64("ASSIGNMENT_JOB_HEARTBEAT_SECONDS", 20).max(5));
         let stale_after_seconds = env_i64("ASSIGNMENT_JOB_STALE_SECONDS", 120).max(60);
-        let recovery_interval = Duration::from_secs(
-            env_u64("ASSIGNMENT_JOB_RECOVERY_INTERVAL_SECONDS", 60).max(30),
-        );
+        let recovery_interval =
+            Duration::from_secs(env_u64("ASSIGNMENT_JOB_RECOVERY_INTERVAL_SECONDS", 60).max(30));
         let max_attempts = env_i32("ASSIGNMENT_JOB_MAX_ATTEMPTS", 5).clamp(1, 10);
         let mut last_recovery = Instant::now() - recovery_interval;
 
@@ -70,10 +69,9 @@ pub fn start_assignment_personalization_worker(
                 )
                 .await
                 {
-                    Ok(Ok(recovered)) if recovered > 0 => tracing::warn!(
-                        recovered,
-                        "Recovered stale assignment personalization jobs"
-                    ),
+                    Ok(Ok(recovered)) if recovered > 0 => {
+                        tracing::warn!(recovered, "Recovered stale assignment personalization jobs")
+                    }
                     Ok(Ok(_)) => {}
                     Ok(Err(error)) => tracing::error!(
                         error_code = repository_error_code(&error),
@@ -108,9 +106,7 @@ pub fn start_assignment_personalization_worker(
                     continue;
                 }
                 Err(_) => {
-                    tracing::error!(
-                        "Unable to open assignment personalization queue transaction"
-                    );
+                    tracing::error!("Unable to open assignment personalization queue transaction");
                     tokio::time::sleep(poll_interval).await;
                     continue;
                 }
@@ -135,6 +131,7 @@ pub fn start_assignment_personalization_worker(
             let heartbeat_task = tokio::spawn(async move {
                 let mut ticker = tokio::time::interval(heartbeat_interval);
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
                 loop {
                     tokio::select! {
                         _ = ticker.tick() => {
@@ -175,12 +172,14 @@ pub fn start_assignment_personalization_worker(
 
             let actor = AuthorizedActor::new(job.requested_by, "Teacher", Some(job.school_id));
             let processed = match actor {
-                Ok(actor) => run_authorized(
-                    &raw_pool,
-                    actor,
-                    process_claimed_job(Arc::clone(&pool), &job),
-                )
-                .await,
+                Ok(actor) => {
+                    run_authorized(
+                        &raw_pool,
+                        actor,
+                        process_claimed_job(Arc::clone(&pool), &job),
+                    )
+                    .await
+                }
                 Err(error) => Err(error),
             };
 
@@ -329,14 +328,17 @@ fn classify_failure(error: &WorkerProcessError) -> FailureAction {
             kind: PersonalizationFailureKind::ProcessingUnavailable,
             retry_after_seconds: 2,
         },
-        WorkerProcessError::Personalization(PersonalizationError::AssignmentNotFound(_)
-        | PersonalizationError::StudentNotFound(_)
-        | PersonalizationError::CustomAssignmentNotFound(_)) => FailureAction::CancelAuthorization,
+        WorkerProcessError::Personalization(
+            PersonalizationError::AssignmentNotFound(_)
+            | PersonalizationError::StudentNotFound(_)
+            | PersonalizationError::CustomAssignmentNotFound(_),
+        ) => FailureAction::CancelAuthorization,
         WorkerProcessError::Personalization(PersonalizationError::LlmError(llm_error)) => {
             classify_llm_failure(llm_error)
         }
-        WorkerProcessError::Personalization(PersonalizationError::StudentContextError(_)
-        | PersonalizationError::DatabaseError(_)) => FailureAction::Record {
+        WorkerProcessError::Personalization(
+            PersonalizationError::StudentContextError(_) | PersonalizationError::DatabaseError(_),
+        ) => FailureAction::Record {
             kind: PersonalizationFailureKind::ProcessingUnavailable,
             retry_after_seconds: 2,
         },
@@ -351,12 +353,12 @@ fn classify_llm_failure(error: &LlmError) -> FailureAction {
             kind: PersonalizationFailureKind::RateLimited,
             retry_after_seconds: *retry_after_seconds,
         },
-        LlmError::MissingApiKey
-        | LlmError::RequestFailed(_)
-        | LlmError::TemporarilyUnavailable => FailureAction::Record {
-            kind: PersonalizationFailureKind::GatewayUnavailable,
-            retry_after_seconds: 10,
-        },
+        LlmError::MissingApiKey | LlmError::RequestFailed(_) | LlmError::TemporarilyUnavailable => {
+            FailureAction::Record {
+                kind: PersonalizationFailureKind::GatewayUnavailable,
+                retry_after_seconds: 10,
+            }
+        }
         LlmError::ParseError(_) | LlmError::InvalidResponse(_) | LlmError::ApiError { .. } => {
             FailureAction::Record {
                 kind: PersonalizationFailureKind::InvalidGatewayResponse,

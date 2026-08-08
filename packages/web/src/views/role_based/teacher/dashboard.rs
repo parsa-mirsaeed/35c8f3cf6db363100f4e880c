@@ -20,7 +20,9 @@ pub fn TeacherDashboard() -> Element {
             "knowledge-assets" => rsx! { TeacherKnowledgeAssetsSection {} },
             "students" => rsx! { super::students::Students {} },
             "submissions" => rsx! { super::submissions::Submissions {} },
-            _ => rsx! { TeacherOverviewSection { on_navigate: move |next| active_section.set(next) } },
+            _ => {
+                rsx! { TeacherOverviewSection { on_navigate: move |next| active_section.set(next) } }
+            }
         };
         rsx! {
             ResponsiveDashboardLayout {

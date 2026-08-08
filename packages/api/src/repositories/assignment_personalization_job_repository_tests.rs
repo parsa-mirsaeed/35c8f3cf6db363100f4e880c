@@ -11,6 +11,12 @@ use std::future::Future;
 use std::sync::Arc;
 use uuid::Uuid;
 
+// The production queue claim is intentionally global. These database-backed
+// tests share one PostgreSQL database, so serialize queue fixtures that can
+// claim/reconcile jobs and explicitly prioritize the fixture under test. This
+// prevents one test from consuming another test's valid global queue work.
+static QUEUE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn run_as<T, F>(pool: &PgPool, actor: AuthorizedActor, future: F) -> T
 where
     F: Future<Output = T>,
@@ -235,6 +241,21 @@ async fn queue_fixture(student_count: usize) -> QueueFixture {
     }
 }
 
+async fn prioritize_assignment_jobs(pool: &PgPool, assignment_id: Uuid) {
+    sqlx::query(
+        r#"
+        UPDATE assignment_personalization_jobs
+        SET available_at = TIMESTAMPTZ '1970-01-01 00:00:00+00'
+        WHERE assignment_id = $1
+          AND status = 'queued'
+        "#,
+    )
+    .bind(assignment_id)
+    .execute(pool)
+    .await
+    .expect("prioritize personalization fixture jobs");
+}
+
 async fn claim_next(pool: &PgPool, worker_id: Uuid) -> Option<ClaimedAssignmentPersonalizationJob> {
     let authorized_pool = AuthorizedPool::new();
     run_as(pool, AuthorizedActor::system_queue(worker_id), async {
@@ -278,6 +299,7 @@ async fn claim_next(pool: &PgPool, worker_id: Uuid) -> Option<ClaimedAssignmentP
 #[cfg(feature = "server")]
 #[tokio::test]
 async fn publication_enqueues_atomically_and_duplicate_publish_is_idempotent() {
+    let _queue_guard = QUEUE_TEST_LOCK.lock().await;
     let fixture = queue_fixture(2).await;
 
     let custom_count: i64 =
@@ -354,6 +376,7 @@ async fn publication_enqueues_atomically_and_duplicate_publish_is_idempotent() {
 #[cfg(feature = "server")]
 #[tokio::test]
 async fn partial_completion_resumes_remaining_student_and_stale_lease_is_reclaimed() {
+    let _queue_guard = QUEUE_TEST_LOCK.lock().await;
     let fixture = queue_fixture(2).await;
     let completed_student = fixture.student_ids[0];
     sqlx::query(
@@ -368,6 +391,7 @@ async fn partial_completion_resumes_remaining_student_and_stale_lease_is_reclaim
     .execute(&*fixture.pool)
     .await
     .expect("mark one student personalized");
+    prioritize_assignment_jobs(fixture.pool.as_ref(), fixture.assignment_id).await;
 
     let worker_id = Uuid::new_v4();
     let claimed = claim_next(fixture.pool.as_ref(), worker_id)
@@ -418,8 +442,18 @@ async fn partial_completion_resumes_remaining_student_and_stale_lease_is_reclaim
 #[cfg(feature = "server")]
 #[tokio::test]
 async fn revoked_enrollment_is_cancelled_before_processing() {
+    let _queue_guard = QUEUE_TEST_LOCK.lock().await;
     let fixture = queue_fixture(1).await;
     let student_id = fixture.student_ids[0];
+    let target_job_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM assignment_personalization_jobs WHERE assignment_id = $1 AND student_id = $2",
+    )
+    .bind(fixture.assignment_id)
+    .bind(student_id)
+    .fetch_one(&*fixture.pool)
+    .await
+    .expect("read target personalization job");
+
     sqlx::query("DELETE FROM enrollments WHERE student_id = $1")
         .bind(student_id)
         .execute(&*fixture.pool)
@@ -427,7 +461,12 @@ async fn revoked_enrollment_is_cancelled_before_processing() {
         .expect("remove enrollment");
 
     let worker_id = Uuid::new_v4();
-    assert!(claim_next(fixture.pool.as_ref(), worker_id).await.is_none());
+    if let Some(claimed) = claim_next(fixture.pool.as_ref(), worker_id).await {
+        assert_ne!(
+            claimed.id, target_job_id,
+            "revoked target must be cancelled during reconciliation, never claimed"
+        );
+    }
 
     let row = sqlx::query(
         r#"
@@ -456,11 +495,15 @@ async fn revoked_enrollment_is_cancelled_before_processing() {
 #[cfg(feature = "server")]
 #[tokio::test]
 async fn retry_backoff_is_bounded_and_cross_school_status_is_isolated() {
+    let _queue_guard = QUEUE_TEST_LOCK.lock().await;
     let fixture = queue_fixture(1).await;
+    prioritize_assignment_jobs(fixture.pool.as_ref(), fixture.assignment_id).await;
+
     let worker_id = Uuid::new_v4();
     let claimed = claim_next(fixture.pool.as_ref(), worker_id)
         .await
         .expect("claim personalization job");
+    assert_eq!(claimed.assignment_id, fixture.assignment_id);
     let repository = AssignmentPersonalizationJobRepository::new(fixture.pool.clone());
 
     let disposition = run_as(
@@ -535,6 +578,7 @@ async fn retry_backoff_is_bounded_and_cross_school_status_is_isolated() {
 #[cfg(feature = "server")]
 #[tokio::test]
 async fn explicit_retry_reuses_the_stable_job_identity() {
+    let _queue_guard = QUEUE_TEST_LOCK.lock().await;
     let fixture = queue_fixture(1).await;
     let student_id = fixture.student_ids[0];
     let original_job_id: Uuid = sqlx::query_scalar(

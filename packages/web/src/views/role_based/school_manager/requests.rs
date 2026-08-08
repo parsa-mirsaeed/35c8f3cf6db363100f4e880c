@@ -1,7 +1,5 @@
 use api::domain::PcrStatus;
-use api::server_functions::profile_change_requests::{
-    decide_profile_change, get_pending_requests,
-};
+use api::server_functions::profile_change_requests::{decide_profile_change, get_pending_requests};
 use dioxus::prelude::*;
 
 use crate::i18n::use_locale;

@@ -211,16 +211,19 @@ fn endpoint_authorization_exceptions_cannot_outlive_their_expiry() {
 
         let policy = columns[2];
         let allowed_roles = columns[3];
-        let is_temporary_exception = policy == "Disabled"
-            || allowed_roles
-                .split(';')
-                .any(|role| role == "admin");
+        let is_temporary_exception =
+            policy == "Disabled" || allowed_roles.split(';').any(|role| role == "admin");
         if !is_temporary_exception {
             continue;
         }
 
-        let expiry = chrono::NaiveDate::parse_from_str(columns[10], "%Y-%m-%d")
-            .unwrap_or_else(|_| panic!("invalid exception expiry for {}: {}", columns[1], columns[10]));
+        let expiry =
+            chrono::NaiveDate::parse_from_str(columns[10], "%Y-%m-%d").unwrap_or_else(|_| {
+                panic!(
+                    "invalid exception expiry for {}: {}",
+                    columns[1], columns[10]
+                )
+            });
         assert!(
             expiry >= today,
             "expired endpoint authorization exception for {}: {}",
@@ -298,29 +301,26 @@ async fn platform_admin_catalog_rls_matches_endpoint_authority() {
             .await
             .expect("set non-elevated request context");
 
-        let school_a: uuid::Uuid = sqlx::query_scalar(
-            "INSERT INTO public.schools (name) VALUES ($1) RETURNING id",
-        )
-        .bind(&school_a_name)
-        .fetch_one(&mut *tx)
-        .await
-        .expect("PlatformAdmin may create a school");
-        let school_b: uuid::Uuid = sqlx::query_scalar(
-            "INSERT INTO public.schools (name) VALUES ($1) RETURNING id",
-        )
-        .bind(&school_b_name)
-        .fetch_one(&mut *tx)
-        .await
-        .expect("PlatformAdmin may create a second school");
+        let school_a: uuid::Uuid =
+            sqlx::query_scalar("INSERT INTO public.schools (name) VALUES ($1) RETURNING id")
+                .bind(&school_a_name)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("PlatformAdmin may create a school");
+        let school_b: uuid::Uuid =
+            sqlx::query_scalar("INSERT INTO public.schools (name) VALUES ($1) RETURNING id")
+                .bind(&school_b_name)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("PlatformAdmin may create a second school");
 
-        let platform_visible: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM public.schools WHERE id = $1 OR id = $2",
-        )
-        .bind(school_a)
-        .bind(school_b)
-        .fetch_one(&mut *tx)
-        .await
-        .expect("PlatformAdmin may read the platform school catalog");
+        let platform_visible: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM public.schools WHERE id = $1 OR id = $2")
+                .bind(school_a)
+                .bind(school_b)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("PlatformAdmin may read the platform school catalog");
         assert_eq!(platform_visible, 2);
 
         let subject_id: uuid::Uuid = sqlx::query_scalar(
@@ -331,14 +331,13 @@ async fn platform_admin_catalog_rls_matches_endpoint_authority() {
         .fetch_one(&mut *tx)
         .await
         .expect("PlatformAdmin may create a subject");
-        let updated: String = sqlx::query_scalar(
-            "UPDATE public.subjects SET name = $1 WHERE id = $2 RETURNING name",
-        )
-        .bind(&updated_subject_name)
-        .bind(subject_id)
-        .fetch_one(&mut *tx)
-        .await
-        .expect("PlatformAdmin may update a subject");
+        let updated: String =
+            sqlx::query_scalar("UPDATE public.subjects SET name = $1 WHERE id = $2 RETURNING name")
+                .bind(&updated_subject_name)
+                .bind(subject_id)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("PlatformAdmin may update a subject");
         assert_eq!(updated, updated_subject_name);
         let deleted = sqlx::query("DELETE FROM public.subjects WHERE id = $1")
             .bind(subject_id)
@@ -356,14 +355,13 @@ async fn platform_admin_catalog_rls_matches_endpoint_authority() {
             .execute(&mut *tx)
             .await
             .expect("scope SchoolManager to one school");
-        let manager_visible: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM public.schools WHERE id = $1 OR id = $2",
-        )
-        .bind(school_a)
-        .bind(school_b)
-        .fetch_one(&mut *tx)
-        .await
-        .expect("SchoolManager school query remains tenant scoped");
+        let manager_visible: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM public.schools WHERE id = $1 OR id = $2")
+                .bind(school_a)
+                .bind(school_b)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("SchoolManager school query remains tenant scoped");
         assert_eq!(manager_visible, 1);
 
         tx.rollback().await.expect("rollback positive RLS probe");
@@ -394,7 +392,10 @@ async fn platform_admin_catalog_rls_matches_endpoint_authority() {
             .bind("forbidden manager subject")
             .execute(&mut *tx)
             .await;
-        assert!(result.is_err(), "SchoolManager must not mutate global subjects");
+        assert!(
+            result.is_err(),
+            "SchoolManager must not mutate global subjects"
+        );
         tx.rollback().await.expect("rollback subject denial probe");
     }
 

@@ -7,6 +7,7 @@ use dioxus::prelude::*;
 pub mod ai_gateway_protocol;
 pub mod domain;
 pub mod models;
+pub mod product_capabilities;
 pub use domain::*;
 pub use models::*;
 

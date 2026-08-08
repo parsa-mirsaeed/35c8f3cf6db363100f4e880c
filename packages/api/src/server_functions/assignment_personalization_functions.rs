@@ -77,7 +77,9 @@ fn map_repository_error(error: RepositoryError) -> ServerFnError {
         RepositoryError::Unauthorized | RepositoryError::NotFound { .. } => {
             ServerFnError::new("Forbidden: insufficient privileges")
         }
-        RepositoryError::Validation(_) => ServerFnError::new("Unable to load personalization status"),
+        RepositoryError::Validation(_) => {
+            ServerFnError::new("Unable to load personalization status")
+        }
         RepositoryError::Duplicate { .. } | RepositoryError::Database(_) => {
             tracing::error!(
                 error_code = repository_error_code(&error),

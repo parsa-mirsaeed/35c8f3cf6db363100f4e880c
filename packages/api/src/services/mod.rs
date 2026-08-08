@@ -1,5 +1,7 @@
 pub mod ai_outage_queue;
 pub mod assignment_personalization_service;
+#[cfg(feature = "server")]
+pub mod assignment_personalization_worker;
 pub mod audit_service;
 #[cfg(feature = "server")]
 pub mod document_extraction_service;
@@ -26,6 +28,8 @@ pub mod vector_store_service;
 pub use assignment_personalization_service::{
     AssignmentPersonalizationService, PersonalizationError, PersonalizationResult,
 };
+#[cfg(feature = "server")]
+pub use assignment_personalization_worker::start_assignment_personalization_worker;
 pub use audit_service::AuditService;
 pub use llm_service::{DeepSeekClient, ExternalLlmClient, LlmConfig, LlmError};
 pub use student_context_service::{StudentContextError, StudentContextService};

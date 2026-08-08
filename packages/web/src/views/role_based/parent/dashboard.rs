@@ -13,7 +13,9 @@ pub fn ParentDashboard() -> Element {
         let section = active_section();
         let content = match section.as_str() {
             "children" => rsx! { super::children::ChildrenSection {} },
-            "reports" if api::product_capabilities::PRODUCTION_PRODUCT_CAPABILITIES.parent_reports => {
+            "reports"
+                if api::product_capabilities::PRODUCTION_PRODUCT_CAPABILITIES.parent_reports =>
+            {
                 rsx! { super::reports::ReportsSection {} }
             }
             "communication"
@@ -22,7 +24,9 @@ pub fn ParentDashboard() -> Element {
             {
                 rsx! { super::communication::CommunicationSection {} }
             }
-            _ => rsx! { ParentOverviewSection { on_navigate: move |next| active_section.set(next) } },
+            _ => {
+                rsx! { ParentOverviewSection { on_navigate: move |next| active_section.set(next) } }
+            }
         };
 
         rsx! {

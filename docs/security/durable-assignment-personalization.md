@@ -7,12 +7,12 @@ Repository: parsa-mirsaeed/35c8f3cf6db363100f4e880c
 Base branch: main
 Base SHA: f0908bd3fcf04d4ec20d9fdd37cf1954f4fd679b
 Feature branch: agent/pr-05-durable-assignment-personalization
-Current head SHA: updated by the PR-05 implementation commits
-PR number: assigned when the draft pull request is opened
+Current head SHA: recorded in the pull-request evidence before final review
+PR number: 12
 Relevant plan PR: PR-05 — P1 Durable assignment personalization queue
 Finding still reproducible: yes on the base SHA; assignment publication launched personalization through process-local tokio::spawn after commit
 Affected files: assignment publication/server functions, durable queue migration/repository/worker, endpoint manifest, teacher status UI
-Required targeted workflow: AI Change Proof with migration replay, API worker/database tests, dependent Web server compile; Full Validation once on the stable exact head
+Required targeted workflow: AI Change Proof with migration replay, API worker/database tests, local mock AI Gateway fault tests, dependent Web server compile; Full Validation once on the stable exact head
 Heavy workflows intentionally deferred: Production Foundation, Production Operations, Package, Air-gapped Appliance, Mirror Final Proof
 ```
 
@@ -28,7 +28,7 @@ Actual personalization runs under the original authenticated Teacher identity an
 
 ## Retry and restart behavior
 
-Jobs carry bounded attempt counts, `available_at`, a worker lease, heartbeat, safe error code, safe summary, and lifecycle timestamps. A terminated worker leaves a running job with a stale heartbeat; the recovery function returns it to the queue. Provider outages, rate limits, network failures, and invalid gateway responses use bounded retry with exponential/provider-directed delay. Content rejected by prompt-size or secret-shape safety rules is terminal until an operator/teacher changes the underlying input and explicitly retries.
+Jobs carry bounded attempt counts, `available_at`, a worker lease, heartbeat, safe error code, safe summary, and lifecycle timestamps. A terminated worker leaves a running job with a stale heartbeat. Recovery returns it to the queue only while its attempt count remains below the configured bounded maximum; a repeatedly interrupted job that reaches that ceiling transitions to `failed` with the controlled `worker_restart_limit` code and requires explicit retry. Provider outages, rate limits, network failures, and invalid gateway responses use bounded retry with exponential/provider-directed delay. Content rejected by prompt-size or secret-shape safety rules is terminal until an operator/teacher changes the underlying input and explicitly retries.
 
 Partial class completion is naturally resumable because each student has an independent job. A committed personalized payload is reconciled to `succeeded`; remaining queued students continue independently.
 
@@ -52,6 +52,7 @@ Required PR-05 proof is intentionally narrow:
 - API server compile and correctness/suspicious Clippy;
 - API unit and database integration tests;
 - durable queue tests for atomic enqueue, duplicate publication, stale recovery, partial resume, bounded retry, cross-school isolation, revoked enrollment, and safe persisted errors;
+- local mock AI Gateway faults covering timeout, rate limiting with retry delay, malformed success payloads, and temporary outage responses without relaxing the production fixed-origin gateway rule;
 - dependent Web server compile because a teacher status component consumes the new server DTO;
 - endpoint authorization inventory parity;
 - final exact-head Full Validation once the implementation is stable.

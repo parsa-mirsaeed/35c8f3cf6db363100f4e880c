@@ -5,7 +5,8 @@ use dioxus::prelude::*;
 #[component]
 pub fn PersonalizationQueueStatusPanel() -> Element {
     let locale = use_locale();
-    let mut status = use_resource(move || async move { get_assignment_personalization_status().await });
+    let mut status =
+        use_resource(move || async move { get_assignment_personalization_status().await });
 
     rsx! {
         section {

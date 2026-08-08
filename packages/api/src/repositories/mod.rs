@@ -1,3 +1,6 @@
+pub mod assignment_personalization_job_repository;
+#[cfg(test)]
+mod assignment_personalization_job_repository_tests;
 pub mod assignment_repository;
 pub mod audit_log_repository;
 pub mod authorized_assignment_repository;
@@ -33,6 +36,7 @@ pub mod user_preferences_repository;
 pub mod user_repository;
 
 // Re-export all repositories
+pub use assignment_personalization_job_repository::*;
 pub use assignment_repository::*;
 pub use audit_log_repository::*;
 pub use authorized_assignment_repository::*;

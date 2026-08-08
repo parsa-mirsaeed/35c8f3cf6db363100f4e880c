@@ -76,8 +76,15 @@ mod tests {
         let main_source = include_str!("main.rs");
         assert!(!main_source.contains("DashboardPlaceholder"));
         assert!(!main_source.contains("under development"));
-        assert!(main_source.contains("fn StudentRoute()"));
-        assert!(main_source.contains("fn ParentRoute()"));
+        for component in [
+            "fn PlatformAdminRoute()",
+            "fn SchoolManagerRoute()",
+            "fn TeacherRoute()",
+            "fn StudentRoute()",
+            "fn ParentRoute()",
+        ] {
+            assert!(main_source.contains(component));
+        }
     }
 
     #[test]
@@ -89,5 +96,7 @@ mod tests {
         assert!(!capabilities.parent_reports);
         assert!(!capabilities.parent_teacher_communication);
         assert!(!capabilities.school_manager_reports);
+        assert!(!capabilities.derived_academic_metrics);
+        assert!(!capabilities.synthetic_system_health);
     }
 }

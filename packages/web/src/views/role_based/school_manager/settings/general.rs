@@ -1,15 +1,13 @@
-use dioxus::prelude::*;
-use gloo_storage::{LocalStorage, Storage};
-use api::server_functions::user_preferences_functions::{get_user_preferences, update_general_settings};
 use api::models::user_preferences::UpdateGeneralSettingsRequest;
+use api::server_functions::user_preferences_functions::{
+    get_user_preferences, update_general_settings,
+};
+use dioxus::prelude::*;
+
 use crate::i18n::use_locale;
 
 #[component]
 pub fn GeneralSettings() -> Element {
-    let auth_token = use_signal(|| {
-        LocalStorage::get("auth_token").ok()
-    });
-
     // State for general settings
     let mut timezone = use_signal(|| "UTC".to_string());
     let mut language = use_signal(|| "en".to_string());
@@ -20,27 +18,21 @@ pub fn GeneralSettings() -> Element {
     let mut is_success = use_signal(|| false);
     let locale = use_locale();
 
-    // Fetch current preferences
-    let token_for_prefs = auth_token.read().clone();
-    let _prefs_resource = use_resource(move || {
-        let token = token_for_prefs.clone();
-        async move {
-            if let Some(token) = token {
-                if let Ok(prefs) = get_user_preferences(token).await {
-                    timezone.set(prefs.timezone);
-                    language.set(prefs.language);
-                    date_format.set(prefs.date_format);
-                    time_format.set(prefs.time_format);
-                    is_loading.set(false);
-                }
-            }
+    // Fetch current preferences using the canonical authenticated session.
+    let _prefs_resource = use_resource(move || async move {
+        if let Ok(prefs) = get_user_preferences().await {
+            timezone.set(prefs.timezone);
+            language.set(prefs.language);
+            date_format.set(prefs.date_format);
+            time_format.set(prefs.time_format);
         }
+        is_loading.set(false);
     });
 
     rsx! {
         div {
             style: "background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);",
-            
+
             h3 {
                 style: "font-size: 1.125rem; color: #1e293b; margin-bottom: 1.5rem; font-weight: 600;",
                 "{locale.t(\"school_manager.settings.general.title\")}"
@@ -51,11 +43,11 @@ pub fn GeneralSettings() -> Element {
             } else {
                 div {
                     style: "display: flex; flex-direction: column; gap: 1.5rem;",
-                    
+
                     // Timezone
                     div {
-                        label { 
-                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;", 
+                        label {
+                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;",
                             "{locale.t(\"school_manager.settings.general.timezone\")}"
                         }
                         select {
@@ -77,9 +69,9 @@ pub fn GeneralSettings() -> Element {
 
                     // Language
                     div {
-                        label { 
-                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;", 
-                            "{locale.t(\"school_manager.settings.general.language\")}" 
+                        label {
+                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;",
+                            "{locale.t(\"school_manager.settings.general.language\")}"
                         }
                         select {
                             style: "width: 100%; padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.875rem;",
@@ -96,8 +88,8 @@ pub fn GeneralSettings() -> Element {
 
                     // Date Format
                     div {
-                        label { 
-                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;", 
+                        label {
+                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;",
                             "{locale.t(\"school_manager.settings.general.date_format\")}"
                         }
                         select {
@@ -113,9 +105,9 @@ pub fn GeneralSettings() -> Element {
 
                     // Time Format
                     div {
-                        label { 
-                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;", 
-                            "{locale.t(\"school_manager.settings.general.time_format\")}" 
+                        label {
+                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;",
+                            "{locale.t(\"school_manager.settings.general.time_format\")}"
                         }
                         select {
                             style: "width: 100%; padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.875rem;",
@@ -130,10 +122,10 @@ pub fn GeneralSettings() -> Element {
                     if !save_status().is_empty() {
                         div {
                             style: "padding: 0.75rem; border-radius: 8px; font-size: 0.875rem;",
-                            style: if is_success() { 
-                                "background: #dcfce7; color: #166534;" 
-                            } else { 
-                                "background: #fee2e2; color: #991b1b;" 
+                            style: if is_success() {
+                                "background: #dcfce7; color: #166534;"
+                            } else {
+                                "background: #fee2e2; color: #991b1b;"
                             },
                             "{save_status}"
                         }
@@ -145,23 +137,25 @@ pub fn GeneralSettings() -> Element {
                         onclick: move |_| {
                             let locale_action = locale.clone();
                             spawn(async move {
-                                if let Ok(token) = LocalStorage::get::<String>("auth_token") {
-                                    let request = UpdateGeneralSettingsRequest {
-                                        timezone: Some(timezone()),
-                                        language: Some(language()),
-                                        date_format: Some(date_format()),
-                                        time_format: Some(time_format()),
-                                    };
-                                    
-                                    match update_general_settings(token, request).await {
-                                        Ok(_) => {
-                                            save_status.set(locale_action.t("school_manager.settings.general.success"));
-                                            is_success.set(true);
-                                        },
-                                        Err(e) => {
-                                            save_status.set(locale_action.t("school_manager.settings.general.error").replace("{0}", &e.to_string()));
-                                            is_success.set(false);
-                                        }
+                                let request = UpdateGeneralSettingsRequest {
+                                    timezone: Some(timezone()),
+                                    language: Some(language()),
+                                    date_format: Some(date_format()),
+                                    time_format: Some(time_format()),
+                                };
+
+                                match update_general_settings(request).await {
+                                    Ok(_) => {
+                                        save_status.set(locale_action.t("school_manager.settings.general.success"));
+                                        is_success.set(true);
+                                    }
+                                    Err(e) => {
+                                        save_status.set(
+                                            locale_action
+                                                .t("school_manager.settings.general.error")
+                                                .replace("{0}", &e.to_string()),
+                                        );
+                                        is_success.set(false);
                                     }
                                 }
                             });

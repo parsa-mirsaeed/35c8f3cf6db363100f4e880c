@@ -191,3 +191,248 @@ fn temporary_pr03_repair_scaffolding_cannot_return() {
     assert!(!ci.contains("Apply guarded PR-03 executor migration"));
     assert!(!ci.contains("pr03-apply-worker-rls"));
 }
+
+#[test]
+fn endpoint_authorization_exceptions_cannot_outlive_their_expiry() {
+    let today = chrono::Utc::now().date_naive();
+    let manifest = include_str!("../endpoint_authorization_manifest.psv");
+
+    for (index, line) in manifest.lines().enumerate() {
+        if index == 0 || line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let columns = line.split('|').collect::<Vec<_>>();
+        assert_eq!(
+            columns.len(),
+            11,
+            "manifest line {} must have exactly 11 fields",
+            index + 1
+        );
+
+        let policy = columns[2];
+        let allowed_roles = columns[3];
+        let is_temporary_exception =
+            policy == "Disabled" || allowed_roles.split(';').any(|role| role == "admin");
+        if !is_temporary_exception {
+            continue;
+        }
+
+        let expiry =
+            chrono::NaiveDate::parse_from_str(columns[10], "%Y-%m-%d").unwrap_or_else(|_| {
+                panic!(
+                    "invalid exception expiry for {}: {}",
+                    columns[1], columns[10]
+                )
+            });
+        assert!(
+            expiry >= today,
+            "expired endpoint authorization exception for {}: {}",
+            columns[1],
+            columns[10]
+        );
+    }
+}
+
+#[tokio::test]
+async fn platform_admin_catalog_rls_matches_endpoint_authority() {
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("connect to PostgreSQL for PR-04 RLS matrix");
+
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let role_name = format!("edutalent_pr04_{}", &suffix[..12]);
+    sqlx::query(&format!(
+        "CREATE ROLE {role_name} NOLOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+    ))
+    .execute(&pool)
+    .await
+    .expect("create PR-04 RLS probe role");
+    sqlx::query(&format!("GRANT USAGE ON SCHEMA public TO {role_name}"))
+        .execute(&pool)
+        .await
+        .expect("grant schema usage to PR-04 probe role");
+    sqlx::query(&format!(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.schools, public.subjects TO {role_name}"
+    ))
+    .execute(&pool)
+    .await
+    .expect("grant catalog table privileges to PR-04 probe role");
+    sqlx::query(&format!(
+        "GRANT EXECUTE ON FUNCTION public.get_role(), public.get_school_id() TO {role_name}"
+    ))
+    .execute(&pool)
+    .await
+    .expect("grant RLS helper execution to PR-04 probe role");
+
+    let school_a_name = format!("PR04 platform A {}", &suffix[..8]);
+    let school_b_name = format!("PR04 platform B {}", &suffix[..8]);
+    let subject_code = format!("P04{}", &suffix[..8]);
+    let subject_name = format!("PR04 subject {}", &suffix[..8]);
+    let updated_subject_name = format!("PR04 updated {}", &suffix[..8]);
+
+    {
+        let mut tx = pool.begin().await.expect("begin PlatformAdmin RLS probe");
+        sqlx::query(&format!("SET LOCAL ROLE {role_name}"))
+            .execute(&mut *tx)
+            .await
+            .expect("assume PR-04 probe role");
+        sqlx::query("SELECT set_config('app.user_id', $1, true)")
+            .bind("33333333-3333-3333-3333-333333333333")
+            .execute(&mut *tx)
+            .await
+            .expect("set platform actor id");
+        sqlx::query("SELECT set_config('app.user_role', 'PlatformAdmin', true)")
+            .execute(&mut *tx)
+            .await
+            .expect("set PlatformAdmin role context");
+        sqlx::query("SELECT set_config('app.school_id', $1, true)")
+            .bind("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+            .execute(&mut *tx)
+            .await
+            .expect("set platform school context");
+        sqlx::query("SELECT set_config('app.elevated_operation', 'false', true)")
+            .execute(&mut *tx)
+            .await
+            .expect("set non-elevated request context");
+
+        let school_a: uuid::Uuid =
+            sqlx::query_scalar("INSERT INTO public.schools (name) VALUES ($1) RETURNING id")
+                .bind(&school_a_name)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("PlatformAdmin may create a school");
+        let school_b: uuid::Uuid =
+            sqlx::query_scalar("INSERT INTO public.schools (name) VALUES ($1) RETURNING id")
+                .bind(&school_b_name)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("PlatformAdmin may create a second school");
+
+        let platform_visible: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM public.schools WHERE id = $1 OR id = $2")
+                .bind(school_a)
+                .bind(school_b)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("PlatformAdmin may read the platform school catalog");
+        assert_eq!(platform_visible, 2);
+
+        let subject_id: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO public.subjects (code, name) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(&subject_code)
+        .bind(&subject_name)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("PlatformAdmin may create a subject");
+        let updated: String =
+            sqlx::query_scalar("UPDATE public.subjects SET name = $1 WHERE id = $2 RETURNING name")
+                .bind(&updated_subject_name)
+                .bind(subject_id)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("PlatformAdmin may update a subject");
+        assert_eq!(updated, updated_subject_name);
+        let deleted = sqlx::query("DELETE FROM public.subjects WHERE id = $1")
+            .bind(subject_id)
+            .execute(&mut *tx)
+            .await
+            .expect("PlatformAdmin may delete a subject");
+        assert_eq!(deleted.rows_affected(), 1);
+
+        sqlx::query("SELECT set_config('app.user_role', 'SchoolManager', true)")
+            .execute(&mut *tx)
+            .await
+            .expect("switch to SchoolManager context");
+        sqlx::query("SELECT set_config('app.school_id', $1, true)")
+            .bind(school_a.to_string())
+            .execute(&mut *tx)
+            .await
+            .expect("scope SchoolManager to one school");
+        let manager_visible: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM public.schools WHERE id = $1 OR id = $2")
+                .bind(school_a)
+                .bind(school_b)
+                .fetch_one(&mut *tx)
+                .await
+                .expect("SchoolManager school query remains tenant scoped");
+        assert_eq!(manager_visible, 1);
+
+        tx.rollback().await.expect("rollback positive RLS probe");
+    }
+
+    {
+        let mut tx = pool.begin().await.expect("begin subject denial probe");
+        sqlx::query(&format!("SET LOCAL ROLE {role_name}"))
+            .execute(&mut *tx)
+            .await
+            .expect("assume PR-04 probe role");
+        sqlx::query("SELECT set_config('app.user_id', $1, true)")
+            .bind("44444444-4444-4444-4444-444444444444")
+            .execute(&mut *tx)
+            .await
+            .expect("set manager actor id");
+        sqlx::query("SELECT set_config('app.user_role', 'SchoolManager', true)")
+            .execute(&mut *tx)
+            .await
+            .expect("set SchoolManager context");
+        sqlx::query("SELECT set_config('app.school_id', $1, true)")
+            .bind("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+            .execute(&mut *tx)
+            .await
+            .expect("set manager school context");
+        let result = sqlx::query("INSERT INTO public.subjects (code, name) VALUES ($1, $2)")
+            .bind(format!("M{}", &suffix[..8]))
+            .bind("forbidden manager subject")
+            .execute(&mut *tx)
+            .await;
+        assert!(
+            result.is_err(),
+            "SchoolManager must not mutate global subjects"
+        );
+        tx.rollback().await.expect("rollback subject denial probe");
+    }
+
+    {
+        let mut tx = pool.begin().await.expect("begin school denial probe");
+        sqlx::query(&format!("SET LOCAL ROLE {role_name}"))
+            .execute(&mut *tx)
+            .await
+            .expect("assume PR-04 probe role");
+        sqlx::query("SELECT set_config('app.user_id', $1, true)")
+            .bind("55555555-5555-5555-5555-555555555555")
+            .execute(&mut *tx)
+            .await
+            .expect("set teacher actor id");
+        sqlx::query("SELECT set_config('app.user_role', 'Teacher', true)")
+            .execute(&mut *tx)
+            .await
+            .expect("set Teacher context");
+        sqlx::query("SELECT set_config('app.school_id', $1, true)")
+            .bind("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+            .execute(&mut *tx)
+            .await
+            .expect("set teacher school context");
+        let result = sqlx::query("INSERT INTO public.schools (name) VALUES ($1)")
+            .bind(format!("forbidden teacher school {}", &suffix[..8]))
+            .execute(&mut *tx)
+            .await;
+        assert!(result.is_err(), "Teacher must not create schools");
+        tx.rollback().await.expect("rollback school denial probe");
+    }
+
+    sqlx::query(&format!("DROP OWNED BY {role_name}"))
+        .execute(&pool)
+        .await
+        .expect("revoke PR-04 probe role grants");
+    sqlx::query(&format!("DROP ROLE {role_name}"))
+        .execute(&pool)
+        .await
+        .expect("drop PR-04 probe role");
+}

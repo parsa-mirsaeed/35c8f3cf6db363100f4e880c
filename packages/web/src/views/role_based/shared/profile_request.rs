@@ -1,7 +1,7 @@
-use dioxus::prelude::*;
-use crate::i18n::use_locale;
 use api::server_functions::profile_change_requests::request_profile_change;
-use gloo_storage::{LocalStorage, Storage};
+use dioxus::prelude::*;
+
+use crate::i18n::use_locale;
 
 #[component]
 pub fn ProfileChangeRequestForm(
@@ -21,19 +21,18 @@ pub fn ProfileChangeRequestForm(
         is_submitting.set(true);
         error_message.set(None);
 
-        let token = LocalStorage::get::<String>("auth_token").ok();
-        if let Some(auth_token) = token {
-            let payload = serde_json::json!({
-                "name": name(),
-                "email": email()
-            });
+        let payload = serde_json::json!({
+            "name": name(),
+            "email": email()
+        });
 
-            match request_profile_change(auth_token, payload).await {
-                Ok(_) => on_success.call(()),
-                Err(e) => error_message.set(Some(locale.t("profile.request.error.failed").replace("{0}", &e.to_string()))),
-            }
-        } else {
-            error_message.set(Some(locale.t("profile.request.error.no_token")));
+        match request_profile_change(payload).await {
+            Ok(_) => on_success.call(()),
+            Err(e) => error_message.set(Some(
+                locale
+                    .t("profile.request.error.failed")
+                    .replace("{0}", &e.to_string()),
+            )),
         }
         is_submitting.set(false);
     };
@@ -41,7 +40,7 @@ pub fn ProfileChangeRequestForm(
     rsx! {
         div {
             style: "background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 500px; margin: 0 auto;",
-            
+
             h2 {
                 style: "margin-top: 0; margin-bottom: 1.5rem; color: #1f2937;",
                 "{locale.t(\"profile.request.title\")}"
@@ -82,7 +81,7 @@ pub fn ProfileChangeRequestForm(
 
             div {
                 style: "display: flex; justify-content: flex-end; gap: 1rem;",
-                
+
                 button {
                     style: "padding: 0.75rem 1.5rem; background: white; border: 1px solid #d1d5db; color: #374151; border-radius: 6px; cursor: pointer;",
                     onclick: move |_| on_cancel.call(()),

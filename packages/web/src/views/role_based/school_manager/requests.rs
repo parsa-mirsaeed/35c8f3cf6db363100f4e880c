@@ -1,33 +1,31 @@
-use dioxus::prelude::*;
-use api::server_functions::profile_change_requests::{get_pending_requests, decide_profile_change};
 use api::domain::PcrStatus;
-use gloo_storage::{LocalStorage, Storage};
+use api::server_functions::profile_change_requests::{decide_profile_change, get_pending_requests};
+use dioxus::prelude::*;
+
 use crate::i18n::use_locale;
 
 #[component]
 pub fn PendingRequests() -> Element {
     let locale = use_locale();
     let mut action_message = use_signal(|| None::<String>);
-    let mut requests_resource = use_resource(move || async move {
-        let token = LocalStorage::get::<String>("auth_token").ok();
-        if let Some(auth_token) = token {
-            get_pending_requests(auth_token).await
-        } else {
-            Err(dioxus::prelude::ServerFnError::new("No auth token found"))
-        }
-    });
+    let mut requests_resource = use_resource(move || async move { get_pending_requests().await });
 
     let locale_action = locale.clone();
     let handle_decide = move |request_id: String, status: PcrStatus| async move {
-        let token = LocalStorage::get::<String>("auth_token").ok();
-        if let Some(auth_token) = token {
-            match decide_profile_change(auth_token, request_id, status, None).await {
-                Ok(_) => {
-                    action_message.set(Some(locale_action.t("school_manager.requests.success").replace("{0}", &status.to_string())));
-                    requests_resource.restart();
-                },
-                Err(e) => action_message.set(Some(locale_action.t("school_manager.requests.failure").replace("{0}", &e.to_string()))),
+        match decide_profile_change(request_id, status, None).await {
+            Ok(_) => {
+                action_message.set(Some(
+                    locale_action
+                        .t("school_manager.requests.success")
+                        .replace("{0}", &status.to_string()),
+                ));
+                requests_resource.restart();
             }
+            Err(e) => action_message.set(Some(
+                locale_action
+                    .t("school_manager.requests.failure")
+                    .replace("{0}", &e.to_string()),
+            )),
         }
     };
 

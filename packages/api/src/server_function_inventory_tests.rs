@@ -1,160 +1,348 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AuthorizationClass {
-    PlatformAdmin,
-    SchoolManager,
-    SchoolRoleScoped,
-    SessionRoleScoped,
-    SessionOwner,
-    TeacherOrStudentObjectScoped,
-    StudentObjectScoped,
-    GovernedKnowledge,
+const MANIFEST: &str = include_str!("../endpoint_authorization_manifest.psv");
+const CANONICAL_ROLES: [&str; 6] = [
+    "PlatformAdmin",
+    "SchoolManager",
+    "Teacher",
+    "Parent",
+    "Student",
+    "admin",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManifestRow {
+    kind: String,
+    endpoint: String,
+    policy: String,
+    allowed_roles: Vec<String>,
+    tenant_scope: String,
+    object_scope: String,
+    access: String,
+    resource_class: String,
+    audit: String,
+    owner: String,
+    exception_expiry: String,
 }
 
-fn module_authorization_manifest() -> BTreeMap<&'static str, AuthorizationClass> {
-    BTreeMap::from([
-        ("admin_functions.rs", AuthorizationClass::PlatformAdmin),
-        (
-            "assignment_functions.rs",
-            AuthorizationClass::TeacherOrStudentObjectScoped,
-        ),
-        ("auth_functions.rs", AuthorizationClass::SessionOwner),
-        ("class_functions.rs", AuthorizationClass::SchoolRoleScoped),
-        (
-            "class_section_functions.rs",
-            AuthorizationClass::SchoolRoleScoped,
-        ),
-        (
-            "dashboard_functions.rs",
-            AuthorizationClass::SessionRoleScoped,
-        ),
-        ("form_data.rs", AuthorizationClass::SchoolManager),
-        ("invite_functions.rs", AuthorizationClass::SchoolManager),
-        (
-            "knowledge_audit_functions.rs",
-            AuthorizationClass::PlatformAdmin,
-        ),
-        (
-            "knowledge_functions.rs",
-            AuthorizationClass::GovernedKnowledge,
-        ),
-        (
-            "notification_functions.rs",
-            AuthorizationClass::SessionOwner,
-        ),
-        (
-            "profile_change_requests.rs",
-            AuthorizationClass::SessionRoleScoped,
-        ),
-        ("school_functions.rs", AuthorizationClass::SchoolRoleScoped),
-        (
-            "student_functions.rs",
-            AuthorizationClass::StudentObjectScoped,
-        ),
-        ("subject_functions.rs", AuthorizationClass::SchoolRoleScoped),
-        (
-            "submission_functions.rs",
-            AuthorizationClass::StudentObjectScoped,
-        ),
-        ("teacher_functions.rs", AuthorizationClass::SchoolRoleScoped),
-        ("user_creation.rs", AuthorizationClass::SchoolManager),
-        ("user_functions.rs", AuthorizationClass::SessionRoleScoped),
-        ("user_management.rs", AuthorizationClass::SchoolManager),
-        (
-            "user_preferences_functions.rs",
-            AuthorizationClass::SessionOwner,
-        ),
-    ])
+fn parse_manifest() -> Vec<ManifestRow> {
+    MANIFEST
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            if index == 0 || line.trim().is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let columns: Vec<&str> = line.split('|').collect();
+            assert_eq!(
+                columns.len(),
+                11,
+                "manifest line {} must have exactly 11 pipe-separated fields",
+                index + 1
+            );
+            Some(ManifestRow {
+                kind: columns[0].to_string(),
+                endpoint: columns[1].to_string(),
+                policy: columns[2].to_string(),
+                allowed_roles: columns[3]
+                    .split(';')
+                    .filter(|role| !role.is_empty() && *role != "-")
+                    .map(str::to_string)
+                    .collect(),
+                tenant_scope: columns[4].to_string(),
+                object_scope: columns[5].to_string(),
+                access: columns[6].to_string(),
+                resource_class: columns[7].to_string(),
+                audit: columns[8].to_string(),
+                owner: columns[9].to_string(),
+                exception_expiry: columns[10].to_string(),
+            })
+        })
+        .collect()
 }
 
-fn discover_endpoints(source: &str) -> Vec<String> {
-    let marker = "#[server(endpoint = \"";
+fn active_server_function_modules() -> Vec<PathBuf> {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server_functions");
+    let mod_source =
+        fs::read_to_string(directory.join("mod.rs")).expect("read server function mod");
+    let mut modules = mod_source
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("pub mod ")
+                .and_then(|value| value.strip_suffix(';'))
+        })
+        .filter(|module| !matches!(*module, "rls_helpers" | "validation"))
+        .map(|module| directory.join(format!("{module}.rs")))
+        .collect::<Vec<_>>();
+    modules.sort();
+    modules
+}
+
+fn discover_endpoints(source: &str, file_name: &str) -> Vec<String> {
     let mut endpoints = Vec::new();
     let mut remaining = source;
-    while let Some(start) = remaining.find(marker) {
-        let after_marker = &remaining[start + marker.len()..];
-        let Some(end) = after_marker.find('"') else {
-            panic!("unterminated server endpoint annotation");
-        };
-        endpoints.push(after_marker[..end].to_string());
-        remaining = &after_marker[end + 1..];
+    while let Some(start) = remaining.find("#[server") {
+        let annotation = &remaining[start..];
+        let end = annotation
+            .find(']')
+            .unwrap_or_else(|| panic!("unterminated #[server] annotation in {file_name}"));
+        let annotation = &annotation[..=end];
+        let marker = "endpoint = \"";
+        let endpoint_start = annotation.find(marker).unwrap_or_else(|| {
+            panic!(
+                "production #[server] annotation in {file_name} must declare an explicit endpoint path: {annotation}"
+            )
+        });
+        let value = &annotation[endpoint_start + marker.len()..];
+        let endpoint_end = value
+            .find('"')
+            .unwrap_or_else(|| panic!("unterminated endpoint path in {file_name}: {annotation}"));
+        endpoints.push(value[..endpoint_end].to_string());
+        remaining = &remaining[start + end + 1..];
     }
     endpoints
 }
 
-#[test]
-fn every_production_server_function_module_has_an_authorization_class() {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server_functions");
-    let manifest = module_authorization_manifest();
-    let ignored_non_endpoint_modules =
-        BTreeSet::from(["mod.rs", "rls_helpers.rs", "validation.rs"]);
-    let forbidden_endpoints = BTreeSet::from([
-        "auth/refresh",
-        "auth/verify",
-        "echo",
-        "submissions/create",
-        "submissions/delete",
-        "submissions/get_all",
-        "submissions/get_by_id",
-        "submissions/update",
-    ]);
-
-    let mut discovered = Vec::new();
-    for entry in fs::read_dir(&directory).expect("read server function directory") {
-        let entry = entry.expect("read server function entry");
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("rs") {
-            continue;
-        }
+fn discovered_server_endpoints() -> BTreeMap<String, String> {
+    let mut discovered = BTreeMap::new();
+    for path in active_server_function_modules() {
         let file_name = path
             .file_name()
             .and_then(|value| value.to_str())
             .expect("UTF-8 server function filename");
         let source = fs::read_to_string(&path).expect("read server function source");
-        let endpoints = discover_endpoints(&source);
-
-        if endpoints.is_empty() {
+        for endpoint in discover_endpoints(&source, file_name) {
             assert!(
-                ignored_non_endpoint_modules.contains(file_name) || manifest.contains_key(file_name),
-                "server function module {file_name} is neither classified nor explicitly non-endpoint"
+                discovered
+                    .insert(endpoint.clone(), file_name.to_string())
+                    .is_none(),
+                "duplicate production server endpoint: {endpoint}"
             );
-            continue;
-        }
-
-        let authorization_class = manifest.get(file_name).unwrap_or_else(|| {
-            panic!("production endpoints in {file_name} have no authorization classification")
-        });
-        for endpoint in endpoints {
-            assert!(
-                !forbidden_endpoints.contains(endpoint.as_str()),
-                "forbidden production endpoint remains registered: {endpoint}"
-            );
-            discovered.push((file_name.to_string(), endpoint, *authorization_class));
         }
     }
+    discovered
+}
 
+#[test]
+fn every_production_server_endpoint_matches_the_authorization_manifest() {
+    let discovered = discovered_server_endpoints();
+    assert!(!discovered.is_empty(), "no production endpoints discovered");
+
+    let manifest = parse_manifest();
+    let manifested = manifest
+        .iter()
+        .filter(|row| row.kind == "server")
+        .map(|row| row.endpoint.clone())
+        .collect::<BTreeSet<_>>();
+    let discovered_names = discovered.keys().cloned().collect::<BTreeSet<_>>();
+
+    let missing = discovered_names
+        .difference(&manifested)
+        .cloned()
+        .collect::<Vec<_>>();
+    let stale = manifested
+        .difference(&discovered_names)
+        .cloned()
+        .collect::<Vec<_>>();
     assert!(
-        !discovered.is_empty(),
-        "no production server endpoints discovered"
+        missing.is_empty() && stale.is_empty(),
+        "endpoint authorization manifest mismatch; missing={missing:#?}; stale={stale:#?}"
     );
-    discovered.sort_by(|left, right| left.1.cmp(&right.1));
-    let mut names = BTreeSet::new();
-    for (_, endpoint, _) in &discovered {
+}
+
+#[test]
+fn endpoint_manifest_metadata_is_complete_and_exceptions_expire() {
+    let rows = parse_manifest();
+    let mut keys = BTreeSet::new();
+    for row in rows {
+        assert!(matches!(row.kind.as_str(), "route" | "server"));
+        assert!(!row.endpoint.is_empty());
+        assert!(!row.policy.is_empty());
+        assert!(!row.tenant_scope.is_empty());
+        assert!(!row.object_scope.is_empty());
+        assert!(matches!(row.access.as_str(), "read" | "write"));
+        assert!(!row.resource_class.is_empty());
+        assert!(matches!(
+            row.audit.as_str(),
+            "none" | "security" | "required"
+        ));
+        assert!(!row.owner.is_empty());
         assert!(
-            names.insert(endpoint.clone()),
-            "duplicate production server endpoint: {endpoint}"
+            keys.insert((row.kind.clone(), row.endpoint.clone())),
+            "duplicate manifest row for {} {}",
+            row.kind,
+            row.endpoint
+        );
+
+        for role in &row.allowed_roles {
+            assert!(
+                CANONICAL_ROLES.contains(&role.as_str()),
+                "unknown role {role} for {}",
+                row.endpoint
+            );
+        }
+
+        let role_policy = !matches!(
+            row.policy.as_str(),
+            "Public" | "Session" | "SessionOwner" | "Disabled"
+        );
+        if role_policy {
+            assert!(
+                !row.allowed_roles.is_empty(),
+                "role policy {} has no allowed roles for {}",
+                row.policy,
+                row.endpoint
+            );
+        }
+        if row.policy == "Disabled" || row.allowed_roles.iter().any(|role| role == "admin") {
+            assert_ne!(
+                row.exception_expiry, "-",
+                "legacy/disabled endpoint exception needs an owner-visible expiry: {}",
+                row.endpoint
+            );
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn every_manifested_endpoint_has_positive_and_negative_function_authorization() {
+    use crate::middleware::endpoint_authorization::{
+        authorize_path, EndpointAuthorizationDecision as Decision,
+    };
+
+    for row in parse_manifest()
+        .into_iter()
+        .filter(|row| row.kind == "server")
+    {
+        let path = format!("/api/{}", row.endpoint);
+        match row.policy.as_str() {
+            "Public" => assert_eq!(authorize_path(&path, None), Decision::Allow),
+            "Disabled" => {
+                assert_eq!(authorize_path(&path, None), Decision::NotFound);
+                assert_eq!(
+                    authorize_path(&path, Some("PlatformAdmin")),
+                    Decision::NotFound
+                );
+            }
+            "Session" | "SessionOwner" => {
+                assert_eq!(authorize_path(&path, None), Decision::Unauthorized);
+                for role in CANONICAL_ROLES {
+                    assert_eq!(
+                        authorize_path(&path, Some(role)),
+                        Decision::Allow,
+                        "session policy unexpectedly denied {role} on {}",
+                        row.endpoint
+                    );
+                }
+            }
+            _ => {
+                assert_eq!(authorize_path(&path, None), Decision::Unauthorized);
+                for role in &row.allowed_roles {
+                    assert_eq!(
+                        authorize_path(&path, Some(role)),
+                        Decision::Allow,
+                        "allowed role {role} denied on {}",
+                        row.endpoint
+                    );
+                }
+                let denied = CANONICAL_ROLES
+                    .into_iter()
+                    .find(|role| !row.allowed_roles.iter().any(|allowed| allowed == role))
+                    .expect("role policy must have at least one negative role assertion");
+                assert_eq!(
+                    authorize_path(&path, Some(denied)),
+                    Decision::Forbidden,
+                    "negative role {denied} unexpectedly allowed on {}",
+                    row.endpoint
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn direct_browser_routes_are_manifested_and_policy_runs_after_session_resolution() {
+    let manifest = parse_manifest();
+    let routes = manifest
+        .iter()
+        .filter(|row| row.kind == "route")
+        .map(|row| row.endpoint.as_str())
+        .collect::<BTreeSet<_>>();
+    for required in ["/healthz", "/readyz", "/api/auth/login", "/api/auth/logout"] {
+        assert!(
+            routes.contains(required),
+            "missing direct route policy for {required}"
         );
     }
 
-    let crate_root = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
-        .expect("read API crate root");
+    let web_main = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("packages directory")
+            .join("web/src/main.rs"),
+    )
+    .expect("read web main");
+    for route in ["/healthz", "/readyz", "/api/auth/login", "/api/auth/logout"] {
+        assert!(
+            web_main.contains(route),
+            "manifested route is not registered: {route}"
+        );
+    }
+    let policy_position = web_main
+        .find("endpoint_authorization_middleware")
+        .expect("endpoint authorization middleware registration");
+    let auth_position = web_main
+        .find("auth_guard::auth_middleware")
+        .expect("session auth middleware registration");
     assert!(
-        discover_endpoints(&crate_root).is_empty(),
-        "production server endpoints must be registered in classified server-function modules"
+        policy_position < auth_position,
+        "Axum later layers execute first; auth middleware must be registered after endpoint policy"
     );
+}
+
+#[test]
+fn active_browser_endpoints_do_not_accept_identity_tokens_as_arguments() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server_functions");
+    for file in [
+        "profile_change_requests.rs",
+        "subject_functions.rs",
+        "user_preferences_functions.rs",
+    ] {
+        let source = fs::read_to_string(directory.join(file)).expect("read server function source");
+        for forbidden in ["auth_token: String", "token: String"] {
+            assert!(
+                !source.contains(forbidden),
+                "{file} still accepts browser-supplied identity material: {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn disabled_placeholder_modules_cannot_return_fake_success() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server_functions");
+    for file in ["class_section_functions.rs", "invite_functions.rs"] {
+        let source =
+            fs::read_to_string(directory.join(file)).expect("read disabled endpoint source");
+        for forbidden in [
+            "TODO: Implement",
+            "status\": \"created",
+            "status\": \"updated",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "disabled production endpoint in {file} still contains fake behavior: {forbidden}"
+            );
+        }
+        assert!(
+            source.contains("Endpoint unavailable"),
+            "disabled endpoints in {file} must fail explicitly"
+        );
+    }
 }
 
 #[test]

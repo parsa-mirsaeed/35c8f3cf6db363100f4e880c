@@ -105,6 +105,14 @@ pub(crate) fn authorize_path(
 ) -> EndpointAuthorizationDecision {
     let normalized = normalize_path(path);
 
+    // PR-06 product capabilities can further restrict an inventoried endpoint,
+    // but never broaden its manifest authorization. Incomplete legacy dashboard
+    // aggregates remain listed for inventory parity while becoming unreachable
+    // until their source domains provide truthful values.
+    if disabled_by_product_capability(normalized) {
+        return EndpointAuthorizationDecision::NotFound;
+    }
+
     // Browser page/static routes are not API authority boundaries. Explicit
     // direct API/health routes and every Dioxus server function are inventoried.
     if !normalized.starts_with(API_PREFIX) && !matches!(normalized, "/healthz" | "/readyz") {
@@ -132,6 +140,18 @@ pub(crate) fn authorize_path(
             }
             Some(_) => EndpointAuthorizationDecision::Forbidden,
         },
+    }
+}
+
+fn disabled_by_product_capability(path: &str) -> bool {
+    let capabilities = crate::product_capabilities::PRODUCTION_PRODUCT_CAPABILITIES;
+    match path {
+        "/api/parent/child/attendance" => !capabilities.attendance,
+        "/api/dashboard/student/stats"
+        | "/api/dashboard/student/classes"
+        | "/api/dashboard/teacher/classes"
+        | "/api/dashboard/parent/stats" => !capabilities.derived_academic_metrics,
+        _ => false,
     }
 }
 
@@ -195,5 +215,22 @@ mod tests {
             authorize_path("/api/assignments/create", Some("Teacher")),
             EndpointAuthorizationDecision::Allow
         );
+    }
+
+    #[test]
+    fn incomplete_product_endpoints_fail_closed_before_role_authorization() {
+        for (path, role) in [
+            ("/api/dashboard/student/stats", "Student"),
+            ("/api/dashboard/student/classes", "Student"),
+            ("/api/dashboard/teacher/classes", "Teacher"),
+            ("/api/dashboard/parent/stats", "Parent"),
+            ("/api/parent/child/attendance", "Parent"),
+        ] {
+            assert_eq!(
+                authorize_path(path, Some(role)),
+                EndpointAuthorizationDecision::NotFound,
+                "{path} must stay unreachable while its production capability is disabled"
+            );
+        }
     }
 }

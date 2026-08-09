@@ -15,6 +15,7 @@ SCRIPT_PATH = PRODUCTION_DIR / "edutalent-operations"
 POLICY_PATH = Path(__file__).with_name("alert-policy.json")
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github/workflows/production-operations.yml"
 WEB_MAIN_PATH = REPOSITORY_ROOT / "packages/web/src/main.rs"
+API_READINESS_PATH = REPOSITORY_ROOT / "packages/api/src/readiness.rs"
 spec = importlib.util.spec_from_file_location("edutalent_ops_review", MODULE_PATH)
 assert spec and spec.loader
 ops = importlib.util.module_from_spec(spec)
@@ -204,6 +205,7 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
         self.script = SCRIPT_PATH.read_text(encoding="utf-8")
         self.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.web_main = WEB_MAIN_PATH.read_text(encoding="utf-8")
+        self.api_readiness = API_READINESS_PATH.read_text(encoding="utf-8")
 
     def function(self, name: str, next_name: str) -> str:
         return self.script.split(f"{name}() {{", 1)[1].split(
@@ -300,7 +302,9 @@ class OperationsScriptBoundaryTests(unittest.TestCase):
         self.assertIn("https://app.ops.internal/readyz", step)
         self.assertNotIn("https://app.ops.internal/healthz", step)
         self.assertIn('.route("/readyz", axum::routing::get(database_readiness))', self.web_main)
-        self.assertIn('sqlx::query_scalar::<_, i32>("SELECT 1")', self.web_main)
+        self.assertIn("api::readiness::check_database(&state)", self.web_main)
+        self.assertIn('sqlx::query_scalar::<_, i32>("SELECT 1")', self.api_readiness)
+        self.assertIn(".fetch_one(state.services.raw_pool.as_ref())", self.api_readiness)
         self.assertIn("StatusCode::SERVICE_UNAVAILABLE", self.web_main)
 
     def test_verified_full_backup_retires_only_included_wal_with_a_tail(self) -> None:

@@ -219,6 +219,22 @@ fn every_manifested_endpoint_has_positive_and_negative_function_authorization() 
         .filter(|row| row.kind == "server")
     {
         let path = format!("/api/{}", row.endpoint);
+
+        // Product capabilities may only make a manifested endpoint stricter.
+        // When a production capability is disabled, the endpoint must remain
+        // undiscoverable for anonymous callers and every canonical role.
+        if row.policy != "Disabled" && authorize_path(&path, None) == Decision::NotFound {
+            for role in CANONICAL_ROLES {
+                assert_eq!(
+                    authorize_path(&path, Some(role)),
+                    Decision::NotFound,
+                    "capability-disabled endpoint became reachable for {role}: {}",
+                    row.endpoint
+                );
+            }
+            continue;
+        }
+
         match row.policy.as_str() {
             "Public" => assert_eq!(authorize_path(&path, None), Decision::Allow),
             "Disabled" => {

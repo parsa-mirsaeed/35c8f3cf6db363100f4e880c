@@ -88,6 +88,17 @@ mod tests {
     }
 
     #[test]
+    fn canonical_role_dashboards_are_not_shadowed_by_legacy_v2_modules() {
+        let school_manager_mod = include_str!("views/role_based/school_manager/mod.rs");
+        assert!(school_manager_mod.contains("pub use dashboard::{SchoolManagerDashboard"));
+        assert!(!school_manager_mod.contains("dashboard_v2"));
+
+        let teacher_mod = include_str!("views/role_based/teacher/mod.rs");
+        assert!(teacher_mod.contains("pub use dashboard::{TeacherDashboard"));
+        assert!(!teacher_mod.contains("dashboard_v2"));
+    }
+
+    #[test]
     fn incomplete_domains_are_not_advertised_by_production_navigation() {
         let capabilities = api::product_capabilities::PRODUCTION_PRODUCT_CAPABILITIES;
         assert!(!capabilities.attendance);

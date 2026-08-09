@@ -5,7 +5,7 @@
 # builds the real Dioxus web bundle, starts the production-like server, waits
 # for readiness, then runs the tagged Playwright selection. Never contacts a
 # live external service. Fails closed. E2E_GREP selects the tag tier.
-set -euo pipefail
+set -euxo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
@@ -46,11 +46,23 @@ export IP="127.0.0.1"
 export PORT="8080"
 export RUN_MIGRATIONS="false"
 
-server_bin="target/dx/web/debug/web/server"
-if [[ ! -x "${server_bin}" ]]; then
-  server_bin="target/dx/web/debug/web/web"
+# Discover the server binary the same way the release Dockerfile does.
+bundle_dir="target/dx/web/debug/web"
+server_bin=""
+for candidate in "${bundle_dir}/server" "${bundle_dir}/web"; do
+  if [[ -x "${candidate}" ]]; then
+    server_bin="${candidate}"
+    break
+  fi
+done
+if [[ -z "${server_bin}" ]]; then
+  server_bin="$(find "${bundle_dir}" -maxdepth 1 -type f -perm /111 | head -n 1 || true)"
 fi
-test -x "${server_bin}"
+if [[ -z "${server_bin}" || ! -x "${server_bin}" ]]; then
+  echo "no executable server binary found under ${bundle_dir}" >&2
+  ls -la "${bundle_dir}" >&2 || true
+  exit 1
+fi
 "${server_bin}" &
 SERVER_PID=$!
 
@@ -67,6 +79,8 @@ if [[ "${ready}" != "true" ]]; then
   exit 1
 fi
 
-npm --prefix tests/e2e exec -- playwright test --grep "${E2E_GREP}"
+# Run from the harness directory so the local Playwright binary resolves.
+cd "${ROOT}/tests/e2e"
+npx playwright test --grep "${E2E_GREP}"
 
 echo "browser evidence complete for head ${E2E_HEAD_SHA} (grep: ${E2E_GREP})"

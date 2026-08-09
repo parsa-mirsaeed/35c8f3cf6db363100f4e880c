@@ -1,10 +1,10 @@
+use crate::application::AppAuthService;
+use crate::application::AuthHooks;
+use crate::domain::AuthCredentials;
+use crate::i18n::{use_locale, LanguageSwitcher};
+use crate::Route;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
-use crate::Route;
-use crate::application::AppAuthService;
-use crate::domain::AuthCredentials;
-use crate::application::AuthHooks;
-use crate::i18n::{use_locale, LanguageSwitcher};
 
 #[component]
 pub fn LoginPage() -> Element {

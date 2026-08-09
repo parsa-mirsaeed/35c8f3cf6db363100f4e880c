@@ -5,6 +5,7 @@ use crate::utils::auth::*;
 use crate::application::auth_service::AppAuthService;
 use crate::domain::auth::{AuthCredentials, AuthResult};
 use crate::infrastructure::auth_provider::{IS_INITIALIZING, CURRENT_USER_STATE};
+use crate::Route;
 use api::server_functions::user_creation::*;
 
 /// Login Form Component
@@ -37,9 +38,8 @@ pub fn LoginForm() -> Element {
 
             match AppAuthService::login(credentials).await {
                 AuthResult::Success(session) => {
-                    // Redirect based on role
                     let redirect_path = crate::application::auth_service::AuthUtils::get_login_redirect(&session.user);
-                    
+
                     let nav = use_navigator();
                     nav.push(&*redirect_path);
                 },
@@ -61,7 +61,7 @@ pub fn LoginForm() -> Element {
     rsx! {
         div {
             class: "min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4",
-            
+
             div {
                 class: "w-full max-w-md bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 border border-gray-100 dark:border-gray-700",
 
@@ -163,7 +163,6 @@ pub fn LoginForm() -> Element {
 /// User Profile Component
 #[component]
 pub fn UserProfile() -> Element {
-    // Use global auth state
     let current_user = CURRENT_USER_STATE.read();
 
     rsx! {
@@ -247,6 +246,7 @@ pub fn PasswordResetRequest() -> Element {
     let mut is_loading = use_signal(|| false);
     let mut message = use_signal(|| None::<String>);
     let mut is_success = use_signal(|| false);
+    let nav = use_navigator();
 
     let handle_reset_request = move |_| {
         if email.read().is_empty() {
@@ -300,7 +300,7 @@ pub fn PasswordResetRequest() -> Element {
                 div {
                     class: format!(
                         "mb-6 p-4 rounded-xl flex items-center gap-3 text-sm animate-fade-in {}",
-                        if *is_success.read() { "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" } 
+                        if *is_success.read() { "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400" }
                         else { "bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400" }
                     ),
                     span { class: "material-icons-outlined", if *is_success.read() { "check_circle" } else { "error_outline" } }
@@ -352,12 +352,10 @@ pub fn PasswordResetRequest() -> Element {
 
             div {
                 class: "mt-6 text-center",
-                a {
-                    href: "#",
-                    class: "text-sm font-medium text-primary hover:text-primary-hover transition-colors flex items-center justify-center gap-1",
-                    onclick: move |_| {
-                        // Navigate back logic would go here
-                    },
+                button {
+                    r#type: "button",
+                    class: "text-sm font-medium text-primary hover:text-primary-hover transition-colors flex items-center justify-center gap-1 mx-auto",
+                    onclick: move |_| nav.push(Route::LoginPage {}),
                     span { class: "material-icons-outlined text-sm", "arrow_back" }
                     "Back to Login"
                 }

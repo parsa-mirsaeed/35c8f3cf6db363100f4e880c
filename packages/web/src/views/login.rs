@@ -46,15 +46,17 @@ pub fn LoginPage() -> Element {
     rsx! {
         div {
             class: "min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-800 p-3 sm:p-4 relative overflow-hidden",
-            IridescenceBackground {}
             div {
-                class: "hidden sm:block absolute top-20 left-20 w-72 h-72 bg-purple-300 dark:bg-purple-900/30 rounded-full mix-blend-multiply filter blur-xl opacity-70 animate-blob",
-            }
-            div {
-                class: "hidden sm:block absolute top-20 right-20 w-72 h-72 bg-yellow-300 dark:bg-yellow-900/30 rounded-full mix-blend-multiply filter blur-xl opacity-70 animate-blob animation-delay-2000",
-            }
-            div {
-                class: "hidden sm:block absolute -bottom-8 left-20 w-72 h-72 bg-pink-300 dark:bg-pink-900/30 rounded-full mix-blend-multiply filter blur-xl opacity-70 animate-blob animation-delay-4000",
+                class: "absolute inset-0 pointer-events-none opacity-70",
+                div {
+                    class: "absolute top-20 left-20 w-72 h-72 bg-purple-300 dark:bg-purple-900/30 rounded-full blur-xl",
+                }
+                div {
+                    class: "absolute top-20 right-20 w-72 h-72 bg-yellow-300 dark:bg-yellow-900/30 rounded-full blur-xl",
+                }
+                div {
+                    class: "absolute -bottom-8 left-20 w-72 h-72 bg-pink-300 dark:bg-pink-900/30 rounded-full blur-xl",
+                }
             }
 
             div {
@@ -256,176 +258,6 @@ pub fn LoginPage() -> Element {
             ForgotPasswordModal {
                 on_close: move |_| show_forgot_modal.set(false)
             }
-        }
-    }
-}
-
-/// Iridescence Background Component
-#[component]
-fn IridescenceBackground() -> Element {
-    use_effect(move || {
-        let script = r#"
-            (async () => {
-                try {
-                    const container = document.getElementById('iridescence-container');
-                    if (!container) return;
-                    if (container._iridescence) return;
-
-                    const { Renderer, Program, Mesh, Color, Triangle } = await import('https://esm.sh/ogl');
-
-                    const vertexShader = `
-                        attribute vec2 uv;
-                        attribute vec2 position;
-                        varying vec2 vUv;
-                        void main() {
-                            vUv = uv;
-                            gl_Position = vec4(position, 0, 1);
-                        }
-                    `;
-
-                    const fragmentShader = `
-                        precision highp float;
-                        uniform float uTime;
-                        uniform vec3 uColor;
-                        uniform vec3 uResolution;
-                        uniform vec2 uMouse;
-                        uniform float uAmplitude;
-                        uniform float uSpeed;
-                        varying vec2 vUv;
-                        void main() {
-                            float mr = min(uResolution.x, uResolution.y);
-                            vec2 uv = (vUv.xy * 2.0 - 1.0) * uResolution.xy / mr;
-                            uv += (uMouse - vec2(0.5)) * uAmplitude;
-                            float d = -uTime * 0.5 * uSpeed;
-                            float a = 0.0;
-                            for (float i = 0.0; i < 8.0; ++i) {
-                                a += cos(i - d - a * uv.x);
-                                d += sin(uv.y * i + a);
-                            }
-                            d += uTime * 0.5 * uSpeed;
-                            vec3 col = vec3(cos(uv * vec2(d, a)) * 0.6 + 0.4, cos(a + d) * 0.5 + 0.5);
-                            col = cos(col * cos(vec3(d, a, 2.5)) * 0.5 + 0.5) * uColor;
-                            gl_FragColor = vec4(col, 1.0);
-                        }
-                    `;
-
-                    class IridescenceEffect {
-                        constructor(container, options = {}) {
-                            this.container = container;
-                            this.options = {
-                                color: [1, 1, 1],
-                                speed: 1.0,
-                                amplitude: 0.1,
-                                mouseReact: true,
-                                ...options
-                            };
-                            this.mousePos = { x: 0.5, y: 0.5 };
-                            this.animateId = null;
-                            this.init();
-                        }
-
-                        init() {
-                            this.renderer = new Renderer({ alpha: true });
-                            this.gl = this.renderer.gl;
-                            this.gl.clearColor(0, 0, 0, 0);
-                            this.container.appendChild(this.gl.canvas);
-                            this.gl.canvas.style.display = 'block';
-                            this.gl.canvas.style.width = '100%';
-                            this.gl.canvas.style.height = '100%';
-                            this.gl.canvas.style.position = 'absolute';
-                            this.gl.canvas.style.top = '0';
-                            this.gl.canvas.style.left = '0';
-                            this.gl.canvas.style.zIndex = '0';
-
-                            this.resize = this.resize.bind(this);
-                            window.addEventListener('resize', this.resize, false);
-
-                            const geometry = new Triangle(this.gl);
-                            this.program = new Program(this.gl, {
-                                vertex: vertexShader,
-                                fragment: fragmentShader,
-                                uniforms: {
-                                    uTime: { value: 0 },
-                                    uColor: { value: new Color(...this.options.color) },
-                                    uResolution: {
-                                        value: new Color(
-                                            this.gl.canvas.width,
-                                            this.gl.canvas.height,
-                                            this.gl.canvas.width / this.gl.canvas.height
-                                        )
-                                    },
-                                    uMouse: { value: new Float32Array([this.mousePos.x, this.mousePos.y]) },
-                                    uAmplitude: { value: this.options.amplitude },
-                                    uSpeed: { value: this.options.speed }
-                                }
-                            });
-
-                            this.mesh = new Mesh(this.gl, { geometry, program: this.program });
-                            this.resize();
-                            this.update = this.update.bind(this);
-                            this.animateId = requestAnimationFrame(this.update);
-                            this.handleMouseMove = this.handleMouseMove.bind(this);
-                            if (this.options.mouseReact) {
-                                window.addEventListener('mousemove', this.handleMouseMove);
-                            }
-                        }
-
-                        resize() {
-                            if (!this.container) return;
-                            const width = this.container.offsetWidth;
-                            const height = this.container.offsetHeight;
-                            this.renderer.setSize(width, height);
-                            if (this.program) {
-                                this.program.uniforms.uResolution.value = new Color(
-                                    this.gl.canvas.width,
-                                    this.gl.canvas.height,
-                                    this.gl.canvas.width / this.gl.canvas.height
-                                );
-                            }
-                        }
-
-                        update(t) {
-                            this.animateId = requestAnimationFrame(this.update);
-                            if (this.program) {
-                                this.program.uniforms.uTime.value = t * 0.001;
-                                this.renderer.render({ scene: this.mesh });
-                            }
-                        }
-
-                        handleMouseMove(e) {
-                            const x = e.clientX / window.innerWidth;
-                            const y = 1.0 - (e.clientY / window.innerHeight);
-                            this.mousePos = { x, y };
-                            if (this.program) {
-                                this.program.uniforms.uMouse.value[0] = x;
-                                this.program.uniforms.uMouse.value[1] = y;
-                            }
-                        }
-                    }
-
-                    const effect = new IridescenceEffect(container, {
-                        color: [1, 1, 1],
-                        speed: 1.0,
-                        amplitude: 0.1,
-                        mouseReact: true
-                    });
-                    container._iridescence = effect;
-                } catch (e) {
-                    console.error("Failed to initialize Iridescence:", e);
-                }
-            })();
-        "#;
-
-        spawn(async move {
-            let _ = document::eval(script);
-        });
-    });
-
-    rsx! {
-        div {
-            id: "iridescence-container",
-            class: "absolute inset-0 z-0 pointer-events-none",
-            style: "width: 100%; height: 100%;",
         }
     }
 }

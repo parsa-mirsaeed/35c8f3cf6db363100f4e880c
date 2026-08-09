@@ -26,7 +26,7 @@ pub fn ProfileSettings() -> Element {
             if let Ok(profile) = get_admin_profile().await {
                 profile_name.set(profile.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string());
                 profile_email.set(profile.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                
+
                 // Populate other fields if they exist in profile_fields or root
                 if let Some(fields) = profile.get("profile_fields") {
                     phone_number.set(fields.get("phone_number").and_then(|v| v.as_str()).unwrap_or("").to_string());
@@ -54,7 +54,7 @@ pub fn ProfileSettings() -> Element {
                         } else {
                             div {
                                 class: "space-y-6",
-                                
+
                                 div {
                                     class: "grid grid-cols-1 md:grid-cols-2 gap-6",
                                     FormInput {
@@ -129,7 +129,6 @@ pub fn ProfileSettings() -> Element {
                                                 });
 
                                                 if let Ok(_) = update_admin_profile(profile_data).await {
-                                                    // Success logic (e.g., show toast) could go here
                                                     web_sys::console::log_1(&locale.t("school_manager.settings.profile.log.updated").into());
                                                     is_loading.set(false);
                                                 }
@@ -146,7 +145,7 @@ pub fn ProfileSettings() -> Element {
             // Profile Summary Sidebar
             div {
                 class: "space-y-6",
-                
+
                 Card {
                     children: rsx! {
                         div {
@@ -183,7 +182,7 @@ pub fn ProfileSettings() -> Element {
                                 icon: Some("edit_note".to_string()),
                                 onclick: move |_| show_request_form.set(true)
                             }
-                            
+
                             Button {
                                 text: locale.t("school_manager.settings.profile.change_pwd"),
                                 variant: ButtonVariant::Ghost,
@@ -223,14 +222,17 @@ pub fn ProfileSettings() -> Element {
     }
 }
 
-/// Change password modal component
+/// Password changes are intentionally unavailable here until the authentication-provider flow is wired.
+/// Keep the entry point visible, but do not render editable fields or a dead submit action.
 #[component]
 fn ChangePasswordModal(on_close: EventHandler) -> Element {
-    let mut current_password = use_signal(|| String::new());
-    let mut new_password = use_signal(|| String::new());
-    let mut confirm_password = use_signal(|| String::new());
     let locale = use_locale();
-    
+    let unavailable_message = if locale.is_rtl() {
+        "تغییر رمز عبور در این نسخه در دسترس نیست و باید از طریق ارائه‌دهنده احراز هویت پیکربندی‌شده انجام شود."
+    } else {
+        "Password changes are unavailable in this release and must be handled by the configured authentication provider."
+    };
+
     rsx! {
         Modal {
             title: locale.t("school_manager.settings.profile.change_pwd"),
@@ -239,68 +241,21 @@ fn ChangePasswordModal(on_close: EventHandler) -> Element {
             children: rsx! {
                 div {
                     class: "space-y-6",
-                    
-                    FormInput {
-                        label: locale.t("school_manager.settings.security.current_pwd"),
-                        name: "current_password".to_string(),
-                        value: current_password(),
-                        input_type: Some("password".to_string()),
-                        on_change: move |v| current_password.set(v)
-                    }
-                    
-                    FormInput {
-                        label: locale.t("school_manager.settings.security.new_pwd"),
-                        name: "new_password".to_string(),
-                        value: new_password(),
-                        input_type: Some("password".to_string()),
-                        on_change: move |v| new_password.set(v)
-                    }
-                    
-                    FormInput {
-                        label: locale.t("school_manager.settings.security.confirm_pwd"),
-                        name: "confirm_password".to_string(),
-                        value: confirm_password(),
-                        input_type: Some("password".to_string()),
-                        on_change: move |v| confirm_password.set(v)
-                    }
-                    
-                    // Password requirements
                     div {
-                        class: "p-3 bg-gray-50 dark:bg-gray-800 rounded-lg text-sm text-gray-600 dark:text-gray-400",
-                        p { class: "font-medium mb-2", "{locale.t(\"school_manager.settings.profile.pwd_requirements\")}" }
-                        ul { 
-                            class: "list-disc list-inside space-y-1 text-xs",
-                            li { "{locale.t(\"school_manager.settings.profile.pwd_req_1\")}" }
-                            li { "{locale.t(\"school_manager.settings.profile.pwd_req_2\")}" }
-                            li { "{locale.t(\"school_manager.settings.profile.pwd_req_3\")}" }
+                        class: "p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700",
+                        div {
+                            class: "flex items-start gap-3",
+                            span { class: "material-icons-outlined text-gray-500 dark:text-gray-400", "lock" }
+                            p { class: "text-sm text-gray-700 dark:text-gray-300", "{unavailable_message}" }
                         }
                     }
-                    
-                    // Coming soon notice
                     div {
-                        class: "p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800/50",
-                            div {
-                                class: "flex items-start gap-2",
-                                span { class: "material-icons-outlined text-yellow-600 dark:text-yellow-400 text-base", "schedule" }
-                                p { class: "text-sm text-yellow-700 dark:text-yellow-300", 
-                                    "{locale.t(\"school_manager.settings.profile.pwd_coming_soon\")}" 
-                                }
-                            }                  }
-                    
-                    div {
-                        class: "flex justify-end gap-3",
+                        class: "flex justify-end",
                         Button {
-                            text: locale.t("common.cancel"),
+                            text: locale.t("common.close"),
                             variant: ButtonVariant::Secondary,
                             size: ButtonSize::Medium,
                             onclick: move |_| on_close.call(())
-                        }
-                        Button {
-                            text: locale.t("school_manager.settings.security.update_btn"),
-                            variant: ButtonVariant::Primary,
-                            size: ButtonSize::Medium,
-                            disabled: Some(true),
-                            onclick: move |_| {}
                         }
                     }
                 }

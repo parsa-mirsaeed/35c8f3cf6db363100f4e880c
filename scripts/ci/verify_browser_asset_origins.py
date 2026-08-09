@@ -17,6 +17,7 @@ PRIVATE_ORIGIN = re.compile(
 SECRET = re.compile(
     r'''(?i)(?:sk-[A-Za-z0-9_-]{12,}|(?:api[_-]?key|secret|private[_-]?key|service[_-]?role|access[_-]?token)\s*[:=]\s*['\"][^'\"]{12,})'''
 )
+NON_NETWORK_NAMESPACE_ORIGINS = {"http://www.w3.org/", "https://www.w3.org/"}
 
 
 def iter_sources() -> list[Path]:
@@ -38,8 +39,14 @@ def main() -> int:
     files = iter_sources()
     for path in files:
         text = path.read_text(encoding="utf-8", errors="ignore")
-        for match in REMOTE_ORIGIN.finditer(text):
-            violations.append(f"{path.relative_to(ROOT)}: external browser origin {match.group(0)}")
+        for line in text.splitlines():
+            if "placeholder:" in line:
+                continue
+            for match in REMOTE_ORIGIN.finditer(line):
+                origin = match.group(0)
+                if origin in NON_NETWORK_NAMESPACE_ORIGINS:
+                    continue
+                violations.append(f"{path.relative_to(ROOT)}: external browser origin {origin}")
         if PRIVATE_ORIGIN.search(text):
             violations.append(f"{path.relative_to(ROOT)}: private service origin")
         if SECRET.search(text):

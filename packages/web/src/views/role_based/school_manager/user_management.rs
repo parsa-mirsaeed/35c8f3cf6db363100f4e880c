@@ -1,14 +1,17 @@
-use dioxus::prelude::*;
-use crate::views::role_based::components::DashboardSection;
-use crate::views::role_based::shared::common::{Button, ButtonVariant, ButtonSize, Badge, BadgeVariant};
-
-use super::user_creation::UserCreationHub;
-use api::server_functions::user_management::{get_school_users, deactivate_user, reactivate_user, get_user_stats, UserListItem};
-use gloo_storage::{LocalStorage, Storage};
-use crate::utils::cache::{use_app_cache, UserFilters};
 use crate::components::skeleton::{SkeletonCard, SkeletonTable};
+use crate::utils::cache::{use_app_cache, UserFilters};
+use crate::views::role_based::components::DashboardSection;
+use crate::views::role_based::shared::common::{
+    Badge, BadgeVariant, Button, ButtonSize, ButtonVariant,
+};
+use api::server_functions::user_management::{
+    deactivate_user, get_school_users, get_user_stats, reactivate_user, UserListItem,
+};
+use dioxus::prelude::*;
+use gloo_storage::{LocalStorage, Storage};
 
 use super::requests::PendingRequests;
+use super::user_creation::UserCreationHub;
 
 use crate::i18n::use_locale;
 
@@ -219,7 +222,11 @@ pub fn UserList() -> Element {
     // Restore filters from cache if available
     let cached_users = cache.users.read();
     let (initial_role, initial_status, initial_query) = if let Some((_, filters)) = &*cached_users {
-        (filters.role.clone(), filters.status.clone(), filters.query.clone())
+        (
+            filters.role.clone(),
+            filters.status.clone(),
+            filters.query.clone(),
+        )
     } else {
         ("All".to_string(), "All".to_string(), String::new())
     };
@@ -237,27 +244,41 @@ pub fn UserList() -> Element {
 
         async move {
             if let Some((users, filters)) = cache.users.read().clone() {
-                if filters.role == role_filter && filters.status == status_filter && filters.query == search_query {
+                if filters.role == role_filter
+                    && filters.status == status_filter
+                    && filters.query == search_query
+                {
                     return Ok(users);
                 }
             }
 
-            let r_filter = if role_filter == "All" { None } else { Some(role_filter.clone()) };
+            let r_filter = if role_filter == "All" {
+                None
+            } else {
+                Some(role_filter.clone())
+            };
             let s_filter = if status_filter == "All" {
                 None
             } else {
                 Some(status_filter.to_lowercase())
             };
-            let q_filter = if search_query.is_empty() { None } else { Some(search_query.clone()) };
+            let q_filter = if search_query.is_empty() {
+                None
+            } else {
+                Some(search_query.clone())
+            };
 
             let res = get_school_users(r_filter, s_filter, q_filter).await;
 
             if let Ok(users) = &res {
-                cache.users.set(Some((users.clone(), UserFilters {
-                    role: role_filter,
-                    status: status_filter,
-                    query: search_query,
-                })));
+                cache.users.set(Some((
+                    users.clone(),
+                    UserFilters {
+                        role: role_filter,
+                        status: status_filter,
+                        query: search_query,
+                    },
+                )));
             }
             res
         }
@@ -266,22 +287,34 @@ pub fn UserList() -> Element {
     let handle_deactivate = move |user_id: String| async move {
         match deactivate_user(user_id).await {
             Ok(_) => {
-                action_message.set(Some(locale.t("school_manager.users.messages.deactivate_success")));
+                action_message.set(Some(
+                    locale.t("school_manager.users.messages.deactivate_success"),
+                ));
                 cache.invalidate_users();
                 users_resource.restart();
-            },
-            Err(e) => action_message.set(Some(format!("{}{}", locale.t("school_manager.users.messages.deactivate_fail"), e))),
+            }
+            Err(e) => action_message.set(Some(format!(
+                "{}{}",
+                locale.t("school_manager.users.messages.deactivate_fail"),
+                e
+            ))),
         }
     };
 
     let handle_reactivate = move |user_id: String| async move {
         match reactivate_user(user_id).await {
             Ok(_) => {
-                action_message.set(Some(locale.t("school_manager.users.messages.reactivate_success")));
+                action_message.set(Some(
+                    locale.t("school_manager.users.messages.reactivate_success"),
+                ));
                 cache.invalidate_users();
                 users_resource.restart();
-            },
-            Err(e) => action_message.set(Some(format!("{}{}", locale.t("school_manager.users.messages.reactivate_fail"), e))),
+            }
+            Err(e) => action_message.set(Some(format!(
+                "{}{}",
+                locale.t("school_manager.users.messages.reactivate_fail"),
+                e
+            ))),
         }
     };
 
@@ -503,10 +536,16 @@ fn EditUserModal(
                 user_id,
                 Some(name),
                 Some(email),
-                None
-            ).await {
+                None,
+            )
+            .await
+            {
                 Ok(_) => on_save.call(()),
-                Err(e) => error_message.set(Some(format!("{}{}", locale.t("school_manager.users.messages.update_fail"), e))),
+                Err(e) => error_message.set(Some(format!(
+                    "{}{}",
+                    locale.t("school_manager.users.messages.update_fail"),
+                    e
+                ))),
             }
             is_saving.set(false);
         }

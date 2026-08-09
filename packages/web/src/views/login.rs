@@ -24,6 +24,7 @@ pub fn LoginPage() -> Element {
     });
 
     let locale_ctx = use_locale();
+
     let t_welcome_back = locale_ctx.t("auth.welcome_back");
     let t_login_subtitle = locale_ctx.t("auth.login_subtitle");
     let t_email_label = locale_ctx.t("auth.email");
@@ -47,9 +48,15 @@ pub fn LoginPage() -> Element {
             class: "min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-800 p-3 sm:p-4 relative overflow-hidden",
             div {
                 class: "absolute inset-0 pointer-events-none opacity-70",
-                div { class: "absolute top-20 left-20 w-72 h-72 bg-purple-300 dark:bg-purple-900/30 rounded-full blur-xl" }
-                div { class: "absolute top-20 right-20 w-72 h-72 bg-yellow-300 dark:bg-yellow-900/30 rounded-full blur-xl" }
-                div { class: "absolute -bottom-8 left-20 w-72 h-72 bg-pink-300 dark:bg-pink-900/30 rounded-full blur-xl" }
+                div {
+                    class: "absolute top-20 left-20 w-72 h-72 bg-purple-300 dark:bg-purple-900/30 rounded-full blur-xl",
+                }
+                div {
+                    class: "absolute top-20 right-20 w-72 h-72 bg-yellow-300 dark:bg-yellow-900/30 rounded-full blur-xl",
+                }
+                div {
+                    class: "absolute -bottom-8 left-20 w-72 h-72 bg-pink-300 dark:bg-pink-900/30 rounded-full blur-xl",
+                }
             }
 
             div {
@@ -60,14 +67,25 @@ pub fn LoginPage() -> Element {
                         class: "text-center mb-8",
                         div {
                             class: "absolute top-4 right-4",
-                            LanguageSwitcher { class: "text-gray-600 dark:text-gray-300".to_string() }
+                            LanguageSwitcher {
+                                class: "text-gray-600 dark:text-gray-300".to_string(),
+                            }
                         }
                         div {
                             class: "w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 bg-gradient-to-br from-primary to-purple-600 rounded-2xl shadow-lg shadow-primary/30 flex items-center justify-center transform rotate-3 hover:rotate-6 transition-all duration-300",
-                            span { class: "material-icons-outlined text-3xl sm:text-4xl text-white", "school" }
+                            span {
+                                class: "material-icons-outlined text-3xl sm:text-4xl text-white",
+                                "school"
+                            }
                         }
-                        h1 { class: "text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-2", "{t_welcome_back}" }
-                        p { class: "text-gray-500 dark:text-gray-400", "{t_login_subtitle}" }
+                        h1 {
+                            class: "text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-2",
+                            "{t_welcome_back}"
+                        }
+                        p {
+                            class: "text-gray-500 dark:text-gray-400",
+                            "{t_login_subtitle}"
+                        }
                     }
 
                     form {
@@ -76,6 +94,7 @@ pub fn LoginPage() -> Element {
                         method: "POST",
                         onsubmit: move |evt| {
                             evt.prevent_default();
+
                             let mut login_result = login_result;
                             let mut is_loading = is_loading;
                             let mut email_val = email.read().clone();
@@ -111,11 +130,16 @@ pub fn LoginPage() -> Element {
 
                             is_loading.set(true);
                             login_result.set(String::new());
+
                             let t_invalid = t_invalid_credentials.clone();
                             let t_unknown = t_error_unknown.clone();
 
                             spawn(async move {
-                                let credentials = AuthCredentials { email: email_val, password: password_val };
+                                let credentials = AuthCredentials {
+                                    email: email_val.clone(),
+                                    password: password_val.clone(),
+                                };
+
                                 match AppAuthService::login(credentials).await {
                                     crate::domain::AuthResult::Success(_session) => {
                                         is_loading.set(false);
@@ -132,12 +156,19 @@ pub fn LoginPage() -> Element {
                                 }
                             });
                         },
+
                         div {
                             class: "space-y-2",
-                            label { class: "text-sm font-medium text-gray-700 dark:text-gray-300 block", "{t_email_label}" }
+                            label {
+                                class: "text-sm font-medium text-gray-700 dark:text-gray-300 block",
+                                "{t_email_label}"
+                            }
                             div {
                                 class: "relative group",
-                                span { class: "absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-primary transition-colors", span { class: "material-icons-outlined text-lg", "email" } }
+                                span {
+                                    class: "absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-primary transition-colors",
+                                    span { class: "material-icons-outlined text-lg", "email" }
+                                }
                                 input {
                                     id: "login-email",
                                     r#type: "email",
@@ -150,11 +181,15 @@ pub fn LoginPage() -> Element {
                                 }
                             }
                         }
+
                         div {
                             class: "space-y-2",
                             div {
                                 class: "flex justify-between items-center",
-                                label { class: "text-sm font-medium text-gray-700 dark:text-gray-300", "{t_password_label}" }
+                                label {
+                                    class: "text-sm font-medium text-gray-700 dark:text-gray-300",
+                                    "{t_password_label}"
+                                }
                                 button {
                                     r#type: "button",
                                     class: "text-xs font-medium text-primary hover:text-primary-hover transition-colors",
@@ -164,7 +199,10 @@ pub fn LoginPage() -> Element {
                             }
                             div {
                                 class: "relative group",
-                                span { class: "absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-primary transition-colors", span { class: "material-icons-outlined text-lg", "lock" } }
+                                span {
+                                    class: "absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-primary transition-colors",
+                                    span { class: "material-icons-outlined text-lg", "lock" }
+                                }
                                 input {
                                     id: "login-password",
                                     r#type: "password",
@@ -177,19 +215,27 @@ pub fn LoginPage() -> Element {
                                 }
                             }
                         }
+
                         if !login_result.read().is_empty() {
                             div {
                                 class: "p-3 rounded-lg text-sm border {result_class} animate-fade-in flex items-center gap-2",
-                                if login_result.read().starts_with("✅") { span { class: "material-icons-outlined", "check_circle" } } else { span { class: "material-icons-outlined", "error" } }
+                                if login_result.read().starts_with("✅") {
+                                    span { class: "material-icons-outlined", "check_circle" }
+                                } else {
+                                    span { class: "material-icons-outlined", "error" }
+                                }
                                 "{login_result}"
                             }
                         }
+
                         button {
                             r#type: "submit",
                             class: "w-full py-3.5 bg-gradient-to-r from-primary to-purple-600 hover:from-primary-hover hover:to-purple-700 text-white font-semibold rounded-xl shadow-lg shadow-primary/25 transform transition-all active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2",
                             disabled: is_loading,
                             if is_loading() {
-                                div { class: "w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" }
+                                div {
+                                    class: "w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"
+                                }
                                 "{t_signing_in}"
                             } else {
                                 "{t_sign_in}"
@@ -197,15 +243,21 @@ pub fn LoginPage() -> Element {
                             }
                         }
                     }
+
                     div {
                         class: "mt-8 pt-6 border-t border-gray-100 dark:border-gray-700 text-center",
-                        p { class: "text-xs text-gray-500 dark:text-gray-400", "{t_protected_by}" }
+                        p {
+                            class: "text-xs text-gray-500 dark:text-gray-400",
+                            "{t_protected_by}"
+                        }
                     }
                 }
             }
         }
         if show_forgot_modal() {
-            ForgotPasswordModal { on_close: move |_| show_forgot_modal.set(false) }
+            ForgotPasswordModal {
+                on_close: move |_| show_forgot_modal.set(false)
+            }
         }
     }
 }

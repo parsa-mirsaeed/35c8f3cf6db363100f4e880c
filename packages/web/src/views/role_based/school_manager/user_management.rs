@@ -140,20 +140,20 @@ pub fn UserManagementActions(on_add_user: EventHandler<()>) -> Element {
                     onclick: move |_| on_add_user.call(())
                 }
 
-                Button {
-                    text: locale.t("school_manager.users.actions.bulk_import"),
-                    variant: ButtonVariant::Success,
-                    size: ButtonSize::Medium,
-                    icon: Some("file_upload".to_string()),
-                    disabled: Some(true)
+                button {
+                    r#type: "button",
+                    disabled: true,
+                    class: "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold bg-green-500 text-white opacity-60 cursor-not-allowed",
+                    span { class: "material-icons-outlined", "file_upload" }
+                    "{locale.t(\"school_manager.users.actions.bulk_import\")}"
                 }
 
-                Button {
-                    text: locale.t("school_manager.users.actions.export_users"),
-                    variant: ButtonVariant::Secondary,
-                    size: ButtonSize::Medium,
-                    icon: Some("file_download".to_string()),
-                    disabled: Some(true)
+                button {
+                    r#type: "button",
+                    disabled: true,
+                    class: "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400 opacity-60 cursor-not-allowed",
+                    span { class: "material-icons-outlined", "file_download" }
+                    "{locale.t(\"school_manager.users.actions.export_users\")}"
                 }
             }
             p {

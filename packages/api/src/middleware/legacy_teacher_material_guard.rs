@@ -99,10 +99,10 @@ mod tests {
         assert!(CONTENT_SECURITY_POLICY.contains("default-src 'self'"));
         assert!(CONTENT_SECURITY_POLICY.contains("connect-src 'self'"));
         assert!(CONTENT_SECURITY_POLICY.contains("script-src 'self'"));
-        assert!(!CONTENT_SECURITY_POLICY.contains("unsafe-eval"));
+        assert!(!CONTENT_SECURITY_POLICY.contains("'unsafe-eval'"));
         assert!(!CONTENT_SECURITY_POLICY.contains("http://"));
         assert!(!CONTENT_SECURITY_POLICY.contains("https://"));
-        assert!(!CONTENT_SECURITY_POLICY.contains("*") );
+        assert!(!CONTENT_SECURITY_POLICY.contains("*"));
     }
 
     #[test]

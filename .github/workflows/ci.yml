@@ -33,6 +33,7 @@ jobs:
       database: ${{ steps.scope.outputs.database }}
       packaging: ${{ steps.scope.outputs.packaging }}
       production: ${{ steps.scope.outputs.production }}
+      browser: ${{ steps.scope.outputs.browser }}
       docs_only: ${{ steps.scope.outputs.docs_only }}
       comparison: ${{ steps.scope.outputs.comparison }}
     steps:
@@ -82,6 +83,7 @@ jobs:
           database=false
           packaging=false
           production=false
+          browser=false
 
           if grep -Eq '^(Cargo\.toml|Cargo\.lock|packages/)' changed-files.txt; then
             rust=true
@@ -119,8 +121,13 @@ jobs:
             production=true
           fi
 
+          # PR-12: browser smoke is required for UI/auth and harness changes.
+          if grep -Eq '^(tests/e2e/|packages/(web|ui)/|packages/api/src/(middleware|handlers)/|scripts/ci/(run_browser_e2e|run_browser_smoke|run_browser_final|verify_browser_harness)\.sh)' changed-files.txt; then
+            browser=true
+          fi
+
           docs_only=false
-          if [[ "$rust" == false && "$database" == false && "$packaging" == false && "$production" == false ]]; then
+          if [[ "$rust" == false && "$database" == false && "$packaging" == false && "$production" == false && "$browser" == false ]]; then
             docs_only=true
           fi
 
@@ -132,6 +139,7 @@ jobs:
             echo "database=$database"
             echo "packaging=$packaging"
             echo "production=$production"
+            echo "browser=$browser"
             echo "docs_only=$docs_only"
             echo "comparison=$comparison"
           } >> "$GITHUB_OUTPUT"
@@ -363,6 +371,87 @@ jobs:
             cargo test -p web --features server --locked
           fi
 
+  browser-smoke:
+    name: Browser smoke critical journeys
+    needs: classify
+    if: needs.classify.outputs.browser == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: edutalent_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d edutalent_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install pinned Dioxus CLI
+        run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall "dioxus-cli@0.7.2" -y --force
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ai-change-rust
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'workflow_dispatch' }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pinned browser harness dependencies
+        working-directory: tests/e2e
+        run: npm install --no-audit --no-fund
+
+      - name: Restore pinned Chromium
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-1.49.1-${{ runner.os }}
+
+      - name: Install pinned Chromium when absent
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: tests/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser smoke on exact head
+        shell: bash
+        env:
+          E2E_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -o pipefail
+          bash scripts/ci/run_browser_smoke.sh 2>&1 | tee browser-smoke.log
+
+      - name: Upload browser smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke-evidence
+          path: |
+            browser-smoke.log
+            tests/e2e/evidence.json
+            tests/e2e/test-results/
+          if-no-files-found: warn
+          retention-days: 3
+
   gate:
     name: AI change gate
     if: always()
@@ -371,6 +460,7 @@ jobs:
       - formatting
       - database
       - targeted-rust
+      - browser-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -383,10 +473,12 @@ jobs:
           DATABASE_REQUIRED: ${{ needs.classify.outputs.api == 'true' || needs.classify.outputs.web == 'true' || needs.classify.outputs.database == 'true' }}
           PACKAGE_REQUIRED: ${{ needs.classify.outputs.packaging }}
           PRODUCTION_REQUIRED: ${{ needs.classify.outputs.production }}
+          BROWSER_REQUIRED: ${{ needs.classify.outputs.browser }}
           CLASSIFY_RESULT: ${{ needs.classify.result }}
           FORMAT_RESULT: ${{ needs.formatting.result }}
           DATABASE_RESULT: ${{ needs.database.result }}
           RUST_RESULT: ${{ needs.targeted-rust.result }}
+          BROWSER_RESULT: ${{ needs.browser-smoke.result }}
         run: |
           set -euo pipefail
 
@@ -412,6 +504,7 @@ jobs:
           require_success "$RUST_REQUIRED" "$FORMAT_RESULT" "formatting"
           require_success "$DATABASE_REQUIRED" "$DATABASE_RESULT" "database"
           require_success "$RUST_REQUIRED" "$RUST_RESULT" "targeted Rust"
+          require_success "$BROWSER_REQUIRED" "$BROWSER_RESULT" "browser smoke"
 
           cat > ai-change-evidence.json <<EOF
           {
@@ -421,13 +514,15 @@ jobs:
               "rust": ${RUST_REQUIRED},
               "database": ${DATABASE_REQUIRED},
               "package_workflow": ${PACKAGE_REQUIRED},
-              "production_workflow": ${PRODUCTION_REQUIRED}
+              "production_workflow": ${PRODUCTION_REQUIRED},
+              "browser_smoke": ${BROWSER_REQUIRED}
             },
             "results": {
               "classification": "${CLASSIFY_RESULT}",
               "formatting": "${FORMAT_RESULT}",
               "database": "${DATABASE_RESULT}",
-              "rust": "${RUST_RESULT}"
+              "rust": "${RUST_RESULT}",
+              "browser_smoke": "${BROWSER_RESULT}"
             }
           }
           EOF

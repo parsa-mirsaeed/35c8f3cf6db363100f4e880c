@@ -1,12 +1,12 @@
 //! Authentication Components
 
-use dioxus::prelude::*;
-use crate::utils::auth::*;
 use crate::application::auth_service::AppAuthService;
 use crate::domain::auth::{AuthCredentials, AuthResult};
-use crate::infrastructure::auth_provider::{IS_INITIALIZING, CURRENT_USER_STATE};
+use crate::infrastructure::auth_provider::{CURRENT_USER_STATE, IS_INITIALIZING};
+use crate::utils::auth::*;
 use crate::Route;
 use api::server_functions::user_creation::*;
+use dioxus::prelude::*;
 
 /// Login Form Component
 #[component]
@@ -25,7 +25,9 @@ pub fn LoginForm() -> Element {
         *is_loading.write() = true;
         *error_message.write() = None;
 
-        web_sys::console::log_1(&format!("LoginForm: Attempting login for email: {}", email.read()).into());
+        web_sys::console::log_1(
+            &format!("LoginForm: Attempting login for email: {}", email.read()).into(),
+        );
 
         let email_val = email.read().clone();
         let password_val = password.read().clone();
@@ -38,17 +40,20 @@ pub fn LoginForm() -> Element {
 
             match AppAuthService::login(credentials).await {
                 AuthResult::Success(session) => {
-                    let redirect_path = crate::application::auth_service::AuthUtils::get_login_redirect(&session.user);
+                    let redirect_path =
+                        crate::application::auth_service::AuthUtils::get_login_redirect(
+                            &session.user,
+                        );
 
                     let nav = use_navigator();
                     nav.push(&*redirect_path);
-                },
+                }
                 AuthResult::InvalidCredentials => {
                     *error_message.write() = Some("Invalid email or password".to_string());
-                },
+                }
                 AuthResult::ServerError(msg) => {
                     *error_message.write() = Some(format!("Login failed: {}", msg));
-                },
+                }
                 _ => {
                     *error_message.write() = Some("An unexpected error occurred".to_string());
                 }
@@ -261,7 +266,9 @@ pub fn PasswordResetRequest() -> Element {
         let email_to_send = email.read().clone();
 
         spawn(async move {
-            let reset_request = api::server_functions::user_creation::PasswordResetRequest { email: email_to_send };
+            let reset_request = api::server_functions::user_creation::PasswordResetRequest {
+                email: email_to_send,
+            };
             match send_password_reset(reset_request).await {
                 Ok(response) => {
                     *is_success.write() = response.success;

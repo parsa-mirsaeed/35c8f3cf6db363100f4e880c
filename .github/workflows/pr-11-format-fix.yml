@@ -1,0 +1,41 @@
+name: PR-11 Format Fix
+
+on:
+  pull_request:
+    paths:
+      - "packages/web/src/views/login.rs"
+      - "packages/api/src/middleware/legacy_teacher_material_guard.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format changed Rust files
+        run: cargo fmt --all
+
+      - name: Commit formatter changes
+        run: |
+          if git diff --quiet; then
+            echo "Already formatted"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/web/src/views/login.rs packages/api/src/middleware/legacy_teacher_material_guard.rs
+          git commit -m "PR-11: apply rustfmt"
+          git push origin HEAD:${{ github.event.pull_request.head.ref || github.ref_name }}

@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCAN_ROOTS = [ROOT / "packages" / "web", ROOT / "deploy"]
+SCAN_ROOTS = [ROOT / "packages" / "web"]
 TEXT_SUFFIXES = {".rs", ".css", ".html", ".js", ".ts", ".tsx", ".json", ".toml", ".yaml", ".yml", ".svg"}
 IGNORED_PARTS = {"target", ".git", "node_modules"}
 

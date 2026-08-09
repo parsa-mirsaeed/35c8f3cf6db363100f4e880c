@@ -76,7 +76,9 @@ mod tests {
         assert!(is_legacy_teacher_material_path(
             "/api/teacher/materials/create/"
         ));
-        assert!(!is_legacy_teacher_material_path("/api/teacher/materials/list"));
+        assert!(!is_legacy_teacher_material_path(
+            "/api/teacher/materials/list"
+        ));
         assert!(!is_legacy_teacher_material_path(
             "/api/manager/knowledge-submissions"
         ));

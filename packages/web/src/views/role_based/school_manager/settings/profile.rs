@@ -1,13 +1,12 @@
-use dioxus::prelude::*;
-use api::server_functions::admin_functions::{get_admin_profile, update_admin_profile};
-use crate::views::role_based::shared::common::{Card, Button, ButtonVariant, ButtonSize, Modal};
+use crate::i18n::use_locale;
+use crate::views::role_based::shared::common::{Button, ButtonSize, ButtonVariant, Card, Modal};
 use crate::views::role_based::shared::forms::FormInput;
 use crate::views::role_based::shared::profile_request::ProfileChangeRequestForm;
-use crate::i18n::use_locale;
+use api::server_functions::admin_functions::{get_admin_profile, update_admin_profile};
+use dioxus::prelude::*;
 
 #[component]
 pub fn ProfileSettings() -> Element {
-
     // State for profile data
     let mut profile_name = use_signal(|| String::new());
     let mut profile_email = use_signal(|| String::new());
@@ -24,15 +23,51 @@ pub fn ProfileSettings() -> Element {
     let _profile_resource = use_resource(move || {
         async move {
             if let Ok(profile) = get_admin_profile().await {
-                profile_name.set(profile.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                profile_email.set(profile.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string());
+                profile_name.set(
+                    profile
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                );
+                profile_email.set(
+                    profile
+                        .get("email")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                );
 
                 // Populate other fields if they exist in profile_fields or root
                 if let Some(fields) = profile.get("profile_fields") {
-                    phone_number.set(fields.get("phone_number").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                    office_location.set(fields.get("office_location").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                    work_hours.set(fields.get("work_hours").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                    emergency_contact.set(fields.get("emergency_contact").and_then(|v| v.as_str()).unwrap_or("").to_string());
+                    phone_number.set(
+                        fields
+                            .get("phone_number")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    office_location.set(
+                        fields
+                            .get("office_location")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    work_hours.set(
+                        fields
+                            .get("work_hours")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    emergency_contact.set(
+                        fields
+                            .get("emergency_contact")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
                 }
                 is_loading.set(false);
             }
@@ -223,7 +258,6 @@ pub fn ProfileSettings() -> Element {
 }
 
 /// Password changes are intentionally unavailable here until the authentication-provider flow is wired.
-/// Keep the entry point visible, but do not render editable fields or a dead submit action.
 #[component]
 fn ChangePasswordModal(on_close: EventHandler) -> Element {
     let locale = use_locale();

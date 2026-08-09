@@ -14,10 +14,19 @@ const PERMISSIONS_POLICY: &str = "camera=(), microphone=(), geolocation=(), paym
 
 fn apply_security_headers(response: &mut Response) {
     let headers = response.headers_mut();
-    headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CONTENT_SECURITY_POLICY));
-    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static(REFERRER_POLICY));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static(REFERRER_POLICY),
+    );
     headers.insert(
         axum::http::HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static(PERMISSIONS_POLICY),
@@ -51,7 +60,8 @@ pub async fn block_legacy_teacher_material_ingestion(request: Request, next: Nex
 }
 
 fn is_legacy_teacher_material_path(path: &str) -> bool {
-    path.trim_end_matches('/').ends_with(LEGACY_TEACHER_MATERIAL_ENDPOINT)
+    path.trim_end_matches('/')
+        .ends_with(LEGACY_TEACHER_MATERIAL_ENDPOINT)
 }
 
 #[cfg(test)]
@@ -60,10 +70,16 @@ mod tests {
 
     #[test]
     fn matches_only_the_retired_create_endpoint() {
-        assert!(is_legacy_teacher_material_path("/api/teacher/materials/create"));
-        assert!(is_legacy_teacher_material_path("/api/teacher/materials/create/"));
+        assert!(is_legacy_teacher_material_path(
+            "/api/teacher/materials/create"
+        ));
+        assert!(is_legacy_teacher_material_path(
+            "/api/teacher/materials/create/"
+        ));
         assert!(!is_legacy_teacher_material_path("/api/teacher/materials/list"));
-        assert!(!is_legacy_teacher_material_path("/api/manager/knowledge-submissions"));
+        assert!(!is_legacy_teacher_material_path(
+            "/api/manager/knowledge-submissions"
+        ));
     }
 
     #[test]

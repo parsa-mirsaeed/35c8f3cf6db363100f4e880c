@@ -362,7 +362,9 @@ pub fn PasswordResetRequest() -> Element {
                 button {
                     r#type: "button",
                     class: "text-sm font-medium text-primary hover:text-primary-hover transition-colors flex items-center justify-center gap-1 mx-auto",
-                    onclick: move |_| nav.push(Route::LoginPage {}),
+                    onclick: move |_| {
+                        let _ = nav.push(Route::LoginPage {});
+                    },
                     span { class: "material-icons-outlined text-sm", "arrow_back" }
                     "Back to Login"
                 }

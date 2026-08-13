@@ -8,12 +8,12 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 use tracing::{debug, error, warn};
 
 use crate::app_state::AppState;
 use crate::error::AppError;
-use crate::rls_context::{AuthorizedActor, AuthorizedTx};
+use crate::rls_context::{AuthorizedActor, AuthorizedPool, AuthorizedTx};
 use crate::session_security::{
     access_cookie, append_cookie, append_session_removals, refresh_cookie, refresh_rate_limit_key,
     resolve_active_session, AuthRateLimiter, SessionValidationError, ACCESS_COOKIE_NAME,
@@ -194,7 +194,7 @@ fn refresh_response_records_failure(status: u16) -> bool {
 
 async fn run_with_session(
     state: &AppState,
-    request: Request,
+    mut request: Request,
     next: Next,
     session: crate::session_security::ActiveSession,
 ) -> Result<Response, StatusCode> {
@@ -207,6 +207,10 @@ async fn run_with_session(
             error!(%error, "Failed to begin authorized request transaction");
             StatusCode::SERVICE_UNAVAILABLE
         })?;
+
+    request
+        .extensions_mut()
+        .insert(Arc::new(tx.authorized_pool()) as Arc<AuthorizedPool>);
 
     tx.scope(next.run(request), |response| {
         !response.status().is_client_error() && !response.status().is_server_error()

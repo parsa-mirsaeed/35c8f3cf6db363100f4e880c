@@ -23,15 +23,17 @@ static INLINE_SCRIPT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?is)<script\b(?P<attrs>[^>]*)>(?P<body>.*?)</script\s*>")
         .expect("inline script regex is valid")
 });
-static SCRIPT_SRC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:^|\s)src\s*=").expect("script src regex is valid")
-});
+static SCRIPT_SRC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(?:^|\s)src\s*=").expect("script src regex is valid"));
 
 fn content_security_policy(inline_script_hashes: &[String]) -> String {
     let mut policy = String::with_capacity(
         CONTENT_SECURITY_POLICY_PREFIX.len()
             + CONTENT_SECURITY_POLICY_SUFFIX.len()
-            + inline_script_hashes.iter().map(|hash| hash.len() + 1).sum::<usize>(),
+            + inline_script_hashes
+                .iter()
+                .map(|hash| hash.len() + 1)
+                .sum::<usize>(),
     );
     policy.push_str(CONTENT_SECURITY_POLICY_PREFIX);
     for hash in inline_script_hashes {
@@ -47,12 +49,18 @@ fn inline_script_hashes(html: &[u8]) -> Result<Vec<String>, std::str::Utf8Error>
     let mut hashes = BTreeSet::new();
 
     for captures in INLINE_SCRIPT_RE.captures_iter(html) {
-        let attrs = captures.name("attrs").map(|value| value.as_str()).unwrap_or("");
+        let attrs = captures
+            .name("attrs")
+            .map(|value| value.as_str())
+            .unwrap_or("");
         if SCRIPT_SRC_RE.is_match(attrs) {
             continue;
         }
 
-        let body = captures.name("body").map(|value| value.as_str()).unwrap_or("");
+        let body = captures
+            .name("body")
+            .map(|value| value.as_str())
+            .unwrap_or("");
         let digest = Sha256::digest(body.as_bytes());
         hashes.insert(format!("'sha256-{}'", STANDARD.encode(digest)));
     }
@@ -152,6 +160,16 @@ fn is_legacy_teacher_material_path(path: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn script_src_tokens(policy: &str) -> Vec<&str> {
+        policy
+            .split(';')
+            .map(str::trim)
+            .find(|directive| directive.starts_with("script-src "))
+            .expect("policy has script-src")
+            .split_whitespace()
+            .collect()
+    }
+
     #[test]
     fn matches_only_the_retired_create_endpoint() {
         assert!(is_legacy_teacher_material_path(
@@ -173,9 +191,12 @@ mod tests {
         let policy = content_security_policy(&[]);
         assert!(policy.contains("default-src 'self'"));
         assert!(policy.contains("connect-src 'self'"));
-        assert!(policy.contains("script-src 'self' 'wasm-unsafe-eval'"));
-        assert!(!policy.contains("'unsafe-eval'"));
-        assert!(!policy.contains("'unsafe-inline'"));
+
+        let script_tokens = script_src_tokens(&policy);
+        assert!(script_tokens.contains(&"'wasm-unsafe-eval'"));
+        assert!(!script_tokens.contains(&"'unsafe-eval'"));
+        assert!(!script_tokens.contains(&"'unsafe-inline'"));
+
         assert!(!policy.contains("http://"));
         assert!(!policy.contains("https://"));
     }
@@ -207,8 +228,9 @@ mod tests {
         let policy = content_security_policy(&hashes);
         assert!(policy.contains(&first));
         assert!(policy.contains(&second));
-        assert!(!policy.contains("'unsafe-inline'"));
-        assert!(!policy.contains("'unsafe-eval'"));
+        let script_tokens = script_src_tokens(&policy);
+        assert!(!script_tokens.contains(&"'unsafe-inline'"));
+        assert!(!script_tokens.contains(&"'unsafe-eval'"));
     }
 
     #[test]

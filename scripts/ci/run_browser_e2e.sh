@@ -35,6 +35,21 @@ trap cleanup EXIT
 # Match the production Dockerfile's release bundle rather than a debug artifact.
 dx bundle --web --release --package web
 
+bundle_dir="target/dx/web/release/web"
+# The production Dockerfile stages these locally bundled fonts into public/fonts.
+# Mirror that exact release step in browser evidence so missing release assets
+# fail the same way they would in the image rather than as E2E-only 404 noise.
+if [[ -d packages/web/assets/fonts ]]; then
+  mkdir -p "${bundle_dir}/public/fonts"
+  cp -R packages/web/assets/fonts/. "${bundle_dir}/public/fonts/"
+fi
+for font in \
+  Vazirmatn-400.ttf Vazirmatn-500.ttf Vazirmatn-600.ttf Vazirmatn-700.ttf \
+  Poppins-400.ttf Poppins-500.ttf Poppins-600.ttf Poppins-700.ttf \
+  MaterialIconsOutlined.otf; do
+  test -f "${bundle_dir}/public/fonts/${font}"
+done
+
 export SUPABASE_URL="http://127.0.0.1:9100"
 export SUPABASE_PROJECT_REF="e2e-local"
 export SUPABASE_AUDIENCE="authenticated"
@@ -45,7 +60,6 @@ export IP="127.0.0.1"
 export PORT="8080"
 export RUN_MIGRATIONS="false"
 
-bundle_dir="target/dx/web/release/web"
 server_bin=""
 for candidate in "${bundle_dir}/server" "${bundle_dir}/web"; do
   if [[ -x "${candidate}" ]]; then

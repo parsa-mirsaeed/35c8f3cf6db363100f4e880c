@@ -24,9 +24,9 @@ pub async fn extract_user_with_full_rls() -> Result<(UserInfo, Arc<AuthorizedPoo
     let Extension(user): Extension<UserInfo> = extract()
         .await
         .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-    let Extension(pool): Extension<Arc<AuthorizedPool>> = extract()
-        .await
-        .map_err(|_| ServerFnError::new("Unauthorized: No request-scoped database authorization"))?;
+    let Extension(pool): Extension<Arc<AuthorizedPool>> = extract().await.map_err(|_| {
+        ServerFnError::new("Unauthorized: No request-scoped database authorization")
+    })?;
     pool.require_context()
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     Ok((user, pool))

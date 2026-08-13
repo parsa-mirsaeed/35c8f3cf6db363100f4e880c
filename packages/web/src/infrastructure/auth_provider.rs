@@ -48,9 +48,7 @@ impl AuthProvider {
         {
             Ok(response) => response,
             Err(error) => {
-                web_sys::console::error_1(
-                    &format!("Network error during login: {error}").into(),
-                );
+                web_sys::console::error_1(&format!("Network error during login: {error}").into());
                 return AuthResult::ServerError(format!("Network error: {error}"));
             }
         };
@@ -67,9 +65,7 @@ impl AuthProvider {
                 return AuthResult::InvalidCredentials;
             }
 
-            web_sys::console::error_1(
-                &format!("Login request failed with HTTP {status}").into(),
-            );
+            web_sys::console::error_1(&format!("Login request failed with HTTP {status}").into());
             return AuthResult::ServerError(error_text);
         }
 

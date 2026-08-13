@@ -16,7 +16,6 @@ export E2E_HEAD_SHA
 export E2E_BASE_URL="${E2E_BASE_URL:-http://127.0.0.1:8080}"
 export E2E_ALLOWED_ORIGINS="${E2E_ALLOWED_ORIGINS:-${E2E_BASE_URL},http://127.0.0.1:9100}"
 export DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:5432/edutalent_ci}"
-export MOCK_IDP_SECRET="${MOCK_IDP_SECRET:-e2e-local-only-secret}"
 
 bash scripts/ci/verify_browser_harness.sh
 bash scripts/ci/apply_migrations.sh
@@ -39,9 +38,9 @@ dx build --web --package web
 export SUPABASE_URL="http://127.0.0.1:9100"
 export SUPABASE_PROJECT_REF="e2e-local"
 export SUPABASE_AUDIENCE="authenticated"
+export SUPABASE_JWT_ISSUER="http://127.0.0.1:9100/auth/v1"
 export SUPABASE_PUBLISHABLE_KEY="e2e-publishable"
-export SUPABASE_SECRET_KEY="e2e-secret"
-export JWT_SECRET="${MOCK_IDP_SECRET}"
+export SUPABASE_SECRET_KEY="e2e-server-only"
 export IP="127.0.0.1"
 export PORT="8080"
 export RUN_MIGRATIONS="false"

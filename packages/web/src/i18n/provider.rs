@@ -54,6 +54,31 @@ pub fn try_use_locale() -> Option<LocaleContext> {
     try_use_context::<LocaleContext>()
 }
 
+fn apply_document_locale(locale: Locale) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+        if let Some(root) = document.document_element() {
+            let _ = root.set_attribute("lang", locale.code());
+            let _ = root.set_attribute("dir", locale.dir_attr());
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = locale;
+}
+
+fn persist_locale(locale: Locale) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(window) = web_sys::window() {
+        if let Ok(Some(storage)) = window.local_storage() {
+            let _ = storage.set_item("edutalent_locale", locale.code());
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = locale;
+}
+
 #[component]
 pub fn LocaleProvider(children: Element) -> Element {
     let stored_locale = use_signal(|| {
@@ -74,15 +99,7 @@ pub fn LocaleProvider(children: Element) -> Element {
     use_context_provider(|| context);
     let locale = context.current();
 
-    use_effect(move || {
-        #[cfg(target_arch = "wasm32")]
-        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
-            if let Some(root) = document.document_element() {
-                let _ = root.set_attribute("lang", locale.code());
-                let _ = root.set_attribute("dir", locale.dir_attr());
-            }
-        }
-    });
+    use_effect(move || apply_document_locale(locale));
 
     rsx! {
         div {
@@ -111,12 +128,8 @@ pub fn LanguageSwitcher(
                 onchange: move |evt| {
                     if let Some(new_locale) = Locale::from_code(&evt.value()) {
                         locale_ctx.set(new_locale);
-                        #[cfg(target_arch = "wasm32")]
-                        if let Some(window) = web_sys::window() {
-                            if let Ok(Some(storage)) = window.local_storage() {
-                                let _ = storage.set_item("edutalent_locale", new_locale.code());
-                            }
-                        }
+                        apply_document_locale(new_locale);
+                        persist_locale(new_locale);
                     }
                 },
                 for locale in Locale::all().iter() {
@@ -136,12 +149,8 @@ pub fn LanguageSwitcher(
                 onclick: move |_| {
                     locale_ctx.toggle();
                     let new_locale = locale_ctx.current();
-                    #[cfg(target_arch = "wasm32")]
-                    if let Some(window) = web_sys::window() {
-                        if let Ok(Some(storage)) = window.local_storage() {
-                            let _ = storage.set_item("edutalent_locale", new_locale.code());
-                        }
-                    }
+                    apply_document_locale(new_locale);
+                    persist_locale(new_locale);
                 },
                 title: "{locale_ctx.t(\"common.select_language\")}",
                 span { class: "current-lang", "{current.native_name()}" }

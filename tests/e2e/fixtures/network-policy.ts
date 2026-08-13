@@ -13,6 +13,7 @@ const allowed = (process.env.E2E_ALLOWED_ORIGINS ?? 'http://127.0.0.1:8080,http:
 export const unexpectedOrigins: string[] = [];
 
 export async function enforceOfflineAllowlist(page: Page): Promise<void> {
+  unexpectedOrigins.length = 0;
   await page.route('**/*', async (route) => {
     const url = route.request().url();
     let origin: string;

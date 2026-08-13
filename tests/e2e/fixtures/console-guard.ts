@@ -7,6 +7,7 @@ import { test, type Page } from '@playwright/test';
 const consoleErrors: string[] = [];
 
 export function watchConsole(page: Page): void {
+  consoleErrors.length = 0;
   page.on('console', (message) => {
     if (message.type() === 'error') {
       consoleErrors.push(message.text());

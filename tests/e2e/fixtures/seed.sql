@@ -3,18 +3,16 @@
 --
 -- Schools A and B, a PlatformAdmin, managers/teachers/students/parents for both
 -- schools, active and inactive accounts, one class per school, one published
--- assignment with a submission and grade, and one published knowledge asset.
+-- assignment with a submission and grade, and published knowledge assets in
+-- both schools for object-level tenant-denial evidence.
 
 BEGIN;
 
--- Roles are reference data seeded by migrations; resolve them by name.
--- Schools
 INSERT INTO schools (id, name) VALUES
   ('a0000000-0000-0000-0000-0000000000a1', 'E2E School A'),
   ('a0000000-0000-0000-0000-0000000000b1', 'E2E School B')
 ON CONFLICT (id) DO NOTHING;
 
--- Users (active + one inactive teacher for disablement denial)
 INSERT INTO users (id, name, email, role_id, school_id, is_active) VALUES
   ('b0000000-0000-0000-0000-0000000000a0', 'E2E Platform Admin',  'e2e-admin@example.test',    (SELECT id FROM roles WHERE name = 'PlatformAdmin'),  'a0000000-0000-0000-0000-0000000000a1', true),
   ('b0000000-0000-0000-0000-0000000000a1', 'E2E Manager A',      'e2e-manager-a@example.test',(SELECT id FROM roles WHERE name = 'SchoolManager'), 'a0000000-0000-0000-0000-0000000000a1', true),
@@ -28,7 +26,6 @@ INSERT INTO users (id, name, email, role_id, school_id, is_active) VALUES
   ('b0000000-0000-0000-0000-0000000000a9', 'E2E Inactive Teacher','e2e-inactive@example.test',(SELECT id FROM roles WHERE name = 'Teacher'),       'a0000000-0000-0000-0000-0000000000a1', false)
 ON CONFLICT (id) DO NOTHING;
 
--- Teacher / student / parent records
 INSERT INTO teachers (id, user_id, school_id) VALUES
   ('c0000000-0000-0000-0000-0000000000a2', 'b0000000-0000-0000-0000-0000000000a2', 'a0000000-0000-0000-0000-0000000000a1'),
   ('c0000000-0000-0000-0000-0000000000b2', 'b0000000-0000-0000-0000-0000000000b2', 'a0000000-0000-0000-0000-0000000000b1')
@@ -39,7 +36,6 @@ INSERT INTO students (id, user_id, school_id, parent_id) VALUES
   ('c0000000-0000-0000-0000-0000000000b3', 'b0000000-0000-0000-0000-0000000000b3', 'a0000000-0000-0000-0000-0000000000b1', 'b0000000-0000-0000-0000-0000000000b4')
 ON CONFLICT (id) DO NOTHING;
 
--- Subject + one class per school
 INSERT INTO subjects (id, code, name) VALUES
   ('d0000000-0000-0000-0000-0000000000a1', 'E2EMATH', 'E2E Mathematics')
 ON CONFLICT (id) DO NOTHING;
@@ -49,7 +45,6 @@ INSERT INTO class_sections (id, school_id, subject_id, name, term) VALUES
   ('e0000000-0000-0000-0000-0000000000b1', 'a0000000-0000-0000-0000-0000000000b1', 'd0000000-0000-0000-0000-0000000000a1', 'E2E Class B1', 'E2E-Term')
 ON CONFLICT (id) DO NOTHING;
 
--- Teaching assignment + enrollment
 INSERT INTO teaching_assignments (class_section_id, teacher_id) VALUES
   ('e0000000-0000-0000-0000-0000000000a1', 'c0000000-0000-0000-0000-0000000000a2'),
   ('e0000000-0000-0000-0000-0000000000b1', 'c0000000-0000-0000-0000-0000000000b2')
@@ -60,7 +55,6 @@ INSERT INTO enrollments (class_section_id, student_id) VALUES
   ('e0000000-0000-0000-0000-0000000000b1', 'c0000000-0000-0000-0000-0000000000b3')
 ON CONFLICT DO NOTHING;
 
--- One published assignment in School A with a fan-out, submission, and grade
 INSERT INTO assignments (id, teacher_id, class_section_id, subject_id, title, body, due_at, status, published_at) VALUES
   ('f0000000-0000-0000-0000-0000000000a1', 'c0000000-0000-0000-0000-0000000000a2', 'e0000000-0000-0000-0000-0000000000a1', 'd0000000-0000-0000-0000-0000000000a1', 'E2E Assignment A1', 'Synthetic body', NOW() + INTERVAL '7 days', 'Published', NOW())
 ON CONFLICT (id) DO NOTHING;
@@ -73,9 +67,9 @@ INSERT INTO submissions (id, custom_assignment_id, student_id, content, grade, g
   ('f2000000-0000-0000-0000-0000000000a1', 'f1000000-0000-0000-0000-0000000000a1', 'c0000000-0000-0000-0000-0000000000a3', '{"text":"synthetic"}'::jsonb, 18.50, 'c0000000-0000-0000-0000-0000000000a2')
 ON CONFLICT (id) DO NOTHING;
 
--- One published knowledge asset in School A
 INSERT INTO knowledge_assets (id, school_id, title, status, created_by, published_at) VALUES
-  ('f3000000-0000-0000-0000-0000000000a1', 'a0000000-0000-0000-0000-0000000000a1', 'E2E Published Asset', 'published', 'b0000000-0000-0000-0000-0000000000a1', NOW())
+  ('f3000000-0000-0000-0000-0000000000a1', 'a0000000-0000-0000-0000-0000000000a1', 'E2E Published Asset', 'published', 'b0000000-0000-0000-0000-0000000000a1', NOW()),
+  ('f3000000-0000-0000-0000-0000000000b1', 'a0000000-0000-0000-0000-0000000000b1', 'E2E School B Asset', 'published', 'b0000000-0000-0000-0000-0000000000b1', NOW())
 ON CONFLICT (id) DO NOTHING;
 
 COMMIT;

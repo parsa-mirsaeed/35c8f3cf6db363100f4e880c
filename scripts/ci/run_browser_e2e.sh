@@ -2,7 +2,7 @@
 # PR-12 browser evidence on an exact head (shared entry point).
 #
 # Applies migrations, loads the synthetic fixture, starts the local mock IdP,
-# builds the real Dioxus web bundle, starts the production-like server, waits
+# bundles the real release-mode Dioxus application, starts that server, waits
 # for readiness, then runs the tagged Playwright selection. Never contacts a
 # live external service. Fails closed. E2E_GREP selects the tag tier.
 set -euxo pipefail
@@ -32,8 +32,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Evidence runs against the production-like server build, never a mock-only UI.
-dx build --web --package web
+# Match the production Dockerfile's release bundle rather than a debug artifact.
+dx bundle --web --release --package web
 
 export SUPABASE_URL="http://127.0.0.1:9100"
 export SUPABASE_PROJECT_REF="e2e-local"
@@ -45,8 +45,7 @@ export IP="127.0.0.1"
 export PORT="8080"
 export RUN_MIGRATIONS="false"
 
-# Discover the server binary the same way the release Dockerfile does.
-bundle_dir="target/dx/web/debug/web"
+bundle_dir="target/dx/web/release/web"
 server_bin=""
 for candidate in "${bundle_dir}/server" "${bundle_dir}/web"; do
   if [[ -x "${candidate}" ]]; then
@@ -78,7 +77,6 @@ if [[ "${ready}" != "true" ]]; then
   exit 1
 fi
 
-# Run from the harness directory so the local Playwright binary resolves.
 cd "${ROOT}/tests/e2e"
 npx playwright test --grep "${E2E_GREP}"
 

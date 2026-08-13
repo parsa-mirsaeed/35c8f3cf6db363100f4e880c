@@ -1,60 +1,82 @@
 #!/usr/bin/env node
-// PR-12 local mock identity provider.
-//
-// Stands in for Supabase Auth (password grant + refresh) and JWKS so the
-// production-like server authenticates without any live external service
-// (plan §5.2 / §1.1). Listens on 127.0.0.1:9100 and only issues tokens for the
-// synthetic seed users. Deterministic HS256 signing for the local fixture only.
+// Local-only PR-12 identity fixture. It mirrors the production JWT verification
+// contract (ES256 + kid + issuer + audience + email) without bypassing auth.
 import http from 'node:http';
 import crypto from 'node:crypto';
 
 const PORT = Number(process.env.MOCK_IDP_PORT ?? 9100);
-const SECRET = process.env.MOCK_IDP_SECRET ?? 'e2e-local-only-secret';
 const ISSUER = `http://127.0.0.1:${PORT}/auth/v1`;
+const KID = 'e2e-local-es256';
+const FIXTURE_PASSWORD = 'e2e-password';
 
-// email -> { id, password }
+const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const publicJwk = publicKey.export({ format: 'jwk' });
+
 const USERS = new Map([
-  ['e2e-admin@example.test',   { id: 'b0000000-0000-0000-0000-0000000000a0', password: 'e2e-password' }],
-  ['e2e-manager-a@example.test',{ id: 'b0000000-0000-0000-0000-0000000000a1', password: 'e2e-password' }],
-  ['e2e-manager-b@example.test',{ id: 'b0000000-0000-0000-0000-0000000000b1', password: 'e2e-password' }],
-  ['e2e-teacher-a@example.test',{ id: 'b0000000-0000-0000-0000-0000000000a2', password: 'e2e-password' }],
-  ['e2e-teacher-b@example.test',{ id: 'b0000000-0000-0000-0000-0000000000b2', password: 'e2e-password' }],
-  ['e2e-student-a@example.test',{ id: 'b0000000-0000-0000-0000-0000000000a3', password: 'e2e-password' }],
-  ['e2e-student-b@example.test',{ id: 'b0000000-0000-0000-0000-0000000000b3', password: 'e2e-password' }],
-  ['e2e-parent-a@example.test', { id: 'b0000000-0000-0000-0000-0000000000a4', password: 'e2e-password' }],
-  ['e2e-parent-b@example.test', { id: 'b0000000-0000-0000-0000-0000000000b4', password: 'e2e-password' }],
-  ['e2e-inactive@example.test', { id: 'b0000000-0000-0000-0000-0000000000a9', password: 'e2e-password' }],
+  ['e2e-admin@example.test', 'b0000000-0000-0000-0000-0000000000a0'],
+  ['e2e-manager-a@example.test', 'b0000000-0000-0000-0000-0000000000a1'],
+  ['e2e-manager-b@example.test', 'b0000000-0000-0000-0000-0000000000b1'],
+  ['e2e-teacher-a@example.test', 'b0000000-0000-0000-0000-0000000000a2'],
+  ['e2e-teacher-b@example.test', 'b0000000-0000-0000-0000-0000000000b2'],
+  ['e2e-student-a@example.test', 'b0000000-0000-0000-0000-0000000000a3'],
+  ['e2e-student-b@example.test', 'b0000000-0000-0000-0000-0000000000b3'],
+  ['e2e-parent-a@example.test', 'b0000000-0000-0000-0000-0000000000a4'],
+  ['e2e-parent-b@example.test', 'b0000000-0000-0000-0000-0000000000b4'],
+  ['e2e-inactive@example.test', 'b0000000-0000-0000-0000-0000000000a9'],
 ]);
 
-const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
-const sign = (payload) =>
-  `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64(payload)}.` +
-  crypto.createHmac('sha256', SECRET).update(`${b64({ alg: 'HS256', typ: 'JWT' })}.${b64(payload)}`).digest('base64url');
-
-const issueTokens = (user) => {
+const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+function issueTokens(email, userId) {
   const now = Math.floor(Date.now() / 1000);
-  const access = sign({ sub: user.id, aud: 'authenticated', iss: ISSUER, iat: now, exp: now + 900, role: 'authenticated' });
+  const header = encode({ alg: 'ES256', typ: 'JWT', kid: KID });
+  const claims = encode({
+    sub: userId,
+    email,
+    aud: 'authenticated',
+    iss: ISSUER,
+    iat: now,
+    exp: now + 900,
+    role: 'authenticated',
+  });
+  const input = `${header}.${claims}`;
+  const signature = crypto.sign('sha256', Buffer.from(input), {
+    key: privateKey,
+    dsaEncoding: 'ieee-p1363',
+  }).toString('base64url');
   return {
-    access_token: access,
+    access_token: `${input}.${signature}`,
     token_type: 'bearer',
     expires_in: 900,
-    refresh_token: `e2e-refresh-${user.id}`,
-    user: { id: user.id, aud: 'authenticated' },
+    refresh_token: `e2e-refresh-${userId}`,
+    user: { id: userId, email, aud: 'authenticated' },
   };
-};
+}
+
+function parseBody(body) {
+  try {
+    return JSON.parse(body || '{}');
+  } catch {
+    return null;
+  }
+}
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   let body = '';
-  req.on('data', (chunk) => (body += chunk));
+  req.on('data', (chunk) => { body += chunk; });
   req.on('end', () => {
     res.setHeader('content-type', 'application/json');
 
     if (url.pathname === '/auth/v1/token' && url.searchParams.get('grant_type') === 'password') {
-      const { email, password } = JSON.parse(body || '{}');
-      const user = USERS.get(email);
-      if (user && user.password === password) {
-        res.end(JSON.stringify(issueTokens(user)));
+      const payload = parseBody(body);
+      if (!payload) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: 'invalid_request' }));
+        return;
+      }
+      const userId = USERS.get(payload.email);
+      if (userId && payload.password === FIXTURE_PASSWORD) {
+        res.end(JSON.stringify(issueTokens(payload.email, userId)));
       } else {
         res.statusCode = 400;
         res.end(JSON.stringify({ error: 'invalid_grant', error_description: 'Invalid login credentials' }));
@@ -63,10 +85,12 @@ const server = http.createServer((req, res) => {
     }
 
     if (url.pathname === '/auth/v1/token' && url.searchParams.get('grant_type') === 'refresh_token') {
-      const { refresh_token } = JSON.parse(body || '{}');
-      const entry = [...USERS.values()].find((u) => `e2e-refresh-${u.id}` === refresh_token);
+      const payload = parseBody(body);
+      const entry = payload && [...USERS.entries()].find(([, userId]) =>
+        `e2e-refresh-${userId}` === payload.refresh_token,
+      );
       if (entry) {
-        res.end(JSON.stringify(issueTokens(entry)));
+        res.end(JSON.stringify(issueTokens(entry[0], entry[1])));
       } else {
         res.statusCode = 400;
         res.end(JSON.stringify({ error: 'invalid_grant' }));
@@ -75,8 +99,12 @@ const server = http.createServer((req, res) => {
     }
 
     if (url.pathname === '/auth/v1/.well-known/jwks.json') {
-      const key = crypto.createSecretKey(Buffer.from(SECRET)).export({ format: 'jwk' });
-      res.end(JSON.stringify({ keys: [{ kty: 'oct', alg: 'HS256', use: 'sig', kid: 'e2e-local', k: key.k }] }));
+      res.end(JSON.stringify({
+        keys: [{
+          kty: 'EC', crv: 'P-256', alg: 'ES256', use: 'sig', kid: KID,
+          x: publicJwk.x, y: publicJwk.y,
+        }],
+      }));
       return;
     }
 

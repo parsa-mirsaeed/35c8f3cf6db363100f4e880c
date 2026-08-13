@@ -4,7 +4,11 @@
 // synthetic seed fixture. Fails on console errors and unexpected origins.
 import { test, expect, type Page } from '@playwright/test';
 import { enforceOfflineAllowlist, assertNoUnexpectedOrigins } from '../fixtures/network-policy';
-import { watchConsole, assertNoConsoleErrors } from '../fixtures/console-guard';
+import {
+  allowHttpResponse,
+  watchConsole,
+  assertNoConsoleErrors,
+} from '../fixtures/console-guard';
 
 const MANAGER = { email: 'e2e-manager-a@example.test', password: 'e2e-password' };
 
@@ -42,6 +46,7 @@ test('production response enforces the offline CSP boundary @smoke @auth', async
   const scriptTokens = scriptDirective!.split(/\s+/);
   expect(scriptTokens).toContain("'wasm-unsafe-eval'");
   expect(scriptTokens).not.toContain("'unsafe-eval'");
+  expect(scriptTokens).not.toContain("'unsafe-inline'");
   expect(headers['x-content-type-options']).toBe('nosniff');
   expect(headers['x-frame-options']).toBe('DENY');
 });
@@ -68,6 +73,7 @@ test('manager can sign in, lands on dashboard, and UI logout terminates the sess
 });
 
 test('inactive account cannot authenticate @smoke @auth', async ({ page }) => {
+  allowHttpResponse('/api/auth/login', 401);
   await signIn(page, 'e2e-inactive@example.test', 'e2e-password');
 
   await expect(page).toHaveURL(/\/$/);

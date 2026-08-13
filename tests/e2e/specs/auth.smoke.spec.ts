@@ -25,6 +25,27 @@ test.afterEach(() => {
   assertNoConsoleErrors();
 });
 
+test('production response enforces the offline CSP boundary @smoke @auth', async ({ page }) => {
+  const response = await page.goto('/');
+  expect(response, 'initial document response must exist').not.toBeNull();
+  const headers = response!.headers();
+  const csp = headers['content-security-policy'];
+  expect(csp, 'production response must enforce a CSP').toBeTruthy();
+  expect(csp).toContain("default-src 'self'");
+  expect(csp).toContain("connect-src 'self'");
+
+  const scriptDirective = csp
+    .split(';')
+    .map((directive) => directive.trim())
+    .find((directive) => directive.startsWith('script-src'));
+  expect(scriptDirective, 'CSP must contain script-src').toBeTruthy();
+  const scriptTokens = scriptDirective!.split(/\s+/);
+  expect(scriptTokens).toContain("'wasm-unsafe-eval'");
+  expect(scriptTokens).not.toContain("'unsafe-eval'");
+  expect(headers['x-content-type-options']).toBe('nosniff');
+  expect(headers['x-frame-options']).toBe('DENY');
+});
+
 test('unauthenticated dashboard access returns to the canonical login route @smoke @auth', async ({ page }) => {
   await page.goto('/dashboard');
   await expect(page).toHaveURL(/\/$/);
@@ -41,8 +62,6 @@ test('manager can sign in, lands on dashboard, and UI logout terminates the sess
   await expect(page).toHaveURL(/\/$/);
   await expect(page.locator('input[type="email"]')).toBeVisible();
 
-  // A fresh protected navigation must still be unauthenticated; this proves the
-  // visible logout path cleared the HttpOnly server session, not only UI state.
   await page.goto('/dashboard');
   await expect(page).toHaveURL(/\/$/);
   await expect(page.locator('input[type="email"]')).toBeVisible();

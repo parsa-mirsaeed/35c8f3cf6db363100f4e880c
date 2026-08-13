@@ -169,14 +169,12 @@ pub async fn initialize_app_services(config: Config) -> Result<(), Box<dyn std::
     let mut services = None;
     let mut error = None;
 
-    APP_SERVICES_INIT.call_once(|| {
-        match tokio::runtime::Runtime::new() {
-            Ok(rt) => match rt.block_on(AppServices::new(config.clone())) {
-                Ok(s) => services = Some(s),
-                Err(e) => error = Some(e),
-            },
-            Err(e) => error = Some(e.into()),
-        }
+    APP_SERVICES_INIT.call_once(|| match tokio::runtime::Runtime::new() {
+        Ok(rt) => match rt.block_on(AppServices::new(config.clone())) {
+            Ok(s) => services = Some(s),
+            Err(e) => error = Some(e),
+        },
+        Err(e) => error = Some(e.into()),
     });
 
     if let Some(err) = error {
@@ -201,6 +199,7 @@ pub fn get_app_services() -> AppServices {
 }
 
 /// Helper function to get services from server function context
+/// This provides a safe way to access services within server functions
 pub async fn with_services<F, R>(f: F) -> R
 where
     F: FnOnce(AppServices) -> R,
@@ -232,7 +231,8 @@ pub async fn initialize_app_state(config: Config) -> Result<(), Box<dyn std::err
 }
 
 #[cfg(feature = "server")]
-fn request_authorized_pool() -> Result<Option<Arc<AuthorizedPool>>, dioxus::prelude::ServerFnError> {
+fn request_authorized_pool() -> Result<Option<Arc<AuthorizedPool>>, dioxus::prelude::ServerFnError>
+{
     use dioxus::prelude::dioxus_fullstack::FullstackContext;
 
     let Some(context) = FullstackContext::current() else {
@@ -269,6 +269,8 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
         dioxus::prelude::ServerFnError::new(format!("Failed to load config: {}", e))
     })?;
 
+    // Configure pool with better settings for concurrent requests
+    // IMPORTANT: statement_cache_capacity(0) prevents "prepared statement already exists" errors
     let connect_options: sqlx::postgres::PgConnectOptions =
         config.database.url.parse().map_err(|e| {
             dioxus::prelude::ServerFnError::new(format!("Invalid DATABASE_URL: {}", e))
@@ -277,14 +279,16 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
 
     let pool = Arc::new(
         sqlx::postgres::PgPoolOptions::new()
+            // Clamp max connections to 15 for Supabase Transaction Mode compatibility
             .max_connections(config.database.max_connections.max(1).min(15))
-            .min_connections(1)
-            .acquire_timeout(std::time::Duration::from_secs(30))
-            .idle_timeout(Some(std::time::Duration::from_secs(600)))
-            .max_lifetime(Some(std::time::Duration::from_secs(1800)))
+            .min_connections(1) // Keep 1 warm connection, but don't hold too many
+            .acquire_timeout(std::time::Duration::from_secs(30)) // Increase timeout for latency
+            .idle_timeout(Some(std::time::Duration::from_secs(600))) // 10 minutes
+            .max_lifetime(Some(std::time::Duration::from_secs(1800))) // 30 minutes
             .connect_lazy_with(connect_options),
     );
 
+    // Initialize ALL repositories here for the on-demand state as well
     let authorized_pool = Arc::new(AuthorizedPool::new());
     let user_repository = Arc::new(UserRepository::new(authorized_pool.clone()));
     let student_repository = Arc::new(StudentRepository::new(authorized_pool.clone()));
@@ -295,6 +299,7 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
     let class_section_repository = Arc::new(ClassSectionRepository::new(authorized_pool.clone()));
     let subject_repository = Arc::new(SubjectRepository::new(authorized_pool.clone()));
 
+    // Initialize shared HTTP client for temporary state too
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -314,6 +319,7 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
             raw_pool: pool.clone(),
             pool: authorized_pool,
             http_client,
+
             user: user_repository,
             student: student_repository,
             teacher: teacher_repository,
@@ -325,6 +331,8 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
         supabase_config: config.supabase,
     };
 
+    // Cache it for future calls
     let _ = APP_STATE.set(app_state.clone());
+
     Ok(app_state)
 }

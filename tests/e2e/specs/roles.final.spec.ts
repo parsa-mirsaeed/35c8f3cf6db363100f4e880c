@@ -1,4 +1,9 @@
-// @final @roles — PR-12 final role landing and guarded-alias evidence.
+// @final @roles @workflows — PR-12 final role and persisted core-workflow evidence.
+//
+// The production release deliberately disables unfinished attendance, timetable,
+// reports, messaging, derived metrics, and synthetic-health domains. These
+// journeys cover only enabled core school workflows against the deterministic
+// two-school fixture and the real server-backed UI.
 import { test, expect, type Page } from '@playwright/test';
 import { enforceOfflineAllowlist, assertNoUnexpectedOrigins } from '../fixtures/network-policy';
 import { watchConsole, assertNoConsoleErrors } from '../fixtures/console-guard';
@@ -18,6 +23,19 @@ async function signIn(page: Page, email: string): Promise<void> {
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole('button', { name: /sign in|ورود/i }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+}
+
+async function signInEnglish(page: Page, email: string): Promise<void> {
+  await page.addInitScript(() => localStorage.setItem('edutalent_locale', 'en'));
+  await signIn(page, email);
+}
+
+function actionWithIcon(page: Page, icon: string) {
+  return page.locator('button', {
+    has: page.locator('span.material-icons-outlined', {
+      hasText: new RegExp(`^${icon}$`),
+    }),
+  }).first();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -40,8 +58,65 @@ for (const role of roles) {
 }
 
 test('authenticated dashboard supports English/LTR @final @roles', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edutalent_locale', 'en'));
-  await signIn(page, 'e2e-manager-a@example.test');
+  await signInEnglish(page, 'e2e-manager-a@example.test');
   await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toMatch(/^en/i);
   await expect.poll(() => page.evaluate(() => document.documentElement.dir)).toBe('ltr');
+});
+
+test('school manager reads only the authorized school user directory @final @workflows', async ({ page }) => {
+  await signInEnglish(page, 'e2e-manager-a@example.test');
+  await actionWithIcon(page, 'groups').click();
+
+  await expect(page.getByText('E2E Teacher A', { exact: true })).toBeVisible();
+  await expect(page.getByText('E2E Student A', { exact: true })).toBeVisible();
+  await expect(page.getByText('E2E Teacher B', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('E2E Student B', { exact: true })).toHaveCount(0);
+});
+
+test('school manager reads only the authorized class inventory @final @workflows', async ({ page }) => {
+  await signInEnglish(page, 'e2e-manager-a@example.test');
+  await actionWithIcon(page, 'class').click();
+
+  await expect(page.getByText('E2E Class A1', { exact: true })).toBeVisible();
+  await expect(page.getByText('E2E Class B1', { exact: true })).toHaveCount(0);
+});
+
+test('school manager sees the governed school knowledge inventory @final @workflows', async ({ page }) => {
+  await signInEnglish(page, 'e2e-manager-a@example.test');
+  await page.getByRole('button', { name: /knowledge submissions/i }).click();
+
+  await expect(page.getByText('E2E Published Asset', { exact: true })).toBeVisible();
+});
+
+test('teacher sees the persisted published assignment and governed knowledge asset @final @workflows', async ({ page }) => {
+  await signInEnglish(page, 'e2e-teacher-a@example.test');
+
+  await actionWithIcon(page, 'assignment').click();
+  await expect(page.getByText('E2E Assignment A1', { exact: true })).toBeVisible();
+  await expect(page.getByText('E2E Class A1', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: /knowledge assets/i }).click();
+  await expect(page.getByText('E2E Published Asset', { exact: true })).toBeVisible();
+});
+
+test('student sees only persisted enrollment and assignment state @final @workflows', async ({ page }) => {
+  await signInEnglish(page, 'e2e-student-a@example.test');
+
+  await expect(page.getByText('E2E Class A1', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('E2E Assignment A1', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('E2E Class B1', { exact: true })).toHaveCount(0);
+});
+
+test('parent sees only the authorized child enrollment @final @workflows', async ({ page }) => {
+  await signInEnglish(page, 'e2e-parent-a@example.test');
+
+  await expect(page.getByText('E2E Student A', { exact: true })).toBeVisible();
+  await expect(page.getByText('1 enrolled classes', { exact: true })).toBeVisible();
+  await expect(page.getByText('E2E Student B', { exact: true })).toHaveCount(0);
+});
+
+test('platform admin sees the governed published asset inventory @final @workflows', async ({ page }) => {
+  await signInEnglish(page, 'e2e-admin@example.test');
+
+  await expect(page.getByText('E2E Published Asset', { exact: true })).toBeVisible();
 });

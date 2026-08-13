@@ -35,16 +35,19 @@ test('login has no automated WCAG A/AA violations @final @accessibility', async 
   ).toEqual([]);
 });
 
-test('login form controls are keyboard reachable @final @accessibility', async ({ page }) => {
+test('login form controls follow the visible keyboard order @final @accessibility', async ({ page }) => {
   await page.goto('/');
   const email = page.locator('input[type="email"]');
   const password = page.locator('input[type="password"]');
-  const submit = page.getByRole('button', { name: /sign in|ورود/i });
+  const forgotPassword = page.locator('form button[type="button"]').first();
+  const submit = page.locator('form button[type="submit"]');
 
   await email.focus();
   await expect(email).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(password).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(forgotPassword).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(submit).toBeFocused();
 });

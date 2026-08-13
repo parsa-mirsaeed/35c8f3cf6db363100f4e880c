@@ -107,9 +107,8 @@ impl AppServices {
             audit_service,
             supabase_service,
             raw_pool: arc_pool.clone(),
-            pool: authorized_pool.clone(),
+            pool: authorized_pool,
             http_client,
-            // Map to fields expected by server functions
             user: user_repository,
             student: student_repository,
             teacher: teacher_repository,
@@ -120,9 +119,42 @@ impl AppServices {
         })
     }
 
+    /// Rebuild request-sensitive repositories/services around one exact
+    /// transaction-bound executor while retaining immutable/shared dependencies.
+    fn with_authorized_pool(&self, authorized_pool: Arc<AuthorizedPool>) -> Self {
+        let user_repository = Arc::new(UserRepository::new(authorized_pool.clone()));
+        let student_repository = Arc::new(StudentRepository::new(authorized_pool.clone()));
+        let teacher_repository = Arc::new(TeacherRepository::new(authorized_pool.clone()));
+        let parent_repository = Arc::new(ParentRepository::new(authorized_pool.clone()));
+        let audit_repository = Arc::new(AuditLogRepository::new(authorized_pool.clone()));
+        let school_repository = Arc::new(SchoolRepository::new(authorized_pool.clone()));
+        let class_section_repository =
+            Arc::new(ClassSectionRepository::new(authorized_pool.clone()));
+        let subject_repository = Arc::new(SubjectRepository::new(authorized_pool.clone()));
+
+        Self {
+            validation_service: Arc::new(ValidationService::new(
+                user_repository.clone(),
+                student_repository.clone(),
+                teacher_repository.clone(),
+            )),
+            audit_service: Arc::new(AuditService::new(audit_repository)),
+            supabase_service: self.supabase_service.clone(),
+            raw_pool: self.raw_pool.clone(),
+            pool: authorized_pool,
+            http_client: self.http_client.clone(),
+            user: user_repository,
+            student: student_repository,
+            teacher: teacher_repository,
+            parent: parent_repository,
+            school: school_repository,
+            class_section: class_section_repository,
+            subject: subject_repository,
+        }
+    }
+
     /// Create services for testing with mock implementations
     pub fn new_for_testing() -> Self {
-        // This would be used in tests with mock repositories
         todo!("Implement testing services")
     }
 }
@@ -138,7 +170,6 @@ pub async fn initialize_app_services(config: Config) -> Result<(), Box<dyn std::
     let mut error = None;
 
     APP_SERVICES_INIT.call_once(|| {
-        // Use a blocking runtime for the async initialization
         match tokio::runtime::Runtime::new() {
             Ok(rt) => match rt.block_on(AppServices::new(config.clone())) {
                 Ok(s) => services = Some(s),
@@ -170,7 +201,6 @@ pub fn get_app_services() -> AppServices {
 }
 
 /// Helper function to get services from server function context
-/// This provides a safe way to access services within server functions
 pub async fn with_services<F, R>(f: F) -> R
 where
     F: FnOnce(AppServices) -> R,
@@ -201,23 +231,44 @@ pub async fn initialize_app_state(config: Config) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-/// Extract server state for use in server functions
-/// This function can be used by Dioxus server functions to access application state
+#[cfg(feature = "server")]
+fn request_authorized_pool() -> Result<Option<Arc<AuthorizedPool>>, dioxus::prelude::ServerFnError> {
+    use dioxus::prelude::dioxus_fullstack::FullstackContext;
+
+    let Some(context) = FullstackContext::current() else {
+        return Ok(None);
+    };
+    let Some(pool) = context.extension::<Arc<AuthorizedPool>>() else {
+        return Ok(None);
+    };
+    pool.require_context()
+        .map_err(|error| dioxus::prelude::ServerFnError::new(error.to_string()))?;
+    Ok(Some(pool))
+}
+
+/// Extract server state for use in server functions.
+///
+/// Global configuration and raw infrastructure remain shared, while every
+/// request-sensitive repository is rebound to the exact AuthorizedPool placed
+/// in the current request extensions by authentication middleware. If no
+/// request-bound authorization exists, the global fail-closed pool remains in
+/// place; protected queries therefore cannot silently fall back to PgPool.
 pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError> {
-    // Try to get existing state first
     if let Some(state) = APP_STATE.get() {
-        return Ok(state.clone());
+        let mut state = state.clone();
+        #[cfg(feature = "server")]
+        if let Some(pool) = request_authorized_pool()? {
+            state.services = state.services.with_authorized_pool(pool);
+        }
+        return Ok(state);
     }
 
     println!("WARNING: APP_STATE not initialized, creating new temporary state. This should not happen in production!");
 
-    // If not initialized, create it on-demand (for development)
     let config = crate::config::Config::from_env().map_err(|e| {
         dioxus::prelude::ServerFnError::new(format!("Failed to load config: {}", e))
     })?;
 
-    // Configure pool with better settings for concurrent requests
-    // IMPORTANT: statement_cache_capacity(0) prevents "prepared statement already exists" errors
     let connect_options: sqlx::postgres::PgConnectOptions =
         config.database.url.parse().map_err(|e| {
             dioxus::prelude::ServerFnError::new(format!("Invalid DATABASE_URL: {}", e))
@@ -226,17 +277,14 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
 
     let pool = Arc::new(
         sqlx::postgres::PgPoolOptions::new()
-            // Clamp max connections to 15 for Supabase Transaction Mode compatibility
             .max_connections(config.database.max_connections.max(1).min(15))
-            .min_connections(1) // Keep 1 warm connection, but don't hold too many
-            .acquire_timeout(std::time::Duration::from_secs(30)) // Increase timeout for latency
-            .idle_timeout(Some(std::time::Duration::from_secs(600))) // 10 minutes
-            .max_lifetime(Some(std::time::Duration::from_secs(1800))) // 30 minutes
+            .min_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(30))
+            .idle_timeout(Some(std::time::Duration::from_secs(600)))
+            .max_lifetime(Some(std::time::Duration::from_secs(1800)))
             .connect_lazy_with(connect_options),
     );
 
-    // Initialize ALL repositories here for the on-demand state as well
-    let arc_pool = pool.clone();
     let authorized_pool = Arc::new(AuthorizedPool::new());
     let user_repository = Arc::new(UserRepository::new(authorized_pool.clone()));
     let student_repository = Arc::new(StudentRepository::new(authorized_pool.clone()));
@@ -247,7 +295,6 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
     let class_section_repository = Arc::new(ClassSectionRepository::new(authorized_pool.clone()));
     let subject_repository = Arc::new(SubjectRepository::new(authorized_pool.clone()));
 
-    // Initialize shared HTTP client for temporary state too
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -265,9 +312,8 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
             audit_service: Arc::new(AuditService::new(audit_repository)),
             supabase_service: Arc::new(SupabaseAdminService::new(config.supabase.clone())),
             raw_pool: pool.clone(),
-            pool: authorized_pool.clone(),
+            pool: authorized_pool,
             http_client,
-
             user: user_repository,
             student: student_repository,
             teacher: teacher_repository,
@@ -279,8 +325,6 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
         supabase_config: config.supabase,
     };
 
-    // Cache it for future calls
     let _ = APP_STATE.set(app_state.clone());
-
     Ok(app_state)
 }

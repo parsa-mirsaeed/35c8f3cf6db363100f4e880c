@@ -149,7 +149,9 @@ impl AuthorizedPool {
     }
 
     /// Require either a request-bound transaction handle or an active bounded
-    /// task-local scope. This never falls back to the raw PostgreSQL pool.
+    /// task-local scope. This synchronous check is used only when the caller
+    /// already owns an explicit request handle. SQL execution also supports the
+    /// async Dioxus request-extension fallback in [`resolved_transaction_state`].
     pub fn require_context(&self) -> Result<(), RlsContextError> {
         self.transaction_state()
             .map(|_| ())
@@ -167,11 +169,40 @@ impl AuthorizedPool {
         }
     }
 
+    /// Resolve an authorization transaction for an async SQL operation.
+    ///
+    /// Request middleware inserts an `Arc<AuthorizedPool>` carrying the exact
+    /// transaction into Axum request extensions. Some legacy repository
+    /// constructors still create a stateless facade, and Dioxus may execute a
+    /// server-function future outside the middleware's Tokio task-local scope.
+    /// In that case we recover only the already-authorized request handle from
+    /// Dioxus's request extractor. There is never a raw-pool fallback.
+    async fn resolved_transaction_state(&self) -> Result<Arc<AuthorizedTransactionState>, Error> {
+        if let Some(state) = &self.state {
+            return Ok(Arc::clone(state));
+        }
+        if let Ok(state) = active_transaction() {
+            return Ok(state);
+        }
+
+        use crate::dioxus_fullstack::extract;
+        use axum::Extension;
+
+        let Extension(request_pool): Extension<Arc<AuthorizedPool>> = extract()
+            .await
+            .map_err(|_| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))?;
+        request_pool
+            .state
+            .as_ref()
+            .map(Arc::clone)
+            .ok_or_else(|| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))
+    }
+
     /// Begin a savepoint-backed nested unit of work inside the active request
     /// transaction. Dropping it without `commit()` marks the outer transaction
     /// rollback-only, so repository errors cannot partially commit.
     pub async fn begin(&self) -> Result<NestedAuthorizedTx, Error> {
-        let state = self.transaction_state()?;
+        let state = self.resolved_transaction_state().await?;
         let mut guard = Arc::clone(&state.transaction).lock_owned().await;
         let transaction = guard
             .as_mut()
@@ -457,10 +488,9 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         'c: 'e,
         E: 'q + Execute<'q, Postgres>,
     {
-        let state = self.transaction_state();
         Box::pin(
             stream::once(async move {
-                let state = state?;
+                let state = self.resolved_transaction_state().await?;
                 let mut guard = Arc::clone(&state.transaction).lock_owned().await;
                 let transaction = guard
                     .as_mut()
@@ -483,9 +513,8 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         'c: 'e,
         E: 'q + Execute<'q, Postgres>,
     {
-        let state = self.transaction_state();
         async move {
-            let state = state?;
+            let state = self.resolved_transaction_state().await?;
             let mut guard = Arc::clone(&state.transaction).lock_owned().await;
             let transaction = guard
                 .as_mut()
@@ -504,9 +533,8 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         'q: 'e,
         'c: 'e,
     {
-        let state = self.transaction_state();
         async move {
-            let state = state?;
+            let state = self.resolved_transaction_state().await?;
             let mut guard = Arc::clone(&state.transaction).lock_owned().await;
             let transaction = guard
                 .as_mut()
@@ -523,9 +551,8 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
     where
         'c: 'e,
     {
-        let state = self.transaction_state();
         async move {
-            let state = state?;
+            let state = self.resolved_transaction_state().await?;
             let mut guard = Arc::clone(&state.transaction).lock_owned().await;
             let transaction = guard
                 .as_mut()

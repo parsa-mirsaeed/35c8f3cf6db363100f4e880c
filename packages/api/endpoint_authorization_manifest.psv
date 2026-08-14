@@ -130,3 +130,7 @@ server|teacher/materials/delete|TeacherOnly|Teacher|session_school|teacher_mater
 server|teacher/materials/list|TeacherOnly|Teacher|session_school|teacher_class|read|bounded_list|none|dashboard_functions::get_class_materials_for_teacher|-
 server|teacher/materials/vectorization_status|TeacherOnly|Teacher|session_school|teacher_material|read|standard|none|dashboard_functions::get_vectorization_status|-
 server|teacher/materials/cancel_vectorization|TeacherOnly|Teacher|session_school|teacher_material|write|standard|required|dashboard_functions::cancel_vectorization|-
+server|parent/scoped/children|ParentOnly|Parent|session_school|parent_children|read|bounded_list|required|parent_scoped_functions::get_parent_children_scoped|-
+server|parent/scoped/child/grades|ParentOnly|Parent|session_school|parent_child|read|bounded_list|required|parent_scoped_functions::get_child_grades_for_parent_scoped|-
+server|parent/scoped/child/assignments|ParentOnly|Parent|session_school|parent_child|read|bounded_list|required|parent_scoped_functions::get_child_assignments_for_parent_scoped|-
+server|teacher/scoped/knowledge-assets/toggle|TeacherOnly|Teacher|session_school|teacher_context_asset|write|standard|required|knowledge_selection_functions::toggle_teacher_knowledge_asset_scoped|-

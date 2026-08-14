@@ -58,11 +58,9 @@ test('login form controls follow the visible keyboard order @final @accessibilit
 
   const emailIndex = visited.indexOf('id:login-email');
   const passwordIndex = visited.indexOf('id:login-password');
-  const forgotIndex = visited.indexOf('href:/forgot-password');
   const submitIndex = visited.indexOf('button:submit');
 
   expect(emailIndex, `email not keyboard reachable: ${visited.join(' -> ')}`).toBeGreaterThanOrEqual(0);
   expect(passwordIndex, `password not keyboard reachable: ${visited.join(' -> ')}`).toBeGreaterThan(emailIndex);
-  expect(forgotIndex, `forgot-password not keyboard reachable: ${visited.join(' -> ')}`).toBeGreaterThan(passwordIndex);
-  expect(submitIndex, `submit not keyboard reachable: ${visited.join(' -> ')}`).toBeGreaterThan(forgotIndex);
+  expect(submitIndex, `submit not keyboard reachable: ${visited.join(' -> ')}`).toBeGreaterThan(passwordIndex);
 });

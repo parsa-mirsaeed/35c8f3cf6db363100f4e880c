@@ -1,16 +1,16 @@
 //! Class section server functions.
 
-use crate::dioxus_fullstack::extract;
-use crate::domain::{ClassSectionId, SchoolId, SubjectId};
-use crate::models::{ClassSectionWithSubject, CreateClassSectionRequest};
-use dioxus::prelude::*;
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use crate::app_state::extract_server_state_with_rls;
+use crate::dioxus_fullstack::extract;
 #[cfg(feature = "server")]
 use crate::domain::UserInfo;
+use crate::domain::{ClassSectionId, SchoolId, SubjectId};
+use crate::models::{ClassSectionWithSubject, CreateClassSectionRequest};
 #[cfg(feature = "server")]
 use crate::repositories::traits::UserRepository;
+use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "server")]
 use uuid::Uuid;
 
@@ -132,8 +132,8 @@ pub async fn create_class_section(
         let state = extract_server_state_with_rls().await?;
         let repo = &state.services.class_section;
 
-        let subject_uuid = Uuid::parse_str(&subject_id)
-            .map_err(|_| ServerFnError::new("Invalid Subject ID"))?;
+        let subject_uuid =
+            Uuid::parse_str(&subject_id).map_err(|_| ServerFnError::new("Invalid Subject ID"))?;
 
         let user_uuid =
             Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid User ID"))?;

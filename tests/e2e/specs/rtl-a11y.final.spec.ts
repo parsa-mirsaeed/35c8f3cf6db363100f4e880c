@@ -37,17 +37,32 @@ test('login has no automated WCAG A/AA violations @final @accessibility', async 
 
 test('login form controls follow the visible keyboard order @final @accessibility', async ({ page }) => {
   await page.goto('/');
-  const email = page.locator('input[type="email"]');
-  const password = page.locator('input[type="password"]');
-  const forgotPassword = page.locator('form button[type="button"]').first();
-  const submit = page.locator('form button[type="submit"]');
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
 
-  await email.focus();
-  await expect(email).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(password).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(forgotPassword).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(submit).toBeFocused();
+  const visited: string[] = [];
+  for (let step = 0; step < 16; step += 1) {
+    await page.keyboard.press('Tab');
+    visited.push(
+      await page.evaluate(() => {
+        const element = document.activeElement;
+        if (!(element instanceof HTMLElement)) return '';
+        if (element.id) return `id:${element.id}`;
+        if (element instanceof HTMLAnchorElement) return `href:${element.getAttribute('href') ?? ''}`;
+        if (element instanceof HTMLButtonElement) return `button:${element.type}`;
+        return element.tagName.toLowerCase();
+      }),
+    );
+  }
+
+  const emailIndex = visited.indexOf('id:login-email');
+  const passwordIndex = visited.indexOf('id:login-password');
+  const forgotIndex = visited.indexOf('href:/forgot-password');
+  const submitIndex = visited.indexOf('button:submit');
+
+  expect(emailIndex, `email not keyboard reachable: ${visited.join(' -> ')}`).toBeGreaterThanOrEqual(0);
+  expect(passwordIndex, `password not keyboard reachable: ${visited.join(' -> ')}`).toBeGreaterThan(emailIndex);
+  expect(forgotIndex, `forgot-password not keyboard reachable: ${visited.join(' -> ')}`).toBeGreaterThan(passwordIndex);
+  expect(submitIndex, `submit not keyboard reachable: ${visited.join(' -> ')}`).toBeGreaterThan(forgotIndex);
 });

@@ -7,14 +7,17 @@
 use dioxus::prelude::*;
 
 #[cfg(feature = "server")]
-use crate::server_functions::dashboard_functions::{ChildAssignmentInfo, ChildGradeInfo, ChildInfo};
+use crate::server_functions::dashboard_functions::{
+    ChildAssignmentInfo, ChildGradeInfo, ChildInfo,
+};
 #[cfg(feature = "server")]
 use sqlx::Row;
 #[cfg(feature = "server")]
 use uuid::Uuid;
 
 #[cfg(feature = "server")]
-async fn parent_actor() -> Result<(Uuid, std::sync::Arc<crate::rls_context::AuthorizedPool>), ServerFnError> {
+async fn parent_actor(
+) -> Result<(Uuid, std::sync::Arc<crate::rls_context::AuthorizedPool>), ServerFnError> {
     let (user, pool) = crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
     if user.role != "Parent" {
         return Err(ServerFnError::new("Forbidden: parent role required"));
@@ -24,7 +27,8 @@ async fn parent_actor() -> Result<(Uuid, std::sync::Arc<crate::rls_context::Auth
 }
 
 #[server(endpoint = "parent/scoped/children")]
-pub async fn get_parent_children_scoped() -> Result<Vec<crate::server_functions::dashboard_functions::ChildInfo>, ServerFnError> {
+pub async fn get_parent_children_scoped(
+) -> Result<Vec<crate::server_functions::dashboard_functions::ChildInfo>, ServerFnError> {
     #[cfg(feature = "server")]
     {
         let (parent_user_id, pool) = parent_actor().await?;
@@ -85,7 +89,8 @@ pub async fn get_child_grades_for_parent_scoped(
     #[cfg(feature = "server")]
     {
         let (parent_user_id, pool) = parent_actor().await?;
-        let child_id = Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
+        let child_id =
+            Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
         require_child_owner(&pool, parent_user_id, child_id).await?;
 
         let rows = sqlx::query(
@@ -125,7 +130,9 @@ pub async fn get_child_grades_for_parent_scoped(
                 })
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()
-            .map_err(|error| ServerFnError::new(format!("Unable to decode recorded grades: {error}")))
+            .map_err(|error| {
+                ServerFnError::new(format!("Unable to decode recorded grades: {error}"))
+            })
     }
     #[cfg(not(feature = "server"))]
     Ok(Vec::new())
@@ -138,7 +145,8 @@ pub async fn get_child_assignments_for_parent_scoped(
     #[cfg(feature = "server")]
     {
         let (parent_user_id, pool) = parent_actor().await?;
-        let child_id = Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
+        let child_id =
+            Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
         require_child_owner(&pool, parent_user_id, child_id).await?;
 
         let rows = sqlx::query(
@@ -192,16 +200,19 @@ async fn require_child_owner(
     parent_user_id: Uuid,
     child_id: Uuid,
 ) -> Result<(), ServerFnError> {
-    let owned = sqlx::query_scalar::<_, i32>(
-        "SELECT 1 FROM students WHERE id = $1 AND parent_id = $2",
-    )
-    .bind(child_id)
-    .bind(parent_user_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|error| ServerFnError::new(format!("Unable to verify child access: {error}")))?;
+    let owned =
+        sqlx::query_scalar::<_, i32>("SELECT 1 FROM students WHERE id = $1 AND parent_id = $2")
+            .bind(child_id)
+            .bind(parent_user_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|error| {
+                ServerFnError::new(format!("Unable to verify child access: {error}"))
+            })?;
     if owned.is_none() {
-        return Err(ServerFnError::new("Access denied: child is not linked to this parent"));
+        return Err(ServerFnError::new(
+            "Access denied: child is not linked to this parent",
+        ));
     }
     Ok(())
 }

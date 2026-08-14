@@ -19,11 +19,13 @@ pub async fn toggle_teacher_knowledge_asset_scoped(
         use uuid::Uuid;
 
         validate_context(&request.context_scope, &request.context_key)?;
-        let (user, pool) = crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
+        let (user, pool) =
+            crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
         if user.role != "Teacher" {
             return Err(ServerFnError::new("Forbidden: teacher role required"));
         }
-        let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+        let user_id =
+            Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
         let asset_id = Uuid::parse_str(&request.asset_id)
             .map_err(|_| ServerFnError::new("Invalid knowledge asset ID"))?;
 
@@ -50,7 +52,10 @@ pub async fn toggle_teacher_knowledge_asset_scoped(
 }
 
 fn validate_context(scope: &str, key: &str) -> Result<(), ServerFnError> {
-    if !matches!(scope, "global" | "workflow" | "class" | "generation_session") {
+    if !matches!(
+        scope,
+        "global" | "workflow" | "class" | "generation_session"
+    ) {
         return Err(ServerFnError::new("Invalid knowledge context scope"));
     }
     if key.len() > MAX_CONTEXT_KEY_BYTES {

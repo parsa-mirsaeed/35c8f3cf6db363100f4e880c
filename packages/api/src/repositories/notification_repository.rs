@@ -11,11 +11,8 @@ pub struct NotificationRepository {
 }
 
 impl NotificationRepository {
-    pub fn new<T>(pool: T) -> Self {
-        let _ = pool;
-        Self {
-            pool: Arc::new(AuthorizedPool::new()),
-        }
+    pub fn new(pool: impl Into<Arc<AuthorizedPool>>) -> Self {
+        Self { pool: pool.into() }
     }
 
     /// Create a new notification

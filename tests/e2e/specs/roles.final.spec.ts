@@ -83,7 +83,7 @@ test('school manager reads only the authorized class inventory @final @workflows
 
 test('school manager sees the governed school knowledge inventory @final @workflows', async ({ page }) => {
   await signInEnglish(page, 'e2e-manager-a@example.test');
-  await page.getByRole('button', { name: /knowledge submissions/i }).click();
+  await page.getByRole('button', { name: /register governed school sources for platform review/i }).click();
 
   await expect(page.getByText('E2E Published Asset', { exact: true })).toBeVisible();
 });

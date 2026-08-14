@@ -99,7 +99,7 @@ impl AppServices {
         // Initialize shared HTTP client
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
-            .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
             .build()?;
 
         Ok(Self {
@@ -232,10 +232,9 @@ pub async fn initialize_app_state(config: Config) -> Result<(), Box<dyn std::err
 
 /// Extract application state with the exact request-bound authorization executor.
 ///
-/// Protected Dioxus server functions must use this async extractor instead of
-/// relying on the global fail-closed executor. Authentication middleware places
-/// the transaction-bound [`AuthorizedPool`] in the request extensions before
-/// dispatch. Missing request authorization is an error, never a fallback.
+/// Protected Dioxus server functions should prefer this async extractor. The
+/// compatibility extractor below delegates to the same request extraction path
+/// so legacy server functions cannot silently detach from request RLS state.
 #[cfg(feature = "server")]
 pub async fn extract_server_state_with_rls() -> Result<AppState, dioxus::prelude::ServerFnError> {
     use crate::dioxus_fullstack::extract;
@@ -260,26 +259,26 @@ pub async fn extract_server_state_with_rls() -> Result<AppState, dioxus::prelude
 #[cfg(feature = "server")]
 fn request_authorized_pool() -> Result<Option<Arc<AuthorizedPool>>, dioxus::prelude::ServerFnError>
 {
-    use dioxus::prelude::dioxus_fullstack::FullstackContext;
+    use crate::dioxus_fullstack::extract;
+    use axum::Extension;
 
-    let Some(context) = FullstackContext::current() else {
-        return Ok(None);
-    };
-    let Some(pool) = context.extension::<Arc<AuthorizedPool>>() else {
-        return Ok(None);
+    let extracted: Result<Extension<Arc<AuthorizedPool>>, _> = futures::executor::block_on(extract());
+    let Extension(pool) = match extracted {
+        Ok(pool) => pool,
+        Err(_) => return Ok(None),
     };
     pool.require_context()
         .map_err(|error| dioxus::prelude::ServerFnError::new(error.to_string()))?;
     Ok(Some(pool))
 }
 
-/// Extract server state for use in server functions.
+/// Extract server state for use in legacy server functions.
 ///
-/// Global configuration and raw infrastructure remain shared, while every
-/// request-sensitive repository is rebound to the exact AuthorizedPool placed
-/// in the current request extensions by authentication middleware. If no
-/// request-bound authorization exists, the global fail-closed pool remains in
-/// place; protected queries therefore cannot silently fall back to PgPool.
+/// Global configuration and raw infrastructure remain shared. When this is
+/// called while Dioxus is dispatching a protected request, the exact
+/// request-bound AuthorizedPool is extracted through the same Axum extension
+/// path as the async helper and all request-sensitive repositories are rebound
+/// to it. If no request context exists, the global pool remains fail-closed.
 pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError> {
     if let Some(state) = APP_STATE.get() {
         let mut state = state.clone();

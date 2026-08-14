@@ -54,7 +54,7 @@ test('teacher cannot mutate a School B knowledge asset by tampering its object I
   await expect(page.getByText('E2E School B Asset', { exact: true })).toHaveCount(0);
 
   let tamperObserved = false;
-  await page.route('**/api/teacher/knowledge-assets/toggle', async (route) => {
+  await page.route('**/api/teacher/scoped/knowledge-assets/toggle', async (route) => {
     const original = route.request().postData();
     expect(original, 'toggle request must contain an object identifier').toBeTruthy();
     expect(original).toContain(SCHOOL_A_ASSET);

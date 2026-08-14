@@ -2,8 +2,10 @@ use crate::components::skeleton::SkeletonCard;
 use crate::i18n::use_locale;
 use crate::views::role_based::components::DashboardSection;
 use crate::views::role_based::shared::common::Modal;
-use api::server_functions::dashboard_functions::{
-    get_child_assignments_for_parent, get_child_grades_for_parent, get_parent_children, ChildInfo,
+use api::server_functions::dashboard_functions::ChildInfo;
+use api::server_functions::parent_scoped_functions::{
+    get_child_assignments_for_parent_scoped, get_child_grades_for_parent_scoped,
+    get_parent_children_scoped,
 };
 use dioxus::prelude::*;
 
@@ -29,7 +31,7 @@ pub fn ChildrenSection() -> Element {
 pub fn ChildrenDetail() -> Element {
     let locale = use_locale();
     let mut active_modal = use_signal(|| None::<ChildModal>);
-    let children = use_resource(move || async move { get_parent_children().await });
+    let children = use_resource(move || async move { get_parent_children_scoped().await });
 
     rsx! {
         div { class: "space-y-6",
@@ -100,7 +102,7 @@ fn ChildGradesModal(child: ChildInfo, on_close: EventHandler) -> Element {
     let child_id = child.id.clone();
     let grades = use_resource(move || {
         let id = child_id.clone();
-        async move { get_child_grades_for_parent(id).await }
+        async move { get_child_grades_for_parent_scoped(id).await }
     });
     rsx! {
         Modal {
@@ -140,7 +142,7 @@ fn ChildAssignmentsModal(child: ChildInfo, on_close: EventHandler) -> Element {
     let child_id = child.id.clone();
     let assignments = use_resource(move || {
         let id = child_id.clone();
-        async move { get_child_assignments_for_parent(id).await }
+        async move { get_child_assignments_for_parent_scoped(id).await }
     });
     rsx! {
         Modal {

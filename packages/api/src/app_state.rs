@@ -232,9 +232,9 @@ pub async fn initialize_app_state(config: Config) -> Result<(), Box<dyn std::err
 
 /// Extract application state with the exact request-bound authorization executor.
 ///
-/// Protected Dioxus server functions should prefer this async extractor. The
-/// compatibility extractor below delegates to the same request extraction path
-/// so legacy server functions cannot silently detach from request RLS state.
+/// Protected Dioxus server functions should prefer this async extractor. It
+/// preserves the concrete transaction handle placed in request extensions by
+/// authentication middleware.
 #[cfg(feature = "server")]
 pub async fn extract_server_state_with_rls() -> Result<AppState, dioxus::prelude::ServerFnError> {
     use crate::dioxus_fullstack::extract;
@@ -256,37 +256,16 @@ pub async fn extract_server_state_with_rls() -> Result<AppState, dioxus::prelude
     Ok(state)
 }
 
-#[cfg(feature = "server")]
-fn request_authorized_pool() -> Result<Option<Arc<AuthorizedPool>>, dioxus::prelude::ServerFnError>
-{
-    use crate::dioxus_fullstack::extract;
-    use axum::Extension;
-
-    let extracted: Result<Extension<Arc<AuthorizedPool>>, _> = futures::executor::block_on(extract());
-    let Extension(pool) = match extracted {
-        Ok(pool) => pool,
-        Err(_) => return Ok(None),
-    };
-    pool.require_context()
-        .map_err(|error| dioxus::prelude::ServerFnError::new(error.to_string()))?;
-    Ok(Some(pool))
-}
-
-/// Extract server state for use in legacy server functions.
+/// Extract globally configured application state for legacy server functions.
 ///
-/// Global configuration and raw infrastructure remain shared. When this is
-/// called while Dioxus is dispatching a protected request, the exact
-/// request-bound AuthorizedPool is extracted through the same Axum extension
-/// path as the async helper and all request-sensitive repositories are rebound
-/// to it. If no request context exists, the global pool remains fail-closed.
+/// The executor facade remains fail-closed here. When a legacy repository
+/// discards its explicit handle or a Dioxus task crosses the middleware
+/// task-local boundary, `AuthorizedPool` resolves the already-authorized request
+/// transaction asynchronously at SQL execution time. This function therefore
+/// never blocks an async request to recover extensions.
 pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError> {
     if let Some(state) = APP_STATE.get() {
-        let mut state = state.clone();
-        #[cfg(feature = "server")]
-        if let Some(pool) = request_authorized_pool()? {
-            state.services = state.services.with_authorized_pool(pool);
-        }
-        return Ok(state);
+        return Ok(state.clone());
     }
 
     println!("WARNING: APP_STATE not initialized, creating new temporary state. This should not happen in production!");

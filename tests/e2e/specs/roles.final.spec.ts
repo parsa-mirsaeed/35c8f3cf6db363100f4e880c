@@ -91,9 +91,12 @@ test('school manager sees the governed school knowledge inventory @final @workfl
 test('teacher sees the persisted published assignment and governed knowledge asset @final @workflows', async ({ page }) => {
   await signInEnglish(page, 'e2e-teacher-a@example.test');
 
+  // The overview intentionally renders both persisted assignment and class context.
+  await expect(page.getByText('E2E Assignment A1', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('E2E Class A1', { exact: true }).first()).toBeVisible();
+
   await actionWithIcon(page, 'assignment').click();
   await expect(page.getByText('E2E Assignment A1', { exact: true })).toBeVisible();
-  await expect(page.getByText('E2E Class A1', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: /knowledge assets/i }).click();
   await expect(page.getByText('E2E Published Asset', { exact: true })).toBeVisible();

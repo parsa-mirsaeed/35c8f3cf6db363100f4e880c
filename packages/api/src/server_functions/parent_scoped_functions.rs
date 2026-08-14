@@ -5,7 +5,6 @@
 //! id instead of incorrectly translating through the separate `parents.id` profile key.
 
 use dioxus::prelude::*;
-use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
 use crate::server_functions::dashboard_functions::{ChildAssignmentInfo, ChildGradeInfo, ChildInfo};

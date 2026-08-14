@@ -99,7 +99,7 @@ impl AppServices {
         // Initialize shared HTTP client
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
             .build()?;
 
         Ok(Self {
@@ -228,6 +228,33 @@ pub async fn initialize_app_state(config: Config) -> Result<(), Box<dyn std::err
     println!("Global APP_STATE initialized successfully.");
 
     Ok(())
+}
+
+/// Extract application state with the exact request-bound authorization executor.
+///
+/// Protected Dioxus server functions must use this async extractor instead of
+/// relying on the global fail-closed executor. Authentication middleware places
+/// the transaction-bound [`AuthorizedPool`] in the request extensions before
+/// dispatch. Missing request authorization is an error, never a fallback.
+#[cfg(feature = "server")]
+pub async fn extract_server_state_with_rls() -> Result<AppState, dioxus::prelude::ServerFnError> {
+    use crate::dioxus_fullstack::extract;
+    use axum::Extension;
+
+    let Extension(pool): Extension<Arc<AuthorizedPool>> = extract().await.map_err(|_| {
+        dioxus::prelude::ServerFnError::new(
+            "Unauthorized: No request-scoped database authorization",
+        )
+    })?;
+    pool.require_context()
+        .map_err(|error| dioxus::prelude::ServerFnError::new(error.to_string()))?;
+
+    let mut state = APP_STATE
+        .get()
+        .cloned()
+        .ok_or_else(|| dioxus::prelude::ServerFnError::new("Application state is unavailable"))?;
+    state.services = state.services.with_authorized_pool(pool);
+    Ok(state)
 }
 
 #[cfg(feature = "server")]

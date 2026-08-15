@@ -51,6 +51,10 @@ test.afterEach(() => {
 for (const role of roles) {
   test(`${role.name} reaches the canonical dashboard and role alias @final @roles`, async ({ page }) => {
     await signIn(page, role.email);
+    // The alias assertion is a direct-route acceptance check, not a teardown
+    // race. Let canonical dashboard resources settle before forcing a full
+    // document navigation so an in-flight Wasm fetch is not aborted by the test.
+    await page.waitForLoadState('networkidle');
     const response = await page.goto(role.alias);
     expect(response === null || response.status() < 400).toBeTruthy();
     await expect(page).toHaveURL(new RegExp(`${role.alias.replaceAll('/', '\\/')}$`));
@@ -101,7 +105,7 @@ test('teacher sees the persisted published assignment and governed knowledge ass
   // Re-enter the canonical overview so this action is independent of the
   // responsive shell's desktop/mobile navigation rendering.
   await page.goto('/dashboard');
-  await page.getByRole('button', { name: /knowledge assets/i }).click();
+  await page.getByRole('button', { name: 'Knowledge assets', exact: true }).click();
   await expect(page.getByText('E2E Published Asset', { exact: true })).toBeVisible();
 });
 

@@ -56,16 +56,19 @@ test('student direct navigation to teacher-only area is denied @smoke @authoriza
   await signIn(page, STUDENT.email, STUDENT.password);
 
   const response = await page.goto('/dashboard/teacher');
-  const deniedByRedirect = /\/$|\/dashboard$/.test(new URL(page.url()).pathname);
   const deniedByStatus = response !== null && [401, 403, 404].includes(response.status());
-  const deniedByBody = await page.locator('body').evaluate((body) =>
-    /forbidden|unauthorized|access denied|not found|دسترسی/i.test(body.textContent ?? ''),
-  );
 
-  expect(
-    deniedByRedirect || deniedByStatus || deniedByBody,
-    `expected teacher-only route to deny a student (url=${page.url()}, status=${response?.status()})`,
-  ).toBeTruthy();
+  // A production Dioxus document may initially render the guarded loading shell
+  // with HTTP 200. Wait for hydrated session state to resolve before judging the
+  // route guard; redirects, explicit denial status, and the rendered denial view
+  // are all valid usability-layer outcomes.
+  await expect.poll(async () => {
+    const deniedByRedirect = /\/$|\/dashboard$/.test(new URL(page.url()).pathname);
+    const deniedByBody = await page.locator('body').evaluate((body) =>
+      /forbidden|unauthorized|access denied|not found|دسترسی/i.test(body.textContent ?? ''),
+    );
+    return deniedByRedirect || deniedByStatus || deniedByBody;
+  }).toBeTruthy();
 });
 
 test('student cannot submit a School B assignment by tampering its object ID @smoke @authorization', async ({ page }) => {

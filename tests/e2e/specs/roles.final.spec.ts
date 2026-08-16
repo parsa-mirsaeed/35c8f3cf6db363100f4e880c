@@ -174,6 +174,7 @@ test('student submission is graded by the authorized teacher and appears in pers
   const submissionCard = page
     .getByText(assignmentTitle, { exact: true })
     .locator('xpath=ancestor::div[contains(@class,"rounded-xl")][.//button[.//span[normalize-space()="grading"]]][1]');
+  await submissionCard.evaluate((element) => element.scrollIntoView({ block: 'center', inline: 'nearest' }));
   await submissionCard.locator('xpath=.//button[.//span[normalize-space()="grading"]]').click();
 
   const gradingDialog = page.getByRole('dialog');
@@ -181,7 +182,7 @@ test('student submission is graded by the authorized teacher and appears in pers
   await expect(gradingDialog.locator('#edutalent-modal-title')).toContainText('Grade Submission');
   await gradingDialog.locator('input[type="number"]').fill('91');
   await gradingDialog.locator('textarea').fill(feedback);
-  await gradingDialog.getByRole('button', { name: /^Save Grade\b/ }).click();
+  await gradingDialog.getByRole('button', { name: /Save Grade$/ }).click();
   await expect(gradingDialog).toHaveCount(0);
   await expect(page.getByText(assignmentTitle, { exact: true })).toHaveCount(0);
   await endSessionForRoleSwitch(page);

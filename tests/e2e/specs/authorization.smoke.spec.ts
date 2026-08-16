@@ -37,12 +37,9 @@ function actionWithIcon(page: Page, icon: string) {
 }
 
 function allowExpectedAuthorizationDenial(path: string): void {
-  // Dioxus server-function authorization errors currently serialize as HTTP
-  // 500. Keep the browser guard strict everywhere else while also accepting
-  // 403/404 so the test remains correct if the transport mapping improves.
-  for (const status of [403, 404, 500]) {
-    allowHttpResponse(path, status);
-  }
+  // Cross-school object IDs are intentionally collapsed to not-found so the
+  // response cannot disclose whether the target exists in another tenant.
+  allowHttpResponse(path, 404);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -97,7 +94,7 @@ test('student cannot submit a School B assignment by tampering its object ID @sm
 
   await actionWithIcon(page, 'send').click();
   await expect.poll(() => tamperObserved).toBeTruthy();
-  expect([403, 404, 500]).toContain(denialStatus);
+  expect(denialStatus).toBe(404);
   expect(denialBody).toMatch(/assignment not found|forbidden|unauthorized/i);
   await expect(page.locator('body')).toContainText(/not found|unauthorized|forbidden|failed|error|دسترسی|خطا/i);
 });
@@ -136,7 +133,7 @@ test('teacher cannot grade a School B submission by tampering its object ID @smo
   await page.locator('xpath=//button[.//span[normalize-space()="check"]]').click();
 
   await expect.poll(() => tamperObserved).toBeTruthy();
-  expect([403, 404, 500]).toContain(denialStatus);
+  expect(denialStatus).toBe(404);
   expect(denialBody).toMatch(/not owned|not found|forbidden|unauthorized/i);
   await expect(page.locator('body')).toContainText(/not owned|not found|unauthorized|forbidden|failed|error|دسترسی|خطا/i);
 });

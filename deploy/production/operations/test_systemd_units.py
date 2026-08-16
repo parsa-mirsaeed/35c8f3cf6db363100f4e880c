@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -68,13 +69,19 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
         unit = (SYSTEMD_DIR / "edutalent-restore-verify.service").read_text(
             encoding="utf-8"
         )
-        helper = (SYSTEMD_DIR / "run-latest-restore-drill").read_text(
-            encoding="utf-8"
-        )
+        helper_path = SYSTEMD_DIR / "run-latest-restore-drill"
+        helper = helper_path.read_text(encoding="utf-8")
         self.assertIn("run-latest-restore-drill", unit)
         self.assertIn("set -euo pipefail", helper)
         self.assertIn("edutalent-backup-*.tar.gz.enc.metadata.json", helper)
         self.assertIn('exec bash "${OPERATIONS_COMMAND}" restore-drill "${archive}"', helper)
+        completed = subprocess.run(
+            ["bash", "-n", str(helper_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
 if __name__ == "__main__":

@@ -105,7 +105,7 @@ test('teacher sees the persisted published assignment and governed knowledge ass
   // Re-enter the canonical overview so this action is independent of the
   // responsive shell's desktop/mobile navigation rendering.
   await page.goto('/dashboard');
-  await page.getByRole('button', { name: 'Knowledge assets', exact: true }).click();
+  await page.getByRole('button', { name: 'Knowledge Assets', exact: true }).click();
   await expect(page.getByText('E2E Published Asset', { exact: true })).toBeVisible();
 });
 

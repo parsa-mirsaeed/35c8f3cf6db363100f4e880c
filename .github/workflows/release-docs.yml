@@ -1,0 +1,47 @@
+name: Release Documentation
+
+on:
+  pull_request:
+    paths:
+      - README.md
+      - docs/release/**
+      - packages/api/endpoint_authorization_manifest.psv
+      - scripts/ci/verify_release_docs.py
+      - scripts/ci/test_verify_release_docs.py
+      - .github/workflows/release-docs.yml
+  push:
+    branches: [main]
+    paths:
+      - README.md
+      - docs/release/**
+      - packages/api/endpoint_authorization_manifest.psv
+      - scripts/ci/verify_release_docs.py
+      - scripts/ci/test_verify_release_docs.py
+      - .github/workflows/release-docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-docs-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify release documentation truth
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Compile verifier
+        run: python3 -m py_compile scripts/ci/verify_release_docs.py scripts/ci/test_verify_release_docs.py
+
+      - name: Run verifier unit tests
+        run: python3 -m unittest scripts.ci.test_verify_release_docs -v
+
+      - name: Validate feature truth, links, and secret/PII patterns
+        run: python3 scripts/ci/verify_release_docs.py

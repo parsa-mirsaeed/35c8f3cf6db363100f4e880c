@@ -1,14 +1,10 @@
 # EduTalent
 
-EduTalent is a Rust/Dioxus full-stack application with PostgreSQL, Qdrant, and a durable knowledge-ingestion worker.
+EduTalent is a Rust/Dioxus school platform with self-hosted PostgreSQL/Supabase, private Qdrant, governed knowledge ingestion, optional AI through a controlled AI Gateway, and a complete air-gapped appliance profile.
 
-The repository has one command surface for local development, packaging, and the self-hosted production foundation:
+The authoritative production/commercial documentation index is [`docs/release/README.md`](docs/release/README.md). The product capability matrix is [`docs/release/feature-matrix.md`](docs/release/feature-matrix.md).
 
-```bash
-make help
-```
-
-## Quick start
+## Quick start for development
 
 Requirements: Docker Engine with Docker Compose v2 and GNU Make.
 
@@ -17,207 +13,112 @@ make init
 make dev
 ```
 
-`make init` creates `.env` from `.env.example`. `make dev` builds and starts PostgreSQL, Qdrant, a local OpenAI-compatible Text Embeddings Inference service, the local AI Gateway, applies migrations, and runs the Dioxus app with hot reload.
+Open `http://localhost:8080`. Development uses the repository's lightweight stack and placeholder Supabase settings; login/provisioning require valid configured identity settings.
 
-Open `http://localhost:8080`.
-
-The development environment template contains placeholder Supabase credentials. The health endpoint and repository-owned services can run with the template, but login and user provisioning require valid values.
-
-## Unified commands
+## Unified command surface
 
 | Command | Purpose |
 | --- | --- |
-| `make dev` | Complete hot-reload development stack |
-| `make up` | Lightweight production-like stack using the final runtime image |
-| `make down` | Stop the lightweight stack |
-| `make logs` | Follow app logs |
-| `make ps` | Show stack status |
-| `make migrate` | Apply all canonical and incremental migrations transactionally |
-| `make build` | Build `edutalent:local` |
-| `make package` | Create a source-free application-image bundle under `dist/` |
-| `make appliance-build` | Create the complete signed air-gapped production appliance |
-| `make appliance-verify ARGS=<bundle>` | Verify an extracted appliance manifest, checksums, and signature |
-| `make smoke` | Start the lightweight stack and verify `/healthz` |
-| `make validate` | Validate shell, Compose, package, and appliance definitions |
-| `make clean` | Stop the lightweight stack and remove its local volumes |
-| `make production-bootstrap` | Materialize the exact pinned official Supabase Docker runtime |
-| `make production-init` | Generate production secrets after domains and TLS paths are configured |
-| `make production-validate` | Verify TLS, secrets, topology, AI profiles, and exposure invariants |
-| `make production-up` | Start the self-hosted production stack |
-| `make production-down` | Stop production without deleting data |
-| `make production-logs` | Follow production logs |
-| `make production-ps` | Show production service state |
+| `make dev` | Hot-reload development stack |
+| `make up` / `make down` | Lightweight production-like application stack |
+| `make migrate` | Apply canonical migrations transactionally |
+| `make build` | Build the local runtime image |
+| `make package` | Create the thin application-image bundle |
+| `make appliance-build` | Build the complete signed air-gapped appliance |
+| `make appliance-verify ARGS=<bundle>` | Verify an extracted appliance manifest/checksums/signature |
+| `make production-bootstrap` | Materialize the pinned official Supabase runtime |
+| `make production-init` | Generate production secrets after operator configuration |
+| `make production-validate` | Verify TLS, secrets, topology and AI/security invariants |
+| `make production-up` / `make production-down` | Start/stop production without deleting data |
 | `make production-migrate` | Re-run migrations and backend-role configuration |
-| `make production-database-check` | Verify the app uses the constrained non-superuser backend role |
-| `make production-gateway-check` | Verify the TLS gateway is non-root, capability-free, and using the staged mode-600 key |
-| `make production-ai-check` | Verify AI-only egress, gateway authentication, complete gateway outage tolerance, and recovery |
-| `make production-qdrant-check` | Verify authenticated Qdrant readiness over the private app network |
+| `make production-database-check` | Verify the constrained database identity |
+| `make production-gateway-check` | Verify non-root/capability-free gateway and TLS key boundary |
+| `make production-ai-check` | Verify AI-only egress, auth/tenant boundaries, outage tolerance/recovery |
+| `make production-qdrant-check` | Verify authenticated private Qdrant readiness |
 
-Pass a version through `ARGS`:
+The same commands are available through `bash edutalent ...`.
 
-```bash
-make package ARGS=v0.4.0
-make appliance-build ARGS=v1.0.0
-```
+## Production architecture
 
-The same interface is available without Make:
+Production uses the complete pinned official self-hosted Supabase topology with Supabase PostgreSQL as the authoritative database, private authenticated Qdrant, a local AI Gateway, and a single Caddy ingress gateway.
 
-```bash
-bash edutalent dev
-bash edutalent package v0.4.0
-bash edutalent appliance-build v1.0.0
-bash edutalent production-validate
-```
+Key invariants:
 
-## Development stack
+- only the gateway publishes host TCP ports 80/443;
+- PostgreSQL/Supabase internals, Qdrant, Studio/administration internals, TEI and AI Gateway internals are not directly published;
+- the gateway runs as a numeric non-root identity with zero effective Linux capabilities;
+- the long-running application uses a generated non-superuser database identity separated from bootstrap/migration authority;
+- that application identity is `NOBYPASSRLS` and requests establish transaction-scoped PostgreSQL authorization context, so RLS complements server-side role/tenant/object authorization;
+- public signup, anonymous/phone auth, Studio AI and default public/internal services not required by EduTalent are disabled/restricted by production configuration;
+- the first supported production topology is single-node and is **not highly available**.
 
-`compose.yaml` defines two application modes over the same lightweight dependencies:
+Start from [`deploy/production/README.md`](deploy/production/README.md) and the supported-host contract in [`deploy/production/HOST_BASELINE.md`](deploy/production/HOST_BASELINE.md). Real host qualification, measured school RPO/RTO/load and human/operator/security sign-off are manual/external release evidence and are not inferred from CI.
 
-- `dev`: source-mounted Dioxus hot reload;
-- `app`: the same final runtime image used for application packaging.
+## AI modes
 
-Both modes use:
+The application and ingestion worker call only the local AI Gateway. Browser/application code does not receive provider credentials or arbitrary provider destinations.
 
-- PostgreSQL 16;
-- Qdrant;
-- the local AI Gateway;
-- Hugging Face Text Embeddings Inference using `BAAI/bge-small-en-v1.5` and 384-dimensional vectors;
-- the canonical migration runner in `scripts/ci/apply_migrations.sh`.
+### Connected AI
 
-The app talks only to `http://ai-gateway:8090`; it never receives provider keys or provider destinations. Local TEI is reached through the same gateway contract used by connected OpenAI embeddings.
+Connected mode permits only code/configuration-approved provider origins/models. Requests carry internal gateway authentication and authoritative school identity. Provider redirects are disabled. Current production profiles include a fixed OpenAI embedding profile and the approved LLM provider profile documented by the controlled-AI architecture.
 
-On ARM64, override the embedding image in `.env`:
+### Degraded AI
 
-```dotenv
-TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-arm64-1.9
-```
+AI Gateway/provider availability is not a core login/service health criterion. On outage, core school operations remain healthy, AI-backed calls degrade in a controlled way, and durable embedding/personalization work retries with bounded backoff.
 
-Do not run `dev` and `app` simultaneously because both publish the application on the configured `EDUTALENT_PORT`.
+### Fully offline/local AI
 
-## Self-hosted production foundation
+The local profile uses packaged local model artifacts and a separate immutable embedding/vector collection contract. The complete air-gapped appliance includes required images/models and proves no-pull startup. Automatic fallback between embedding spaces is forbidden.
 
-Production does **not** use the lightweight standalone PostgreSQL/Supabase arrangement. It uses:
+See [`docs/adr/0002-controlled-external-ai.md`](docs/adr/0002-controlled-external-ai.md) and [`docs/adr/0003-air-gapped-appliance-and-ghcr.md`](docs/adr/0003-air-gapped-appliance-and-ghcr.md).
 
-- the complete official self-hosted Supabase Docker topology pinned to an immutable upstream commit;
-- Supabase PostgreSQL as the single authoritative database;
-- a generated non-superuser backend database role for the long-running app, separated from the migration/bootstrap administrator;
-- private Qdrant with API authentication;
-- a gateway-only host-ingress bridge plus separate internal API, data, administration, and AI networks;
-- one AI Gateway as the only service attached to the non-internal AI egress network;
-- operator-supplied static TLS staged into a Docker-managed volume;
-- a numeric non-root Caddy gateway with zero effective Linux capabilities;
-- host ports 80/443 mapped to unprivileged container ports 8080/8443;
-- generated asymmetric Supabase signing keys and opaque API keys;
-- disabled public signup, anonymous/phone auth, cloud SMTP defaults, Studio AI,
-  and default Edge Functions startup/ingress, while retaining password login
-  for administratively provisioned email users.
+## Product scope truthfulness
 
-Start with:
+The exact enabled/optional/disabled/excluded scope is documented in [`docs/release/feature-matrix.md`](docs/release/feature-matrix.md) and checked against `docs/release/product-capabilities.json` plus `packages/api/endpoint_authorization_manifest.psv`.
 
-```bash
-make production-bootstrap
-make production-init
-# Edit deploy/production/.env.edutalent when prompted, then run init again.
-make production-init
-make production-validate
-make production-up
-make production-database-check
-make production-gateway-check
-make production-ai-check
-make production-qdrant-check
-```
+Deliberately disabled first-contract product areas include attendance, timetable management, grade trends, parent reports, parent/teacher messaging, school-manager reports, derived academic metrics, and synthetic in-product health.
 
-The database check proves the app is not connected as `postgres`, cannot create roles/databases/schema objects or modify migration integrity state, and uses only the documented backend authority. That role intentionally has `BYPASSRLS` because the current Rust repository layer performs server-side authorization without transaction-local PostgreSQL request context; replacing it with a request-scoped `NOBYPASSRLS` role is tracked in issue #8. Supabase client roles remain governed by RLS.
+Do not infer a commercial feature merely because a database table, legacy component, route stub, or disabled server function exists.
 
-The gateway check proves host ports 80/443 are actually published, the long-running proxy is non-root with no effective capabilities, and it reads a mode-600 private key owned by its configured numeric UID/GID. Qdrant readiness is verified separately because temporary vector-service unavailability must not prevent the core school platform and authentication services from starting. Durable ingestion jobs remain retryable.
+## Production operations and recovery
 
-## Controlled external AI
+Production operations include encrypted backups, verified restore, WAL/PITR, Qdrant recovery/reindex procedures, local monitoring/alerts, bounded load/restart exercises, hardened maintenance timers, verified off-appliance backup/WAL copy helpers, and maintenance/key/certificate/model rotation procedures.
 
-The application and ingestion worker send school-scoped requests to the local AI Gateway. Every request requires the internal gateway token plus the authoritative non-nil school ID resolved from PostgreSQL. There is no installation-wide default tenant identity.
+Use [`deploy/production/operations/README.md`](deploy/production/operations/README.md), [`deploy/production/operations/MAINTENANCE_ROTATION.md`](deploy/production/operations/MAINTENANCE_ROTATION.md), and the release operator manual [`docs/release/operator-manual-v1.0.md`](docs/release/operator-manual-v1.0.md).
 
-Connected mode permits only:
-
-- OpenAI embeddings at `https://api.openai.com/v1/`;
-- the approved LLM at `https://api.deepseek.com/v1/`.
-
-Provider origins and models are fixed in code. Redirects are disabled. Provider credentials exist only in the AI Gateway environment, and the app has no startup or health dependency on the gateway. If the gateway or either provider is unavailable, core login and school operations remain healthy, AI calls return a controlled temporary-unavailable response, and durable embedding work remains queued with bounded backoff.
-
-Embedding profiles are immutable contracts:
-
-| Profile | Model | Dimensions | Qdrant collection |
-| --- | --- | ---: | --- |
-| `openai-v1` | `text-embedding-3-small` | 1536 | `edutalent_openai_v1` |
-| `local-bge-v1` | `BAAI/bge-small-en-v1.5` | 384 | `edutalent_materials_local_v1` |
-
-The unchanged local BGE profile deliberately retains the existing production collection name `edutalent_materials_local_v1`, so upgrades keep previously indexed local vectors available. The OpenAI profile uses its own collection. Changing either model or dimensions still requires a distinct collection and complete re-index; automatic fallback between vector spaces is forbidden.
-
-See [`deploy/production/README.md`](deploy/production/README.md), the [production architecture decision](docs/adr/0001-offline-first-production-architecture.md), the [controlled AI decision](docs/adr/0002-controlled-external-ai.md), the [production threat model](docs/security/production-threat-model.md), and the [controlled AI threat model](docs/security/controlled-external-ai-threat-model.md).
+Availability, RPO and RTO become customer commitments only when measured/accepted for the deployed school environment and written into the signed service schedule. CI thresholds are regression evidence, not an SLA.
 
 ## Release editions
 
 ### Thin application bundle
 
-```bash
-make package ARGS=v0.4.0
-```
-
-This creates `dist/edutalent-v0.4.0.tar.gz` containing the EduTalent application image, lightweight release Compose file, environment template, and checksum. It is intended for connected preparation environments and is not the complete production appliance.
+`make package ARGS=<version>` creates the source-free application-image bundle for connected preparation/use. It is not the complete offline appliance.
 
 ### Full air-gapped appliance
 
-```bash
-EDUTALENT_APPLIANCE_PLATFORM=linux/amd64 \
-EDUTALENT_APPLIANCE_SIGNING_MODE=ephemeral \
-  make appliance-build ARGS=v1.0.0
-```
+`make appliance-build ARGS=<version>` builds the complete production appliance with exact image inventory, local model artifacts, immutable manifest/checksums, SBOMs, signatures/provenance, pinned Supabase runtime, offline installer/secret generation, and registry-disabled first-start proof. Protected release tags publish versioned/commit-addressed custom images; no production `latest` identity is used.
 
-The full appliance exports every image from the rendered production topology, including optional local TEI and profile-gated Supabase services. It also contains:
+See [`deploy/appliance/README.md`](deploy/appliance/README.md).
 
-- the pinned local BGE model at an immutable revision;
-- local image archives and a Compose override with `pull_policy: never`;
-- source registry digests and archive checksums in one immutable manifest;
-- SPDX SBOMs for every image and the release filesystem;
-- cosign signatures and verification policy;
-- the pinned Supabase runtime and production configuration templates;
-- an offline installer, secret generator, diagnostics, and first-start proof.
+## Security boundaries
 
-The installer generates all deployment secrets on the target host through a packaged tools image with networking disabled. Operator TLS files are supplied separately and never enter release artifacts. See [`deploy/appliance/README.md`](deploy/appliance/README.md), the [air-gapped packaging ADR](docs/adr/0003-air-gapped-appliance-and-ghcr.md), and the [release threat model](docs/security/air-gapped-release-threat-model.md).
+Production must not:
 
-## Container build
+- bypass transaction-scoped PostgreSQL/RLS or server role/tenant/object authorization;
+- retrieve Qdrant material before database authorization or broaden exact asset filters;
+- expose unpublished/archived governed material;
+- place database/Qdrant/provider/internal-gateway secrets in browser code;
+- use an installation-wide fallback school identity for AI;
+- mix embedding models/dimensions in one Qdrant collection;
+- make AI provider/gateway availability a core service health criterion;
+- expose backend/data/internal AI services directly to the host network;
+- pull untracked images/models during accepted air-gapped startup;
+- accept unsigned/tampered/wrong-platform/untracked appliance payloads.
 
-The multi-stage `Dockerfile` performs the entire application build from source:
+Architecture/security evidence: [`docs/adr/0001-offline-first-production-architecture.md`](docs/adr/0001-offline-first-production-architecture.md), [`docs/adr/0005-transaction-scoped-rls.md`](docs/adr/0005-transaction-scoped-rls.md), [`docs/security/production-threat-model.md`](docs/security/production-threat-model.md), and [`docs/release/api-security-inventory.md`](docs/release/api-security-inventory.md).
 
-1. installs Dioxus CLI `0.7.2` and the WASM target;
-2. builds the dedicated AI Gateway binary;
-3. runs `dx bundle --web --release --package web`;
-4. copies the Dioxus `server`, AI Gateway executable, and public assets into a slim runtime;
-5. packages migrations plus the migration and database-role configuration runners;
-6. exposes `/healthz` and starts the durable knowledge worker with the web server.
+## Contract/privacy/security review pack
 
-The old manually committed `bin-build` path is no longer used. `build-for-render.sh` remains only as a compatibility wrapper around the unified command.
+The `docs/release/` package contains the versioned operator guide, role guides, feature/exclusion matrix, API/security architecture inventory, privacy/governance draft, security-response/governance process, procurement questionnaire, support/service definition, commercial feature schedule and counsel inputs.
 
-## GitHub packages and artifacts
-
-The Package workflow continues to build and verify the thin application bundle. The Air-gapped Appliance workflow builds and starts the complete offline appliance on its exact SHA, verifies all local archives, SBOMs, signatures, model artifacts, and no-pull startup, and builds custom images for `linux/amd64` and `linux/arm64`.
-
-Protected `v*` tags publish versioned and commit-addressed custom images to GHCR. Buildx emits SBOM and provenance attestations, GitHub emits build-provenance attestations, and cosign signs the published image indexes with GitHub OIDC. No `latest` tag is published.
-
-No production secrets are stored in the repository, image layers, workflow artifacts, or release bundle.
-
-## Security invariants
-
-Production packaging and deployment must not:
-
-- reintroduce teacher PDF uploads;
-- bypass the durable ingestion queue;
-- weaken PostgreSQL/RLS or application authorization;
-- retrieve from Qdrant before database authorization;
-- broaden exact authorized asset filters;
-- expose unpublished or archived materials;
-- place Supabase secret keys, database credentials, Qdrant keys, provider keys, provider destinations, or the internal AI Gateway token in browser code;
-- use an installation-wide school ID fallback for AI requests;
-- mix embedding models or dimensions in one Qdrant collection;
-- make provider or AI Gateway availability a core application health criterion;
-- expose PostgreSQL, Supavisor, Qdrant, Studio, TEI, the AI Gateway, or internal Supabase services directly to the host network;
-- fetch an image or model during first air-gapped startup;
-- accept an unsigned, tampered, wrong-platform, or untracked appliance payload.
+Those documents are engineering/business inputs. Qualified human accessibility, target-host/operator, independent security/penetration, privacy/legal and final contract approvals are tracked separately in the manual/external acceptance PR and must not be replaced by AI or CI evidence.

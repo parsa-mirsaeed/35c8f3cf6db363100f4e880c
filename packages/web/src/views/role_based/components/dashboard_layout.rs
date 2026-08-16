@@ -163,6 +163,7 @@ pub fn MobileDashboardLayout(
                                 rsx! {
                                     button {
                                         class: "flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition-all duration-200 min-w-0 flex-1",
+                                        "aria-label": item.label.as_str(),
                                         onclick: move |_| on_navigate.call(item_id.clone()),
                                         
                                         div {
@@ -171,7 +172,11 @@ pub fn MobileDashboardLayout(
                                             } else {
                                                 "w-10 h-10 flex items-center justify-center rounded-xl text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-200"
                                             },
-                                            span { class: "material-icons-outlined text-xl", "{item.icon}" }
+                                            span {
+                                                class: "material-icons-outlined text-xl",
+                                                "aria-hidden": "true",
+                                                "{item.icon}"
+                                            }
                                         }
                                         
                                         span {
@@ -254,7 +259,6 @@ pub fn DashboardSection(
                         class: "text-lg md:text-2xl font-bold text-gray-900 dark:text-white mb-0.5 md:mb-1 tracking-tight",
                         "{title}"
                     }
-
                     if let Some(desc) = description {
                         p {
                             class: "text-xs md:text-sm text-gray-500 dark:text-gray-400 font-medium",

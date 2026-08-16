@@ -69,13 +69,15 @@ pub fn Sidebar(
                         let item_id = item.id.clone();
 
                         rsx! {
-                            a {
+                            button {
                                 class: "flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group relative {active_class}",
+                                "aria-label": item.label.as_str(),
                                 onclick: move |_| on_navigate.call(item_id.clone()),
                                 title: if is_collapsed { item.label.as_str() } else { "" },
                                 
                                 span { 
-                                    class: "material-icons-outlined transition-colors duration-200 group-hover:scale-110", 
+                                    class: "material-icons-outlined transition-colors duration-200 group-hover:scale-110",
+                                    "aria-hidden": "true",
                                     "{item.icon}" 
                                 }
                                 

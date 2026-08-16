@@ -149,7 +149,7 @@ test('student submission is graded by the authorized teacher and appears in pers
     .locator('div.fixed.inset-0.z-50')
     .filter({ hasText: assignmentTitle });
   await expect(detailsOverlay).toBeVisible();
-  await detailsOverlay.getByRole('button', { name: 'Start Assignment', exact: true }).click();
+  await detailsOverlay.getByRole('button', { name: /Start Assignment$/ }).click();
 
   const workEditor = page.locator('textarea').first();
   await expect(workEditor).toBeVisible();

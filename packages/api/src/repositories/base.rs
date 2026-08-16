@@ -15,11 +15,20 @@ pub struct BaseRepository {
 }
 
 impl BaseRepository {
+    /// Legacy constructor retained for repository paths that have not yet been
+    /// migrated to an explicit request/job authorization handle. It remains
+    /// fail-closed by creating an executor with no transaction context.
     pub fn new<T>(pool: T) -> Self {
         let _ = pool;
         Self {
             pool: Arc::new(AuthorizedPool::new()),
         }
+    }
+
+    /// Preserve the exact request/job-scoped executor supplied by the caller.
+    /// Protected production repositories should use this constructor.
+    pub fn from_authorized_pool(pool: Arc<AuthorizedPool>) -> Self {
+        Self { pool }
     }
 }
 

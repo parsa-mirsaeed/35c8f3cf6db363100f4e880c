@@ -107,9 +107,8 @@ impl AppServices {
             audit_service,
             supabase_service,
             raw_pool: arc_pool.clone(),
-            pool: authorized_pool.clone(),
+            pool: authorized_pool,
             http_client,
-            // Map to fields expected by server functions
             user: user_repository,
             student: student_repository,
             teacher: teacher_repository,
@@ -120,9 +119,42 @@ impl AppServices {
         })
     }
 
+    /// Rebuild request-sensitive repositories/services around one exact
+    /// transaction-bound executor while retaining immutable/shared dependencies.
+    fn with_authorized_pool(&self, authorized_pool: Arc<AuthorizedPool>) -> Self {
+        let user_repository = Arc::new(UserRepository::new(authorized_pool.clone()));
+        let student_repository = Arc::new(StudentRepository::new(authorized_pool.clone()));
+        let teacher_repository = Arc::new(TeacherRepository::new(authorized_pool.clone()));
+        let parent_repository = Arc::new(ParentRepository::new(authorized_pool.clone()));
+        let audit_repository = Arc::new(AuditLogRepository::new(authorized_pool.clone()));
+        let school_repository = Arc::new(SchoolRepository::new(authorized_pool.clone()));
+        let class_section_repository =
+            Arc::new(ClassSectionRepository::new(authorized_pool.clone()));
+        let subject_repository = Arc::new(SubjectRepository::new(authorized_pool.clone()));
+
+        Self {
+            validation_service: Arc::new(ValidationService::new(
+                user_repository.clone(),
+                student_repository.clone(),
+                teacher_repository.clone(),
+            )),
+            audit_service: Arc::new(AuditService::new(audit_repository)),
+            supabase_service: self.supabase_service.clone(),
+            raw_pool: self.raw_pool.clone(),
+            pool: authorized_pool,
+            http_client: self.http_client.clone(),
+            user: user_repository,
+            student: student_repository,
+            teacher: teacher_repository,
+            parent: parent_repository,
+            school: school_repository,
+            class_section: class_section_repository,
+            subject: subject_repository,
+        }
+    }
+
     /// Create services for testing with mock implementations
     pub fn new_for_testing() -> Self {
-        // This would be used in tests with mock repositories
         todo!("Implement testing services")
     }
 }
@@ -137,15 +169,12 @@ pub async fn initialize_app_services(config: Config) -> Result<(), Box<dyn std::
     let mut services = None;
     let mut error = None;
 
-    APP_SERVICES_INIT.call_once(|| {
-        // Use a blocking runtime for the async initialization
-        match tokio::runtime::Runtime::new() {
-            Ok(rt) => match rt.block_on(AppServices::new(config.clone())) {
-                Ok(s) => services = Some(s),
-                Err(e) => error = Some(e),
-            },
-            Err(e) => error = Some(e.into()),
-        }
+    APP_SERVICES_INIT.call_once(|| match tokio::runtime::Runtime::new() {
+        Ok(rt) => match rt.block_on(AppServices::new(config.clone())) {
+            Ok(s) => services = Some(s),
+            Err(e) => error = Some(e),
+        },
+        Err(e) => error = Some(e.into()),
     });
 
     if let Some(err) = error {
@@ -201,17 +230,46 @@ pub async fn initialize_app_state(config: Config) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-/// Extract server state for use in server functions
-/// This function can be used by Dioxus server functions to access application state
+/// Extract application state with the exact request-bound authorization executor.
+///
+/// Protected Dioxus server functions should prefer this async extractor. It
+/// preserves the concrete transaction handle placed in request extensions by
+/// authentication middleware.
+#[cfg(feature = "server")]
+pub async fn extract_server_state_with_rls() -> Result<AppState, dioxus::prelude::ServerFnError> {
+    use crate::dioxus_fullstack::extract;
+    use axum::Extension;
+
+    let Extension(pool): Extension<Arc<AuthorizedPool>> = extract().await.map_err(|_| {
+        dioxus::prelude::ServerFnError::new(
+            "Unauthorized: No request-scoped database authorization",
+        )
+    })?;
+    pool.require_context()
+        .map_err(|error| dioxus::prelude::ServerFnError::new(error.to_string()))?;
+
+    let mut state = APP_STATE
+        .get()
+        .cloned()
+        .ok_or_else(|| dioxus::prelude::ServerFnError::new("Application state is unavailable"))?;
+    state.services = state.services.with_authorized_pool(pool);
+    Ok(state)
+}
+
+/// Extract globally configured application state for legacy server functions.
+///
+/// The executor facade remains fail-closed here. When a legacy repository
+/// discards its explicit handle or a Dioxus task crosses the middleware
+/// task-local boundary, `AuthorizedPool` resolves the already-authorized request
+/// transaction asynchronously at SQL execution time. This function therefore
+/// never blocks an async request to recover extensions.
 pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError> {
-    // Try to get existing state first
     if let Some(state) = APP_STATE.get() {
         return Ok(state.clone());
     }
 
     println!("WARNING: APP_STATE not initialized, creating new temporary state. This should not happen in production!");
 
-    // If not initialized, create it on-demand (for development)
     let config = crate::config::Config::from_env().map_err(|e| {
         dioxus::prelude::ServerFnError::new(format!("Failed to load config: {}", e))
     })?;
@@ -236,7 +294,6 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
     );
 
     // Initialize ALL repositories here for the on-demand state as well
-    let arc_pool = pool.clone();
     let authorized_pool = Arc::new(AuthorizedPool::new());
     let user_repository = Arc::new(UserRepository::new(authorized_pool.clone()));
     let student_repository = Arc::new(StudentRepository::new(authorized_pool.clone()));
@@ -265,7 +322,7 @@ pub fn extract_server_state() -> Result<AppState, dioxus::prelude::ServerFnError
             audit_service: Arc::new(AuditService::new(audit_repository)),
             supabase_service: Arc::new(SupabaseAdminService::new(config.supabase.clone())),
             raw_pool: pool.clone(),
-            pool: authorized_pool.clone(),
+            pool: authorized_pool,
             http_client,
 
             user: user_repository,

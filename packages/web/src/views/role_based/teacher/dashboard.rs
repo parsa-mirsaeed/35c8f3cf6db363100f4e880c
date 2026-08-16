@@ -1,11 +1,12 @@
 use crate::application::AuthHooks;
 use crate::i18n::use_locale;
 use crate::views::role_based::components::ResponsiveDashboardLayout;
-use crate::views::role_based::TeacherKnowledgeAssetsSection;
 use api::server_functions::dashboard_functions::{
     get_teacher_assignments, get_teacher_dashboard_stats,
 };
 use dioxus::prelude::*;
+
+use super::TeacherKnowledgeAssetsScoped;
 
 #[component]
 pub fn TeacherDashboard() -> Element {
@@ -17,7 +18,7 @@ pub fn TeacherDashboard() -> Element {
         let content = match section.as_str() {
             "classes" => rsx! { super::classes::Classes {} },
             "assignments" => rsx! { super::assignments::Assignments {} },
-            "knowledge-assets" => rsx! { TeacherKnowledgeAssetsSection {} },
+            "knowledge-assets" => rsx! { TeacherKnowledgeAssetsScoped {} },
             "students" => rsx! { super::students::Students {} },
             "submissions" => rsx! { super::submissions::Submissions {} },
             _ => {

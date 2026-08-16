@@ -1,6 +1,7 @@
 use axum::{
+    body::{to_bytes, Body},
     extract::{ConnectInfo, Request},
-    http::StatusCode,
+    http::{header, StatusCode},
     middleware::Next,
     response::Response,
     Extension,
@@ -8,7 +9,7 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 use tracing::{debug, error, warn};
 
 use crate::app_state::AppState;
@@ -24,6 +25,9 @@ static REFRESH_RATE_LIMITER: Lazy<AuthRateLimiter> = Lazy::new(AuthRateLimiter::
 
 const LOGIN_PATH: &str = "/api/auth/login";
 const LOGOUT_PATH: &str = "/api/auth/logout";
+const STUDENT_SUBMISSION_PATH: &str = "/api/submissions/submit";
+const TEACHER_GRADE_PATH: &str = "/api/teacher/submissions/grade";
+const MAX_SERVER_ERROR_BODY_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct RefreshGrantResponse {
@@ -192,9 +196,61 @@ fn refresh_response_records_failure(status: u16) -> bool {
     refresh_rejection_invalidates_session(status) || status == 429
 }
 
+fn is_scoped_object_denial(path: &str, message: &str) -> bool {
+    matches!(
+        (path, message),
+        (STUDENT_SUBMISSION_PATH, "Assignment not found")
+            | (
+                TEACHER_GRADE_PATH,
+                "Submission not found or not owned by you"
+            )
+    )
+}
+
+/// Dioxus' generic `ServerFnError::new` transport defaults to HTTP 500. These
+/// two object-scoped mutation paths intentionally collapse cross-tenant targets
+/// into not-found responses. Preserve transaction rollback on the original 500,
+/// then normalize only the exact known denial payloads to HTTP 404. Unrelated
+/// application and database failures remain 500 and therefore stay visible.
+async fn normalize_scoped_object_denial(path: &str, response: Response) -> Response {
+    if response.status() != StatusCode::INTERNAL_SERVER_ERROR
+        || !matches!(path, STUDENT_SUBMISSION_PATH | TEACHER_GRADE_PATH)
+    {
+        return response;
+    }
+
+    let (mut parts, body) = response.into_parts();
+    let body = match to_bytes(body, MAX_SERVER_ERROR_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(error) => {
+            error!(%error, path, "Unable to inspect scoped server-function error body");
+            return Response::from_parts(parts, Body::from("Internal server error"));
+        }
+    };
+
+    let message = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/data/ServerError/message")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+        });
+
+    if message
+        .as_deref()
+        .is_some_and(|message| is_scoped_object_denial(path, message))
+    {
+        parts.status = StatusCode::NOT_FOUND;
+        parts.headers.remove(header::CONTENT_LENGTH);
+    }
+
+    Response::from_parts(parts, Body::from(body))
+}
+
 async fn run_with_session(
     state: &AppState,
-    request: Request,
+    mut request: Request,
     next: Next,
     session: crate::session_security::ActiveSession,
 ) -> Result<Response, StatusCode> {
@@ -207,15 +263,23 @@ async fn run_with_session(
             error!(%error, "Failed to begin authorized request transaction");
             StatusCode::SERVICE_UNAVAILABLE
         })?;
+    let request_path = request.uri().path().to_owned();
 
-    tx.scope(next.run(request), |response| {
-        !response.status().is_client_error() && !response.status().is_server_error()
-    })
-    .await
-    .map_err(|error| {
-        error!(%error, "Failed to finalize authorized request transaction");
-        StatusCode::SERVICE_UNAVAILABLE
-    })
+    request
+        .extensions_mut()
+        .insert(Arc::new(tx.authorized_pool()));
+
+    let response = tx
+        .scope(next.run(request), |response| {
+            !response.status().is_client_error() && !response.status().is_server_error()
+        })
+        .await
+        .map_err(|error| {
+            error!(%error, "Failed to finalize authorized request transaction");
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+
+    Ok(normalize_scoped_object_denial(&request_path, response).await)
 }
 
 async fn token_user_id(state: &AppState, token: &str) -> Result<String, SessionValidationError> {
@@ -305,6 +369,30 @@ mod tests {
         ));
         assert!(!refresh_response_records_failure(
             StatusCode::SERVICE_UNAVAILABLE.as_u16()
+        ));
+    }
+
+    #[test]
+    fn only_exact_scoped_object_denials_are_normalized() {
+        assert!(is_scoped_object_denial(
+            STUDENT_SUBMISSION_PATH,
+            "Assignment not found"
+        ));
+        assert!(is_scoped_object_denial(
+            TEACHER_GRADE_PATH,
+            "Submission not found or not owned by you"
+        ));
+        assert!(!is_scoped_object_denial(
+            STUDENT_SUBMISSION_PATH,
+            "Unable to process submission"
+        ));
+        assert!(!is_scoped_object_denial(
+            TEACHER_GRADE_PATH,
+            "Failed to save grade"
+        ));
+        assert!(!is_scoped_object_denial(
+            "/api/teacher/submissions/pending",
+            "Submission not found or not owned by you"
         ));
     }
 }

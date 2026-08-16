@@ -94,11 +94,20 @@ fn ClassGradesModal(class: StudentClassView, on_close: EventHandler) -> Element 
                                 div { class: "p-4 border border-gray-200 dark:border-gray-700 rounded-lg flex justify-between gap-4",
                                     div {
                                         h4 { class: "font-semibold text-gray-900 dark:text-white", "{grade.assignment_title}" }
-                                        p { class: "text-sm text-gray-500 dark:text-gray-400", "{grade.graded_at}" }
+                                        p {
+                                            class: "text-sm text-gray-500 dark:text-gray-400",
+                                            bdi { dir: "ltr", "{grade.graded_at}" }
+                                        }
                                     }
                                     div { class: "text-right",
-                                        p { class: "font-bold text-primary", "{grade.grade}" }
-                                        p { class: "text-xs text-gray-500", "{grade.points}" }
+                                        p {
+                                            class: "font-bold text-primary",
+                                            bdi { dir: "ltr", "{grade.grade}" }
+                                        }
+                                        p {
+                                            class: "text-xs text-gray-500",
+                                            bdi { dir: "ltr", "{grade.points}" }
+                                        }
                                     }
                                 }
                             }

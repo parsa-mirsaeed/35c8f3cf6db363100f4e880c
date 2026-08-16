@@ -1,7 +1,7 @@
 use crate::application::AuthHooks;
 use crate::i18n::use_locale;
 use crate::views::role_based::components::ResponsiveDashboardLayout;
-use api::server_functions::dashboard_functions::get_parent_children;
+use api::server_functions::parent_scoped_functions::get_parent_children_scoped;
 use dioxus::prelude::*;
 
 #[component]
@@ -45,7 +45,7 @@ pub fn ParentDashboard() -> Element {
 #[component]
 pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
-    let children = use_resource(move || async move { get_parent_children().await });
+    let children = use_resource(move || async move { get_parent_children_scoped().await });
 
     rsx! {
         div { class: "space-y-6",

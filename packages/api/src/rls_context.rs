@@ -126,27 +126,83 @@ impl AuthorizedActor {
 /// Executor facade used by all long-running application repositories.
 ///
 /// SQLx documents that `&Pool` does not guarantee successive queries use one
-/// physical connection. This facade instead requires an active [`AuthorizedTx`]
-/// scope and routes each query to that exact transaction.
+/// physical connection. This facade instead requires a live [`AuthorizedTx`]
+/// and routes each query to that exact transaction. Request middleware binds a
+/// concrete transaction state into the facade before Dioxus dispatch; bounded
+/// worker jobs may continue to resolve the active task-local transaction.
 #[derive(Clone, Default)]
-pub struct AuthorizedPool;
+pub struct AuthorizedPool {
+    state: Option<Arc<AuthorizedTransactionState>>,
+}
 
 impl AuthorizedPool {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
+    /// Compatibility check for callers that intentionally execute inside an
+    /// [`AuthorizedTx::scope`] task-local (for example bounded workers).
     pub fn require_scope() -> Result<(), RlsContextError> {
         ACTIVE_AUTHORIZED_TRANSACTION
             .try_with(|_| ())
             .map_err(|_| RlsContextError::TransactionRequired)
     }
 
+    /// Require either a request-bound transaction handle or an active bounded
+    /// task-local scope. This synchronous check is used only when the caller
+    /// already owns an explicit request handle. SQL execution also supports the
+    /// async Dioxus request-extension fallback in [`resolved_transaction_state`].
+    pub fn require_context(&self) -> Result<(), RlsContextError> {
+        self.transaction_state()
+            .map(|_| ())
+            .map_err(|_| RlsContextError::TransactionRequired)
+    }
+
+    fn from_state(state: Arc<AuthorizedTransactionState>) -> Self {
+        Self { state: Some(state) }
+    }
+
+    fn transaction_state(&self) -> Result<Arc<AuthorizedTransactionState>, Error> {
+        match &self.state {
+            Some(state) => Ok(Arc::clone(state)),
+            None => active_transaction(),
+        }
+    }
+
+    /// Resolve an authorization transaction for an async SQL operation.
+    ///
+    /// Request middleware inserts an `Arc<AuthorizedPool>` carrying the exact
+    /// transaction into Axum request extensions. Some legacy repository
+    /// constructors still create a stateless facade, and Dioxus may execute a
+    /// server-function future outside the middleware's Tokio task-local scope.
+    /// In that case we recover only the already-authorized request handle from
+    /// Dioxus's request extractor. There is never a raw-pool fallback.
+    async fn resolved_transaction_state(&self) -> Result<Arc<AuthorizedTransactionState>, Error> {
+        if let Some(state) = &self.state {
+            return Ok(Arc::clone(state));
+        }
+        if let Ok(state) = active_transaction() {
+            return Ok(state);
+        }
+
+        use crate::dioxus_fullstack::extract;
+        use axum::Extension;
+
+        let Extension(request_pool): Extension<Arc<AuthorizedPool>> = extract()
+            .await
+            .map_err(|_| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))?;
+        request_pool
+            .state
+            .as_ref()
+            .map(Arc::clone)
+            .ok_or_else(|| Error::Protocol(MISSING_SCOPE_MESSAGE.to_string()))
+    }
+
     /// Begin a savepoint-backed nested unit of work inside the active request
     /// transaction. Dropping it without `commit()` marks the outer transaction
     /// rollback-only, so repository errors cannot partially commit.
     pub async fn begin(&self) -> Result<NestedAuthorizedTx, Error> {
-        let state = active_transaction()?;
+        let state = self.resolved_transaction_state().await?;
         let mut guard = Arc::clone(&state.transaction).lock_owned().await;
         let transaction = guard
             .as_mut()
@@ -166,7 +222,10 @@ impl AuthorizedPool {
 
 impl fmt::Debug for AuthorizedPool {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("AuthorizedPool")
+        formatter
+            .debug_struct("AuthorizedPool")
+            .field("request_bound", &self.state.is_some())
+            .finish()
     }
 }
 
@@ -201,6 +260,13 @@ impl AuthorizedTx {
 
     pub fn actor(&self) -> &AuthorizedActor {
         &self.actor
+    }
+
+    /// Create the request-scoped executor handle for this exact transaction.
+    /// The handle may cross Tokio task boundaries created by the web framework,
+    /// but cannot outlive the transaction: queries fail closed after completion.
+    pub fn authorized_pool(&self) -> AuthorizedPool {
+        AuthorizedPool::from_state(Arc::clone(&self.state))
     }
 
     /// Complete bootstrap of a user-scoped transaction after reading the actor's
@@ -422,10 +488,9 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         'c: 'e,
         E: 'q + Execute<'q, Postgres>,
     {
-        let state = active_transaction();
         Box::pin(
             stream::once(async move {
-                let state = state?;
+                let state = self.resolved_transaction_state().await?;
                 let mut guard = Arc::clone(&state.transaction).lock_owned().await;
                 let transaction = guard
                     .as_mut()
@@ -448,9 +513,8 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         'c: 'e,
         E: 'q + Execute<'q, Postgres>,
     {
-        let state = active_transaction();
         async move {
-            let state = state?;
+            let state = self.resolved_transaction_state().await?;
             let mut guard = Arc::clone(&state.transaction).lock_owned().await;
             let transaction = guard
                 .as_mut()
@@ -469,9 +533,8 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
         'q: 'e,
         'c: 'e,
     {
-        let state = active_transaction();
         async move {
-            let state = state?;
+            let state = self.resolved_transaction_state().await?;
             let mut guard = Arc::clone(&state.transaction).lock_owned().await;
             let transaction = guard
                 .as_mut()
@@ -488,9 +551,8 @@ impl<'c> Executor<'c> for &'c AuthorizedPool {
     where
         'c: 'e,
     {
-        let state = active_transaction();
         async move {
-            let state = state?;
+            let state = self.resolved_transaction_state().await?;
             let mut guard = Arc::clone(&state.transaction).lock_owned().await;
             let transaction = guard
                 .as_mut()
@@ -606,6 +668,37 @@ mod tests {
         .await
         .expect("read cleared context");
         assert_eq!(values, (None, None, None, None));
+    }
+
+    #[tokio::test]
+    async fn request_bound_pool_survives_task_local_boundary() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPool::connect(&database_url)
+            .await
+            .expect("connect test database");
+        let actor = AuthorizedActor::new(Uuid::new_v4(), "Teacher", Some(Uuid::new_v4()))
+            .expect("valid actor");
+        let authorized = AuthorizedTx::begin(&pool, actor)
+            .await
+            .expect("begin authorized transaction");
+        let request_pool = authorized.authorized_pool();
+
+        let value = tokio::spawn(async move {
+            sqlx::query_scalar::<_, i32>("SELECT 1")
+                .fetch_one(&request_pool)
+                .await
+        })
+        .await
+        .expect("request task joins")
+        .expect("request-bound pool uses the pinned transaction");
+        assert_eq!(value, 1);
+
+        authorized
+            .rollback()
+            .await
+            .expect("rollback authorized transaction");
     }
 
     #[tokio::test]

@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
-use crate::app_state::extract_server_state;
+use crate::app_state::extract_server_state_with_rls;
 #[cfg(feature = "server")]
 use crate::domain::UserId;
 #[cfg(feature = "server")]
@@ -32,7 +32,7 @@ pub async fn get_notifications(
     #[cfg(feature = "server")]
     {
         let user_id = current_user_id().await?;
-        let repository = notification_repository()?;
+        let repository = notification_repository().await?;
         let limit = bounded_limit(limit);
         let offset = offset.unwrap_or(0).clamp(0, MAX_NOTIFICATION_OFFSET);
 
@@ -66,7 +66,7 @@ pub async fn get_unread_notifications(
     #[cfg(feature = "server")]
     {
         let user_id = current_user_id().await?;
-        let repository = notification_repository()?;
+        let repository = notification_repository().await?;
         let notifications = repository
             .find_unread_by_user(user_id, bounded_limit(limit))
             .await
@@ -95,7 +95,8 @@ pub async fn get_notification_summary() -> Result<NotificationSummary, ServerFnE
     #[cfg(feature = "server")]
     {
         let user_id = current_user_id().await?;
-        notification_repository()?
+        notification_repository()
+            .await?
             .get_summary(user_id)
             .await
             .map_err(map_notification_error)
@@ -116,7 +117,8 @@ pub async fn mark_notification_as_read(notification_id: String) -> Result<(), Se
         let user_id = current_user_id().await?;
         let notification_id = Uuid::parse_str(&notification_id)
             .map_err(|_| ServerFnError::new("Invalid notification ID"))?;
-        notification_repository()?
+        notification_repository()
+            .await?
             .mark_as_read(notification_id, user_id)
             .await
             .map_err(map_notification_error)
@@ -135,7 +137,8 @@ pub async fn mark_all_notifications_as_read() -> Result<u64, ServerFnError> {
     #[cfg(feature = "server")]
     {
         let user_id = current_user_id().await?;
-        notification_repository()?
+        notification_repository()
+            .await?
             .mark_all_as_read(user_id)
             .await
             .map_err(map_notification_error)
@@ -160,9 +163,9 @@ async fn current_user_id() -> Result<UserId, ServerFnError> {
 }
 
 #[cfg(feature = "server")]
-fn notification_repository() -> Result<NotificationRepository, ServerFnError> {
-    let state = extract_server_state().map_err(|error| {
-        tracing::error!(%error, "Unable to access notification server state");
+async fn notification_repository() -> Result<NotificationRepository, ServerFnError> {
+    let state = extract_server_state_with_rls().await.map_err(|error| {
+        tracing::error!(%error, "Unable to access request-bound notification server state");
         ServerFnError::new("Unable to load notifications")
     })?;
     Ok(NotificationRepository::new((*state.services.pool).clone()))

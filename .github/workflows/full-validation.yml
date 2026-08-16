@@ -177,6 +177,89 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  browser-final:
+    name: Final browser product acceptance
+    needs:
+      - eligibility
+      - database
+    if: needs.eligibility.outputs.run_full == 'true' && needs.database.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: edutalent_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d edutalent_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          show-progress: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install pinned Dioxus CLI
+        run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall "dioxus-cli@0.7.2" -y --force
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: full-validation-browser
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pinned browser harness dependencies
+        working-directory: tests/e2e
+        run: npm install --no-audit --no-fund
+
+      - name: Restore pinned Chromium
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-1.49.1-${{ runner.os }}
+
+      - name: Install pinned Chromium when absent
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: tests/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run final browser acceptance on exact head
+        shell: bash
+        env:
+          E2E_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -o pipefail
+          bash scripts/ci/run_browser_final.sh 2>&1 | tee browser-final.log
+
+      - name: Upload final browser evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: full-validation-browser-evidence
+          path: |
+            browser-final.log
+            tests/e2e/evidence.json
+            tests/e2e/test-results/
+            tests/e2e/playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
+
   gate:
     name: Full validation gate
     if: always() && needs.eligibility.outputs.run_full == 'true'
@@ -184,6 +267,7 @@ jobs:
       - eligibility
       - database
       - rust
+      - browser-final
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -194,6 +278,7 @@ jobs:
           ELIGIBILITY_RESULT: ${{ needs.eligibility.result }}
           DATABASE_RESULT: ${{ needs.database.result }}
           RUST_RESULT: ${{ needs.rust.result }}
+          BROWSER_RESULT: ${{ needs.browser-final.result }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
@@ -201,12 +286,14 @@ jobs:
           test "$ELIGIBILITY_RESULT" = "success"
           test "$DATABASE_RESULT" = "success"
           test "$RUST_RESULT" = "success"
+          test "$BROWSER_RESULT" = "success"
 
           cat > full-validation-evidence.json <<EOF
           {
             "head_sha": "${HEAD_SHA}",
             "database": "${DATABASE_RESULT}",
-            "rust": "${RUST_RESULT}"
+            "rust": "${RUST_RESULT}",
+            "browser_final": "${BROWSER_RESULT}"
           }
           EOF
 

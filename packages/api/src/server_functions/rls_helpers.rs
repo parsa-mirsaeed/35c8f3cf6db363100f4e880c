@@ -2,11 +2,9 @@
 //!
 //! Authentication middleware begins the pinned PostgreSQL transaction before a
 //! protected request reaches a server function. These helpers extract the
-//! canonical user and return the fail-closed [`AuthorizedPool`] facade whose
-//! executor routes every query to that exact transaction.
+//! canonical user and request-bound [`AuthorizedPool`] handle so Dioxus task
+//! dispatch cannot detach protected queries from that exact transaction.
 
-#[cfg(feature = "server")]
-use crate::app_state::extract_server_state;
 #[cfg(feature = "server")]
 use crate::dioxus_fullstack::extract;
 #[cfg(feature = "server")]
@@ -26,9 +24,12 @@ pub async fn extract_user_with_full_rls() -> Result<(UserInfo, Arc<AuthorizedPoo
     let Extension(user): Extension<UserInfo> = extract()
         .await
         .map_err(|_| ServerFnError::new("Unauthorized: No active session"))?;
-    let state = extract_server_state()?;
-    AuthorizedPool::require_scope().map_err(|error| ServerFnError::new(error.to_string()))?;
-    Ok((user, state.services.pool.clone()))
+    let Extension(pool): Extension<Arc<AuthorizedPool>> = extract().await.map_err(|_| {
+        ServerFnError::new("Unauthorized: No request-scoped database authorization")
+    })?;
+    pool.require_context()
+        .map_err(|error| ServerFnError::new(error.to_string()))?;
+    Ok((user, pool))
 }
 
 #[cfg(feature = "server")]

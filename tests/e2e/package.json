@@ -1,0 +1,16 @@
+{
+  "name": "edutalent-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Pinned PR-12 browser acceptance harness (no floating tags).",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:final": "playwright test --grep @final"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
+    "@playwright/test": "1.49.1"
+  }
+}

@@ -34,6 +34,7 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
                 self.assertIn("AmbientCapabilities=\n", text)
                 self.assertIn("UMask=0077", text)
                 self.assertNotIn("sudo", text)
+                self.assertNotIn("docker.service", text)
 
     def test_maintenance_units_use_external_state_and_backup_paths(self) -> None:
         for name in self.SERVICES:

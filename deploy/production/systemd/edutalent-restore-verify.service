@@ -9,7 +9,7 @@ User=edutalent-operator
 Group=edutalent-operator
 EnvironmentFile=/etc/edutalent/operations.env
 Environment=EDUTALENT_OPERATIONS_COMMAND=/opt/edutalent/deploy/production/edutalent-operations
-ExecStart=/opt/edutalent/deploy/production/systemd/run-latest-restore-drill
+ExecStart=/bin/bash /opt/edutalent/deploy/production/systemd/run-latest-restore-drill
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

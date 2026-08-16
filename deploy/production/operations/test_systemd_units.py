@@ -123,7 +123,8 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
         helper = (SYSTEMD_DIR / "run-offhost-wal-sync").read_text(encoding="utf-8")
         self.assertIn("[0-9A-F]{24}", helper)
         self.assertIn("sha256sum", helper)
-        self.assertIn("latest WAL segment", helper)
+        self.assertIn('latest_local="$(find', helper)
+        self.assertIn('"${offhost_real}/${latest_local}"', helper)
         self.assertNotIn("pgpass", helper.lower())
 
 

@@ -13,6 +13,7 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
     SERVICES = (
         "edutalent-monitor.service",
         "edutalent-backup.service",
+        "edutalent-offhost-copy.service",
         "edutalent-restore-verify.service",
         "edutalent-wal.service",
         "edutalent-wal-verify.service",
@@ -43,11 +44,16 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
                     text,
                 )
                 self.assertIn("EnvironmentFile=/etc/edutalent/operations.env", text)
+        offhost = (SYSTEMD_DIR / "edutalent-offhost-copy.service").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("/mnt/edutalent-offhost", offhost)
 
     def test_required_timers_are_persistent_and_bounded(self) -> None:
         expectations = {
             "edutalent-monitor.timer": "OnUnitActiveSec=1min",
             "edutalent-backup.timer": "OnCalendar=*-*-* 02:15:00",
+            "edutalent-offhost-copy.timer": "OnCalendar=*-*-* 03:15:00",
             "edutalent-restore-verify.timer": "OnCalendar=Sun *-*-* 04:30:00",
             "edutalent-wal-verify.timer": "OnUnitActiveSec=10min",
         }
@@ -65,23 +71,38 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
         self.assertIn("pitr-stop", text)
         self.assertIn("WantedBy=multi-user.target", text)
 
-    def test_restore_verification_uses_latest_verified_backup_helper(self) -> None:
-        unit = (SYSTEMD_DIR / "edutalent-restore-verify.service").read_text(
+    def test_shell_helpers_are_syntax_valid_and_are_invoked_through_bash(self) -> None:
+        units = {
+            "edutalent-restore-verify.service": "run-latest-restore-drill",
+            "edutalent-offhost-copy.service": "run-latest-offhost-copy",
+        }
+        for unit_name, helper_name in units.items():
+            unit = (SYSTEMD_DIR / unit_name).read_text(encoding="utf-8")
+            helper_path = SYSTEMD_DIR / helper_name
+            helper = helper_path.read_text(encoding="utf-8")
+            with self.subTest(unit=unit_name):
+                self.assertIn(f"ExecStart=/bin/bash /opt/edutalent/deploy/production/systemd/{helper_name}", unit)
+                self.assertIn("set -euo pipefail", helper)
+                completed = subprocess.run(
+                    ["bash", "-n", str(helper_path)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_restore_verification_selects_latest_verified_backup(self) -> None:
+        helper = (SYSTEMD_DIR / "run-latest-restore-drill").read_text(
             encoding="utf-8"
         )
-        helper_path = SYSTEMD_DIR / "run-latest-restore-drill"
-        helper = helper_path.read_text(encoding="utf-8")
-        self.assertIn("run-latest-restore-drill", unit)
-        self.assertIn("set -euo pipefail", helper)
         self.assertIn("edutalent-backup-*.tar.gz.enc.metadata.json", helper)
         self.assertIn('exec bash "${OPERATIONS_COMMAND}" restore-drill "${archive}"', helper)
-        completed = subprocess.run(
-            ["bash", "-n", str(helper_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_offhost_copy_does_not_reference_passphrase(self) -> None:
+        helper = (SYSTEMD_DIR / "run-latest-offhost-copy").read_text(encoding="utf-8")
+        self.assertIn("sha256sum", helper)
+        self.assertIn(".partial.$$.tmp", helper)
+        self.assertNotIn("PASSPHRASE", helper)
 
 
 if __name__ == "__main__":

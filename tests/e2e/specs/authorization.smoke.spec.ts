@@ -88,11 +88,11 @@ test('student cannot submit a School B assignment by tampering its object ID @sm
     expect(original, 'submission request must contain a custom-assignment identifier').toBeTruthy();
     expect(original).toContain(SCHOOL_A_CUSTOM_ASSIGNMENT);
     const tampered = original!.replace(SCHOOL_A_CUSTOM_ASSIGNMENT, SCHOOL_B_CUSTOM_ASSIGNMENT);
-    tamperObserved = true;
     const response = await route.fetch({ postData: tampered });
     denialStatus = response.status();
     denialBody = await response.text();
     await route.fulfill({ response, body: denialBody });
+    tamperObserved = true;
   });
 
   await actionWithIcon(page, 'send').click();
@@ -122,11 +122,11 @@ test('teacher cannot grade a School B submission by tampering its object ID @smo
     expect(original, 'grade request must contain a submission identifier').toBeTruthy();
     expect(original).toContain(SCHOOL_A_SUBMISSION);
     const tampered = original!.replace(SCHOOL_A_SUBMISSION, SCHOOL_B_SUBMISSION);
-    tamperObserved = true;
     const response = await route.fetch({ postData: tampered });
     denialStatus = response.status();
     denialBody = await response.text();
     await route.fulfill({ response, body: denialBody });
+    tamperObserved = true;
   });
 
   // 18 is valid on both the Persian 0–20 and English 0–100 scales, ensuring

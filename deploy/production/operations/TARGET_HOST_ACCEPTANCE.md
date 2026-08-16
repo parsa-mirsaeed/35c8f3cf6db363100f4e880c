@@ -22,33 +22,44 @@ This record is intentionally **not pre-filled as PASS by CI**. Complete it on th
 - RAM bytes/GiB:
 - Application/data storage total/free:
 - Backup storage total/free and device/filesystem identity:
+- Off-host backup/WAL destination identity and physical/network separation evidence:
 - Docker Engine version:
 - Docker Compose version:
 - Docker mode: rootless / rootful-reviewed
 - Time source / measured clock skew:
-- DNS names:
+- DNS names and resolved addresses:
+- Firewall evidence/reference:
 - TLS issuer / expiry (do not record private key material):
 
 ## Machine-verifiable preflight
 
-Retain the JSON output from:
+Run both pre-start checks **before `production-up`** and retain their JSON outputs:
 
 ```bash
 python3 /opt/edutalent/deploy/production/host_preflight.py \
   --require-operations \
   --output /var/lib/edutalent/operations/host-preflight.json
+
+python3 /opt/edutalent/deploy/production/host_network_preflight.py \
+  --app-env /opt/edutalent/deploy/production/.env.edutalent \
+  --output /var/lib/edutalent/operations/host-network-preflight.json
 ```
 
 - Host-preflight evidence path/hash:
-- Automatic result: PASS / FAIL
-- Pending manual items disposition:
+- Host-preflight automatic result: PASS / FAIL
+- Host-preflight pending manual items disposition:
+- Network-preflight evidence path/hash:
+- Exactly three configured DNS names resolved: yes / no
+- Pre-start TCP 80/443 free for gateway: yes / no
+- Time synchronization verified: yes / no / manual evidence
+- Measured clock skew <= 60 seconds: yes / no / manual evidence
 - `production-validate`: PASS / FAIL
 - `production-database-check`: PASS / FAIL
 - `production-gateway-check`: PASS / FAIL
 - `production-qdrant-check`: PASS / FAIL
 - `production-ai-check`: PASS / FAIL
 
-Automatic host-preflight PASS is necessary but not sufficient. Encryption, firewall/daemon tailoring, passphrase escrow/off-host location, and replacement-host recovery remain controlled acceptance evidence.
+Automatic host/network preflight PASS is necessary but not sufficient. Encryption, firewall/daemon tailoring, passphrase escrow/off-host location, and replacement-host recovery remain controlled acceptance evidence.
 
 ## CIS Docker / container hardening
 
@@ -84,16 +95,20 @@ python3 deploy/production/container_hardening_inventory.py \
 ## Maintenance automation
 
 - Dedicated `edutalent-operator` account verified: yes / no
+- Rootless Docker socket / rootful reviewed Docker context verified: yes / no
 - `edutalent-wal.service` enabled/running: yes / no
 - `edutalent-wal-verify.timer` enabled: yes / no
+- `edutalent-offhost-wal.timer` enabled: yes / no
 - `edutalent-monitor.timer` enabled: yes / no
 - `edutalent-backup.timer` enabled: yes / no
+- `edutalent-offhost-copy.timer` enabled: yes / no
 - `edutalent-restore-verify.timer` enabled: yes / no
 - Operations state permissions verified: yes / no
 - Backup mount separate from production/data filesystem: yes / no
 - Backup passphrase permissions 0400/0600: yes / no
 - Passphrase escrow separate from backup media: yes / no
-- Encrypted off-host backup copy verified: yes / no
+- Encrypted off-host backup copy SHA-256 verified: yes / no
+- Completed WAL segments copied/verified off-host: yes / no
 - Off-host WAL copy frequency satisfies approved RPO: yes / no
 
 ## Clean replacement-host recovery
@@ -104,8 +119,9 @@ Perform the test from an unconfigured supported host, not by restoring into the 
 - Production topology validation: PASS / FAIL
 - Live security boundary checks: PASS / FAIL
 - Encrypted full backup created and independently verified: PASS / FAIL
+- Backup copied to genuinely off-appliance target and verified: PASS / FAIL
 - Backup restored on replacement host: PASS / FAIL
-- PostgreSQL PITR completed to selected target: PASS / FAIL
+- PostgreSQL PITR completed to selected target using verified WAL: PASS / FAIL
 - Qdrant snapshot recovery or documented reindex path completed: PASS / FAIL
 - Application/database restart recovered correctly: PASS / FAIL
 - Disk-low/full condition failed closed and alerted: PASS / FAIL
@@ -150,14 +166,21 @@ Record the expected school profile before testing.
 - Capacity headroom conclusion:
 - Evidence path/hash:
 
-## Upgrade and rollback rehearsal
+## Upgrade, patching and rotation rehearsal
 
+Use `MAINTENANCE_ROTATION.md` plus `DEPLOYMENT_UPGRADE.md`; do not improvise credential or data-format changes in production.
+
+- Host OS/Docker patch + post-reboot validation: PASS / FAIL
 - Application release upgrade + rollback: PASS / FAIL
 - Supabase upgrade/rollback procedure reviewed/rehearsed as applicable: PASS / FAIL
 - Qdrant upgrade/recovery procedure reviewed/rehearsed as applicable: PASS / FAIL
-- Model/profile change and rollback procedure reviewed/rehearsed as applicable: PASS / FAIL
+- Model/profile change into a versioned collection + rollback: PASS / FAIL
 - TLS certificate rotation: PASS / FAIL
-- Application/database/AI/backup key rotation procedure reviewed: PASS / FAIL
+- Application database credential rotation: PASS / FAIL
+- AI Gateway internal/provider key rotation: PASS / FAIL
+- Qdrant API-key rotation: PASS / FAIL
+- Supabase JWT/API-key rotation reviewed/rehearsed as applicable: PASS / FAIL
+- Backup-passphrase generation rotation + old-archive escrow handling: PASS / FAIL
 - Notes/evidence:
 
 ## Availability statement

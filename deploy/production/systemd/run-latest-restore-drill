@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+: "${EDUTALENT_BACKUP_DIR:?EDUTALENT_BACKUP_DIR is required}"
+OPERATIONS_COMMAND="${EDUTALENT_OPERATIONS_COMMAND:-/opt/edutalent/deploy/production/edutalent-operations}"
+[[ -x "${OPERATIONS_COMMAND}" || -f "${OPERATIONS_COMMAND}" ]] || {
+  echo "EduTalent operations command is missing: ${OPERATIONS_COMMAND}" >&2
+  exit 1
+}
+[[ -d "${EDUTALENT_BACKUP_DIR}" ]] || {
+  echo "Backup directory is missing: ${EDUTALENT_BACKUP_DIR}" >&2
+  exit 1
+}
+
+latest_metadata="$(
+  find "${EDUTALENT_BACKUP_DIR}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc.metadata.json' \
+    -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-
+)"
+[[ -n "${latest_metadata}" ]] || {
+  echo "No verified EduTalent backup metadata was found in ${EDUTALENT_BACKUP_DIR}." >&2
+  exit 1
+}
+archive="${latest_metadata%.metadata.json}"
+[[ -f "${archive}" ]] || {
+  echo "Latest backup metadata has no matching archive: ${archive}" >&2
+  exit 1
+}
+
+exec bash "${OPERATIONS_COMMAND}" restore-drill "${archive}"

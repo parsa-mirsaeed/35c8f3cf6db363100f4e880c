@@ -251,9 +251,9 @@ pub fn Modal(title: String, open: bool, on_close: Callback<()>, children: Elemen
                     onclick: move |_| on_close.call(()),
                 }
 
-                // Modal Content. The close control is autofocus so keyboard and
-                // assistive-technology users enter the modal instead of staying
-                // on an obscured background control.
+                // Modal Content. The close control is focused after mount so
+                // keyboard and assistive-technology users enter the hydrated
+                // dialog instead of staying on an obscured background control.
                 div {
                     class: "relative w-full max-w-lg transform rounded-xl glassmorphism bg-white dark:bg-gray-800 shadow-2xl transition-all p-6",
                     role: "dialog",
@@ -274,6 +274,9 @@ pub fn Modal(title: String, open: bool, on_close: Callback<()>, children: Elemen
                             class: "text-gray-400 hover:text-gray-500 dark:hover:text-gray-300 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800",
                             "aria-label": locale.t("common.close"),
                             autofocus: true,
+                            onmounted: move |element| async move {
+                                let _ = element.data().set_focus(true).await;
+                            },
                             onclick: move |_| on_close.call(()),
                             span {
                                 class: "material-icons-outlined",

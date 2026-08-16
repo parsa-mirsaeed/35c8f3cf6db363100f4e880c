@@ -1,6 +1,6 @@
 [Unit]
 Description=EduTalent encrypted full backup
-After=network-online.target docker.service edutalent-wal.service
+After=network-online.target edutalent-wal.service
 Wants=network-online.target edutalent-wal.service
 
 [Service]

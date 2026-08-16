@@ -1,0 +1,25 @@
+[Unit]
+Description=EduTalent WAL reception verification
+After=edutalent-wal.service
+Requires=edutalent-wal.service
+
+[Service]
+Type=oneshot
+User=edutalent-operator
+Group=edutalent-operator
+EnvironmentFile=/etc/edutalent/operations.env
+ExecStart=/opt/edutalent/deploy/production/edutalent-operations pitr-verify
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/edutalent/operations /mnt/edutalent-backup

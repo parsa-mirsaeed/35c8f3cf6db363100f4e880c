@@ -17,6 +17,7 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
         "edutalent-restore-verify.service",
         "edutalent-wal.service",
         "edutalent-wal-verify.service",
+        "edutalent-offhost-wal.service",
     )
 
     def test_services_run_as_dedicated_unprivileged_operator(self) -> None:
@@ -40,15 +41,26 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
         for name in self.SERVICES:
             text = (SYSTEMD_DIR / name).read_text(encoding="utf-8")
             with self.subTest(name=name):
-                self.assertIn(
-                    "ReadWritePaths=/var/lib/edutalent/operations /mnt/edutalent-backup",
-                    text,
-                )
                 self.assertIn("EnvironmentFile=/etc/edutalent/operations.env", text)
-        offhost = (SYSTEMD_DIR / "edutalent-offhost-copy.service").read_text(
+        for name in (
+            "edutalent-monitor.service",
+            "edutalent-backup.service",
+            "edutalent-offhost-copy.service",
+            "edutalent-restore-verify.service",
+            "edutalent-wal.service",
+            "edutalent-wal-verify.service",
+        ):
+            text = (SYSTEMD_DIR / name).read_text(encoding="utf-8")
+            with self.subTest(name=name):
+                self.assertIn("/var/lib/edutalent/operations", text)
+        offhost_backup = (SYSTEMD_DIR / "edutalent-offhost-copy.service").read_text(
             encoding="utf-8"
         )
-        self.assertIn("/mnt/edutalent-offhost", offhost)
+        offhost_wal = (SYSTEMD_DIR / "edutalent-offhost-wal.service").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("/mnt/edutalent-offhost", offhost_backup)
+        self.assertIn("/mnt/edutalent-offhost", offhost_wal)
 
     def test_required_timers_are_persistent_and_bounded(self) -> None:
         expectations = {
@@ -57,6 +69,7 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
             "edutalent-offhost-copy.timer": "OnCalendar=*-*-* 03:15:00",
             "edutalent-restore-verify.timer": "OnCalendar=Sun *-*-* 04:30:00",
             "edutalent-wal-verify.timer": "OnUnitActiveSec=10min",
+            "edutalent-offhost-wal.timer": "OnUnitActiveSec=10min",
         }
         for name, cadence in expectations.items():
             text = (SYSTEMD_DIR / name).read_text(encoding="utf-8")
@@ -76,6 +89,7 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
         units = {
             "edutalent-restore-verify.service": "run-latest-restore-drill",
             "edutalent-offhost-copy.service": "run-latest-offhost-copy",
+            "edutalent-offhost-wal.service": "run-offhost-wal-sync",
         }
         for unit_name, helper_name in units.items():
             unit = (SYSTEMD_DIR / unit_name).read_text(encoding="utf-8")
@@ -104,6 +118,13 @@ class SystemdMaintenanceUnitTests(unittest.TestCase):
         self.assertIn("sha256sum", helper)
         self.assertIn(".partial.$$.tmp", helper)
         self.assertNotIn("PASSPHRASE", helper)
+
+    def test_offhost_wal_sync_only_copies_completed_segments(self) -> None:
+        helper = (SYSTEMD_DIR / "run-offhost-wal-sync").read_text(encoding="utf-8")
+        self.assertIn("[0-9A-F]{24}", helper)
+        self.assertIn("sha256sum", helper)
+        self.assertIn("latest WAL segment", helper)
+        self.assertNotIn("pgpass", helper.lower())
 
 
 if __name__ == "__main__":

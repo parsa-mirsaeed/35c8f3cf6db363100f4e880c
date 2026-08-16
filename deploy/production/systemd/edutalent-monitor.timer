@@ -1,0 +1,12 @@
+[Unit]
+Description=Run EduTalent local production monitor every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=edutalent-monitor.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Copy latest verified EduTalent backup off-host daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=edutalent-offhost-copy.service
+
+[Install]
+WantedBy=timers.target

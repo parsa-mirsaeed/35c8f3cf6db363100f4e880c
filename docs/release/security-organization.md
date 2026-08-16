@@ -10,18 +10,18 @@ Until a production security mailbox/domain is approved, do not publish a persona
 
 Production support applies only to release versions explicitly listed in the signed service schedule. Security fixes are developed on supported branches/releases and customers are given an upgrade/mitigation path. End-of-support dates require advance commercial communication and cannot silently leave a contracted production release unmaintained.
 
-## Severity and remediation targets
+## Severity and remediation SLA schedule
 
-Contract/SLA values require business/security approval. Default internal targets for planning are:
+Severity is defined now; contractual time targets are explicit approval fields rather than hidden assumptions. Complete the final SLA in PR #16 / the signed support schedule. Until then, the incident process still starts immediately for suspected Critical impact.
 
-| Severity | Example | Internal target |
-| --- | --- | --- |
-| Critical | active compromise, cross-tenant data exposure, remote privilege boundary failure | immediate incident process; mitigation as soon as safely possible |
-| High | exploitable auth/authorization/security-control failure with material impact | prioritized security release |
-| Medium | bounded security weakness requiring conditions | planned remediation with owner/date |
-| Low | hardening/defense-in-depth | backlog with owner/review date |
+| Severity | Example | Required handling | Contract remediation target |
+| --- | --- | --- | --- |
+| Critical | active compromise, cross-tenant data exposure, remote privilege boundary failure | declare incident, contain/preserve evidence, executive/security escalation, emergency mitigation/release path | **TO APPROVE:** ___ hours/days |
+| High | exploitable auth/authorization/security-control failure with material impact | prioritized security owner, mitigation/release plan, retest | **TO APPROVE:** ___ days |
+| Medium | bounded weakness requiring conditions | tracked remediation with owner/review date and regression evidence | **TO APPROVE:** ___ days |
+| Low | hardening/defense-in-depth | backlog/risk-register disposition with owner/expiry | **TO APPROVE:** ___ days or supported release |
 
-Do not convert these qualitative internal targets into customer penalty/SLA language without the signed support schedule.
+The executed agreement must also define when the clock starts/stops, customer-dependent pauses, accepted compensating mitigations, retest requirements and treatment of unsupported releases. No blank target is a customer promise.
 
 ## Incident roles and escalation
 

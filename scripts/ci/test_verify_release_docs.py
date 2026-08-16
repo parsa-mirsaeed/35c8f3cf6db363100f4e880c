@@ -39,6 +39,14 @@ class ReleaseDocsVerifierTests(unittest.TestCase):
             self.assertEqual(resolved, target)
             self.assertEqual(resolved.relative_to(root), Path("docs/release/feature-matrix.md"))
 
+    def test_stale_architecture_patterns_cover_retired_boundaries(self) -> None:
+        corpus = "The backend role uses intentional `BYPASSRLS` and only the future AI gateway can egress."
+        self.assertTrue(any(pattern.lower() in corpus.lower() for pattern in module.STALE_ARCHITECTURE))
+
+    def test_markdown_style_detects_trailing_whitespace_shape(self) -> None:
+        line = "clean heading  "
+        self.assertNotEqual(line.rstrip(), line)
+
 
 if __name__ == "__main__":
     unittest.main()

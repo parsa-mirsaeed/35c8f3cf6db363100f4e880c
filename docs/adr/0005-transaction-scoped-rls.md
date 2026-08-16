@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed for PR-03 of the EduTalent Production Readiness plan.
+Accepted and implemented by PR-03 of the EduTalent Production Readiness plan.
 
 ## Context
 

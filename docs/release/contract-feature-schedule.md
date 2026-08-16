@@ -23,7 +23,7 @@ Selected optional capabilities:
 
 Other agreed included features/constraints:
 
-- 
+- _None recorded until completed._
 
 ## Excluded/disabled features
 

@@ -27,6 +27,7 @@ REQUIRED_DOCS = (
     "support-service-definition.md",
     "contract-feature-schedule.md",
     "customer-terms-draft.md",
+    "documentation-reconciliation.md",
 )
 
 REQUIRED_ENABLED_ENDPOINTS = {
@@ -45,6 +46,18 @@ SECRET_PATTERNS = {
 }
 EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+DRIFT_DOCS = (
+    ROOT / "README.md",
+    ROOT / "deploy" / "production" / "README.md",
+    ROOT / "docs" / "security" / "production-threat-model.md",
+)
+STALE_ARCHITECTURE = (
+    "intentional `BYPASSRLS`",
+    "intentionally has `BYPASSRLS`",
+    "future AI gateway",
+    "only the future AI gateway",
+    "issue #8 tracks",
+)
 
 
 def fail(message: str) -> None:
@@ -149,6 +162,35 @@ def verify_required_language() -> None:
             fail(f"support definition missing required concept: {phrase}")
 
 
+def verify_markdown_style() -> None:
+    files = [README] + [RELEASE / name for name in REQUIRED_DOCS]
+    for path in files:
+        text = read(path)
+        if not text.endswith("\n"):
+            fail(f"Markdown file lacks final newline: {path.relative_to(ROOT)}")
+        if "\t" in text:
+            fail(f"Markdown file contains tab characters: {path.relative_to(ROOT)}")
+        for number, line in enumerate(text.splitlines(), 1):
+            if line.rstrip() != line:
+                fail(f"trailing whitespace in {path.relative_to(ROOT)}:{number}")
+        nonblank = next((line for line in text.splitlines() if line.strip()), "")
+        if not nonblank.startswith("# "):
+            fail(f"Markdown file must begin with one H1: {path.relative_to(ROOT)}")
+        if sum(1 for line in text.splitlines() if line.startswith("# ")) != 1:
+            fail(f"Markdown file must contain exactly one H1: {path.relative_to(ROOT)}")
+
+
+def verify_documentation_drift() -> None:
+    for path in DRIFT_DOCS:
+        text = read(path).lower()
+        for phrase in STALE_ARCHITECTURE:
+            if phrase.lower() in text:
+                fail(f"stale production architecture phrase in {path.relative_to(ROOT)}: {phrase}")
+    adr = read(ROOT / "docs" / "adr" / "0005-transaction-scoped-rls.md")
+    if "Accepted and implemented" not in adr:
+        fail("ADR 0005 must be recorded as accepted/implemented")
+
+
 def verify_local_links_and_patterns() -> None:
     files = [README] + [RELEASE / name for name in REQUIRED_DOCS]
     for path in files:
@@ -180,6 +222,8 @@ def main() -> int:
         read(RELEASE / name)
     verify_feature_truth()
     verify_required_language()
+    verify_documentation_drift()
+    verify_markdown_style()
     verify_local_links_and_patterns()
     print("Release documentation truthfulness, local links, secret/PII patterns, and required scope verified.")
     return 0

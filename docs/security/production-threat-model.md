@@ -2,126 +2,96 @@
 
 ## Assets
 
-- student, teacher, manager, and school identity data;
-- authentication credentials, JWT signing keys, service-role keys, and database
-  credentials;
-- governed PDFs and derived text;
-- tenant membership, authorization, publication state, and audit records;
-- embeddings and vector metadata;
-- durable ingestion jobs and retry state;
-- backups, TLS private keys, release artifacts, and operational logs.
+- student, parent, teacher, manager and school identity/education data;
+- authentication/session material, JWT signing/service keys and database credentials;
+- governed/class knowledge content, derived text/embeddings and publication state;
+- tenant membership, authorization/audit records and durable jobs;
+- Qdrant vectors/metadata and embedding-profile integrity;
+- provider/internal AI-Gateway credentials and authorized AI context;
+- backups/WAL, TLS keys, release artifacts and operational evidence.
 
 ## Trust boundaries
 
-1. Public client to Caddy over TLS.
-2. Caddy to EduTalent or the Supabase gateway.
-3. Application/API services to the private data network.
-4. Migration/bootstrap administrator to PostgreSQL.
-5. Long-running EduTalent backend role to PostgreSQL.
-6. Administrative access to the private admin network.
-7. Future AI gateway to approved external providers.
-8. Release preparation and update media to the production host.
+1. Public client -> Caddy over operator-supplied TLS.
+2. Caddy -> EduTalent or approved Supabase API paths.
+3. Authenticated application request -> transaction-scoped PostgreSQL authorization context.
+4. Migration/bootstrap administrator -> PostgreSQL (separate from long-running app identity).
+5. Authorized application -> private Qdrant / durable ingestion services.
+6. Application -> internal AI Gateway using internal credential + authoritative school ID.
+7. AI Gateway -> approved connected providers, or -> private local TEI for the local profile.
+8. Restricted administrator/operator access -> production host/private admin network.
+9. Signed release/update media -> target host.
+10. Live data -> encrypted backup/WAL -> verified off-appliance recovery destination.
 
-Docker network membership is not an authorization decision. Every request must
-still be authenticated, authorized, validated, and scoped to the active tenant.
+Docker/network membership is never sufficient authorization by itself. Role, school/tenant and object authorization remain server/database responsibilities.
 
 ## Primary threats and controls
 
 ### Cross-school data access
 
-Controls: PostgreSQL/RLS policy tests for Supabase client roles, application
-authorization before vector search, exact authorized asset filters, non-public
-Qdrant, negative tenant tests, and audit logging. Direct object identifiers must
-not bypass these checks.
+Controls include server role/tenant/object checks, direct-ID negative tests, exact endpoint authorization inventory, transaction-scoped PostgreSQL actor context, a long-running `NOBYPASSRLS` non-superuser role, forced RLS on governed application tables, database authorization before Qdrant retrieval, exact authorized asset filters and audit requirements for sensitive operations.
 
-The current Rust repositories use a shared direct PostgreSQL pool and do not yet
-set transaction-local request identity. Therefore the long-running server uses a
-dedicated non-superuser backend role with intentional `BYPASSRLS`, while
-server-side membership/tenant authorization remains authoritative. This is
-narrower than a PostgreSQL superuser but is still a residual trusted-computing
-boundary. Issue #8 tracks request-scoped database context and conversion to a
-`NOBYPASSRLS` role.
+Protected repository work executes through the active authorized transaction; missing transaction scope fails closed rather than silently falling back to a pooled privileged query. Application authorization remains authoritative at the service boundary and PostgreSQL RLS provides defense in depth.
 
-### Database administrator compromise or leakage
+### Database administrator/role compromise
 
-Controls: the Supabase `postgres` credential is restricted to the migration and
-one-shot role-provisioning services. The long-running app never receives it. The
-backend role is generated separately, cannot create roles or databases, cannot
-replicate, is not a superuser, cannot create persistent public-schema objects,
-and cannot write migration-integrity tables. Runtime and PostgreSQL 17 CI checks
-verify these properties.
+Bootstrap/migration administrator authority is separate. The long-running app/worker role is `NOSUPERUSER`, `NOINHERIT`, `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`, cannot assume privileged memberships, cannot create public-schema objects or write migration integrity state, and does not receive the bootstrap administrator URL/password.
 
 ### Credential disclosure
 
-Controls: no secrets in Git/images/browser bundles, mode-600 environment files,
-non-printing generators, no Docker socket mounts, redacted diagnostics, static
-secret scanning, separate server-only Supabase secret credentials, and distinct
-bootstrap/application database credentials.
+Controls include no production secrets in Git/images/browser/release payloads, generated mode-restricted environment/secret files, non-printing generators, no Docker socket mounts in product containers, redacted/bounded diagnostics, separate bootstrap/application credentials, gateway-only provider credentials and offline target-host secret generation for the appliance.
 
-### Public exposure of internal services
+### Public exposure / privilege escalation
 
-Controls: rendered-Compose CI verification; only Caddy may publish host ports;
-only Caddy joins the dedicated host-ingress bridge; and PostgreSQL, Supavisor,
-Qdrant, Studio, and internal Supabase services remain exclusively on internal
-networks. The ingress bridge contains no backend or data service.
+Only Caddy publishes host ports 80/443. PostgreSQL, Supavisor, Qdrant, Studio, TEI, AI Gateway and internal Supabase services are not directly published. The gateway is non-root and capability-free; administration is separately named/restricted by approved CIDRs and authentication. Rootless Docker is preferred for host operations; rootful daemon use requires tailored review.
 
-### Malicious or malformed PDFs
+### Prompt injection, arbitrary AI egress or external disclosure
 
-Controls retained from the governed workflow: manager-only submission,
-quarantine, size/type/magic-byte validation, local malware scanning, isolated
-parsing, durable jobs, duplicate prevention, publication checks, and no direct
-teacher ingestion.
+The AI Gateway is implemented and is the only component attached to approved AI egress. Provider origins/models are fixed by reviewed code/profile, redirects are disabled, requests require the internal token and authoritative school ID, quotas/body/token/concurrency limits apply, and provider prompts omit unnecessary identity fields. Governed excerpts are untrusted data and authorization occurs before retrieval. Provider/gateway outage is controlled and does not make core school health fail open.
 
-### Prompt injection and external data disclosure
+Residual risk: host DNS/routing/firewall compromise can defeat container-network destination intent; target-host qualification must enforce/review upstream egress controls. Connected provider legal/retention/region terms require qualified review before contracting.
 
-The production foundation does not yet enable external AI. The follow-up AI
-gateway must minimize authorized context, reject user-controlled provider URLs,
-apply request limits and timeouts, avoid sensitive logging, and audit provider
-use. Provider failure must not bypass authorization or delete queued jobs.
+### Embedding-space corruption
 
-### Supply-chain compromise
+Immutable profiles bind provider/model/version/dimensions/Qdrant collection. Local and connected embeddings use distinct collections; wrong model/dimension/non-finite responses fail closed; automatic cross-profile fallback is forbidden; model/dimension change requires new collection and re-index.
 
-Controls: immutable upstream Supabase commit, pinned image tags in the official
-coordinated stack, exact source-build application image, CI checks, and no
-runtime fetching. Follow-up delivery adds digest pinning, SBOMs, signatures,
-provenance, vulnerability policy, and offline image manifests.
+### Malicious/malformed governed content
 
-### Configuration drift or insecure defaults
+Manager/governed submission, quarantine/validation/scanning/isolated parsing, durable jobs, publication checks and no direct teacher PDF ingestion remain controls. Prompt/reference content is never treated as trusted instructions or authorization.
 
-Controls: generated secrets, placeholder rejection, TLS key/certificate matching,
-unsafe-auth-setting rejection, database-role attribute/privilege verification,
-and machine-verifiable Compose exposure rules. Historical migrations remain
-checksum protected and fail closed if modified.
+### Supply-chain / offline-media compromise
 
-### Host compromise
+The full appliance uses exact source SHA/platform/image inventory, local tags, `pull_policy: never`, pinned safe model artifacts, immutable manifest/checksums, SBOMs, signatures/provenance and offline verification. Target secrets are generated after payload verification; TLS keys remain operator supplied. Protected release identities do not use mutable `latest` as the production identity.
 
-Container controls reduce blast radius but do not protect a compromised root
-host. Required operational controls include a patched minimal OS, restricted
-SSH/VPN administration, full-disk or volume encryption, firewall policy,
-separate encrypted backups, audit forwarding, and incident-response procedures.
+### Backup/recovery tampering or unavailability
+
+Encrypted backup, per-file/archive integrity metadata, immediate verification, continuous/periodic WAL/PITR, Qdrant recovery/reindex paths, scheduled restore verification, off-appliance copy verification and separate passphrase escrow reduce loss/tamper risk. Actual school RPO/RTO and genuinely off-appliance storage are target-host/manual acceptance evidence, not CI assumptions.
+
+### Configuration drift/insecure defaults
+
+Preflight rejects placeholders/unsafe auth, TLS mismatch/near-expiry, broad admin CIDRs and topology drift. Live checks verify database identity, non-root gateway, private Qdrant and AI outage/recovery. Host preflight covers supported OS/resources/time/network while encryption/firewall/daemon governance remain controlled-host evidence where not machine-observable.
+
+### Host compromise / denial of service
+
+Container hardening cannot defend against compromised host root. Required controls include patched supported host, restricted administration, encryption at rest, firewall/upstream controls, dedicated operators, bounded resources, backup separation and incident response. Internet-scale WAF/DoS protection beyond the accepted single-host gateway must be allocated to the customer/upstream environment when risk/scale requires it.
 
 ## Security invariants
 
 - no direct teacher PDF ingestion;
-- durable ingestion queue remains authoritative;
-- duplicate jobs remain prevented;
-- database authorization precedes Qdrant retrieval;
-- Qdrant filters contain exactly the authorized asset identifiers;
-- unpublished and archived assets are not retrievable;
-- migration/bootstrap credentials never reach the long-running application;
-- Supabase client roles remain governed by RLS;
-- external provider failures never make the core application authorization
-  fail open;
-- production secrets never reach browser code or release archives;
-- only the reverse proxy publishes host ports;
-- only the future AI gateway may receive external-AI egress permissions.
+- durable ingestion/retry state remains authoritative;
+- server role/tenant/object authorization cannot be replaced by browser routing or object IDs;
+- protected PostgreSQL access uses transaction-scoped actor context with `NOBYPASSRLS` runtime role;
+- database authorization precedes Qdrant retrieval and exact authorized asset filters remain exact;
+- unpublished/archived governed assets are not retrievable;
+- bootstrap/migration credentials never reach long-running application/browser;
+- provider credentials/destinations never enter browser code;
+- no installation-wide fallback school ID for AI requests;
+- only AI Gateway receives approved external-AI egress;
+- provider/AI outage never makes core authorization/health fail open;
+- only the gateway publishes host ports;
+- air-gapped accepted startup does not fetch untracked images/models;
+- release/backup/manual evidence is tied to an exact release identity.
 
 ## Residual risk
 
-A single-host deployment has a shared host and shared failure domain. The backend
-role's intentional RLS bypass remains a trusted server boundary until issue #8
-is complete. Static TLS certificate renewal, offline update media, provider
-data-processing terms, country-specific education/privacy obligations, and
-disaster-recovery targets remain operator and governance responsibilities. No
-architecture can guarantee immunity from all attacks; these controls provide
-defense in depth and explicit failure behavior.
+The first production topology is single-node/not HA and shares a host failure domain. Host-root compromise, upstream network attacks, operator mistakes, customer capacity shortfall and third-party/provider legal/security changes remain risks requiring host/security/privacy/contract controls. Backup capture is not a global distributed transaction across every service. RPO/RTO/availability commitments require measured target-host evidence and signed terms. Independent penetration/security review, human accessibility, target-host/operator qualification and qualified privacy/legal approval remain manual/external release gates in PR #16.

@@ -31,6 +31,7 @@ No document in this package expands product authority beyond the code/manifests 
 - [Support/service definition](support-service-definition.md)
 - [Contract feature/exclusion schedule](contract-feature-schedule.md)
 - [Customer terms inputs — draft](customer-terms-draft.md)
+- [Documentation reconciliation](documentation-reconciliation.md)
 
 ## Review status
 

@@ -7,6 +7,27 @@ This document defines fields that must be completed in the signed customer sched
 - **Pilot:** controlled school trial with explicit participant/scope limits, enhanced feedback/observation, no implied HA, and acceptance criteria defined in the pilot order.
 - **Contracted production:** only after final release/manual-external gates are complete and the signed schedule identifies release, host, features, responsibilities, support and accepted risk.
 
+## Signable service schedule fields
+
+Complete every field before classifying the customer as contracted production; a blank is an unresolved business/operational decision, not a default promise.
+
+| Field | Approved value |
+| --- | --- |
+| Support timezone | ___ |
+| Standard support days/hours | ___ |
+| Critical security/availability contact route and coverage | ___ |
+| Severity acknowledgement/response targets | ___ |
+| Regular maintenance window | ___ |
+| Planned-maintenance notice | ___ |
+| Emergency-maintenance authority/notice | ___ |
+| Availability target (if purchased) | ___ |
+| Availability measurement point/reporting period | ___ |
+| Accepted RPO | ___ |
+| Accepted RTO + recovery scenario | ___ |
+| Backup/WAL retention and operator | ___ |
+| Customer upstream/WAF/DoS responsibility | ___ |
+| Supported release/version window | ___ |
+
 ## Support scope
 
 Included technical scope should be selected from: supported release installation/configuration, application defects, security updates, production operations/recovery guidance, supported AI profile behavior, and contracted feature support. Customer-specific integrations or Disabled/Excluded features are not included unless separately engineered/ordered.

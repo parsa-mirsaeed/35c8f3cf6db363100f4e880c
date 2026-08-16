@@ -1,0 +1,418 @@
+name: Final Release Acceptance
+
+on:
+  pull_request:
+    types:
+      - ready_for_review
+      - synchronize
+      - reopened
+    paths:
+      - docs/release/release-candidate-acceptance.md
+      - .github/workflows/final-release-acceptance.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-release-acceptance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  serialize:
+    name: Serialize exact-head production proofs
+    if: github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      actions: write
+      issues: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      ai_run_id: ${{ steps.runs.outputs.ai_run_id }}
+      docs_run_id: ${{ steps.runs.outputs.docs_run_id }}
+      full_run_id: ${{ steps.runs.outputs.full_run_id }}
+      foundation_run_id: ${{ steps.runs.outputs.foundation_run_id }}
+      operations_run_id: ${{ steps.runs.outputs.operations_run_id }}
+      package_run_id: ${{ steps.runs.outputs.package_run_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Enforce frozen release-candidate entry criteria
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          grep -Fq 'PR #16' docs/release/release-candidate-acceptance.md
+          grep -Fq 'ready for final validation' docs/release/release-candidate-acceptance.md
+
+          gh api graphql \
+            -f owner="${REPOSITORY%%/*}" \
+            -f repo="${REPOSITORY#*/}" \
+            -F number="$PR_NUMBER" \
+            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issues(first:100,states:OPEN){totalCount pageInfo{hasNextPage} nodes{number title labels(first:30){nodes{name}}}} pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}' \
+            > release-entry.json
+
+          python3 - release-entry.json <<'PY'
+          import json
+          import re
+          import sys
+
+          data = json.load(open(sys.argv[1], encoding="utf-8"))["data"]["repository"]
+          issues = data["issues"]
+          assert not issues["pageInfo"]["hasNextPage"], "more than 100 open issues; release review is incomplete"
+          blocker = re.compile(r"(^|[:/_ -])(p0|release[- _]?blocker)($|[:/_ -])", re.I)
+          blocked = []
+          for issue in issues["nodes"]:
+              labels = [node["name"] for node in issue["labels"]["nodes"]]
+              if any(blocker.search(label) for label in labels):
+                  blocked.append((issue["number"], issue["title"], labels))
+          assert not blocked, f"open P0/release blockers: {blocked}"
+
+          threads = data["pullRequest"]["reviewThreads"]
+          assert not threads["pageInfo"]["hasNextPage"], "more than 100 review threads; release review is incomplete"
+          unresolved = [node for node in threads["nodes"] if not node["isResolved"]]
+          assert not unresolved, f"unresolved review threads: {len(unresolved)}"
+          PY
+
+          gh api "/repos/${REPOSITORY}/pulls/16" > manual-external-pr.json
+          python3 - manual-external-pr.json <<'PY'
+          import json
+          import sys
+          pr = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert pr["number"] == 16
+          assert "Manual/external production acceptance" in pr["title"]
+          print(f"Manual/external acceptance PR #16 state={pr['state']} merged_at={pr['merged_at']}")
+          PY
+
+      - name: Prepare exact-head Actions helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/release-run-utils.sh" <<'BASH'
+          retry_gh() {
+            local attempt max_attempts="${GH_API_RETRY_ATTEMPTS:-10}" rc delay
+            local out err
+            out="$(mktemp)"; err="$(mktemp)"
+            for attempt in $(seq 1 "$max_attempts"); do
+              : >"$out"; : >"$err"
+              if "$@" >"$out" 2>"$err"; then
+                cat "$out"; rm -f "$out" "$err"; return 0
+              else
+                rc=$?
+              fi
+              if ! grep -Eqi 'HTTP (408|409|425|429|5[0-9]{2})|Server Error|Bad Gateway|Service Unavailable|Gateway Timeout|rate limit|timed out|timeout|connection reset|unexpected EOF|EOF' "$err"; then
+                cat "$out"; cat "$err" >&2; rm -f "$out" "$err"; return "$rc"
+              fi
+              if (( attempt == max_attempts )); then
+                cat "$err" >&2; rm -f "$out" "$err"; return "$rc"
+              fi
+              delay=$((attempt * 3)); (( delay > 30 )) && delay=30
+              sleep "$delay"
+            done
+          }
+
+          find_run_id() {
+            local workflow="$1" event="$2"
+            retry_gh gh run list --repo "$REPOSITORY" --workflow "$workflow" --branch "$HEAD_REF" --event "$event" --limit 50 \
+              --json databaseId,headSha \
+              --jq "[.[] | select(.headSha == \"$HEAD_SHA\")] | if length == 0 then empty else max_by(.databaseId).databaseId end"
+          }
+
+          wait_for_run() {
+            local run_id="$1" timeout_seconds="${2:-21000}" started now status conclusion tmp
+            started="$(date +%s)"; tmp="$(mktemp)"
+            while true; do
+              retry_gh gh api "/repos/${REPOSITORY}/actions/runs/${run_id}" >"$tmp"
+              status="$(jq -r '.status' "$tmp")"; conclusion="$(jq -r '.conclusion // ""' "$tmp")"
+              echo "Run ${run_id}: ${status}${conclusion:+/${conclusion}}" >&2
+              if [[ "$status" == completed ]]; then
+                rm -f "$tmp"
+                [[ "$conclusion" == success ]]
+                return
+              fi
+              now="$(date +%s)"
+              if (( now - started >= timeout_seconds )); then
+                rm -f "$tmp"; echo "Timed out waiting for run ${run_id}" >&2; return 1
+              fi
+              sleep 15
+            done
+          }
+
+          write_run_evidence() {
+            local run_id="$1" output="$2" run_file jobs_file
+            run_file="$(mktemp)"; jobs_file="$(mktemp)"
+            retry_gh gh api "/repos/${REPOSITORY}/actions/runs/${run_id}" >"$run_file"
+            retry_gh gh api "/repos/${REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" >"$jobs_file"
+            jq -n --slurpfile run "$run_file" --slurpfile jobs "$jobs_file" \
+              '($run[0]) as $r | ($jobs[0]) as $j | {id:$r.id,headSha:$r.head_sha,event:$r.event,status:$r.status,conclusion:$r.conclusion,url:$r.html_url,jobs:[$j.jobs[]|{name:.name,status:.status,conclusion:.conclusion}]}' \
+              >"$output"
+            rm -f "$run_file" "$jobs_file"
+          }
+
+          validate_run() {
+            local path="$1" expected_event="$2"; shift 2
+            python3 - "$HEAD_SHA" "$expected_event" "$path" "$@" <<'PY'
+          import json, sys
+          expected_sha, expected_event, path, *required = sys.argv[1:]
+          run = json.load(open(path, encoding="utf-8"))
+          assert run["headSha"] == expected_sha, (run["headSha"], expected_sha)
+          assert run["event"] == expected_event, (run["event"], expected_event)
+          assert run["status"] == "completed", run["status"]
+          assert run["conclusion"] == "success", run["conclusion"]
+          jobs = {job["name"]: job["conclusion"] for job in run["jobs"]}
+          for name in required:
+              assert jobs.get(name) == "success", (name, jobs.get(name), jobs)
+          PY
+          }
+
+          wait_for_pr_run() {
+            local workflow="$1" run_id attempt
+            for attempt in $(seq 1 180); do
+              run_id="$(find_run_id "$workflow" pull_request)"
+              if [[ -n "$run_id" ]]; then
+                wait_for_run "$run_id"
+                printf '%s\n' "$run_id"
+                return 0
+              fi
+              sleep 5
+            done
+            echo "No exact-head pull_request run found for ${workflow}" >&2
+            return 1
+          }
+
+          reuse_or_dispatch() {
+            local workflow="$1" workflow_file="$2" evidence="$3"; shift 3
+            local existing previous run_id attempt wait_status
+            existing="$(find_run_id "$workflow" workflow_dispatch)"
+            if [[ -n "$existing" ]]; then
+              set +e
+              wait_for_run "$existing"
+              wait_status=$?
+              set -e
+              if [[ "$wait_status" -eq 0 ]]; then
+                write_run_evidence "$existing" "$evidence"
+                if validate_run "$evidence" workflow_dispatch "$@"; then
+                  echo "Reusing complete exact-head ${workflow} run ${existing}" >&2
+                  printf '%s\n' "$existing"
+                  return 0
+                fi
+              fi
+              echo "Existing exact-head ${workflow} dispatch is not reusable; dispatching once." >&2
+            fi
+
+            previous="${existing:-0}"
+            retry_gh gh workflow run "$workflow_file" --repo "$REPOSITORY" --ref "$HEAD_REF" >/dev/null
+            for attempt in $(seq 1 120); do
+              run_id="$(find_run_id "$workflow" workflow_dispatch)"
+              if [[ -n "$run_id" ]] && (( run_id > previous )); then
+                wait_for_run "$run_id"
+                write_run_evidence "$run_id" "$evidence"
+                validate_run "$evidence" workflow_dispatch "$@"
+                printf '%s\n' "$run_id"
+                return 0
+              fi
+              sleep 5
+            done
+            echo "Unable to resolve new exact-head ${workflow} dispatch" >&2
+            return 1
+          }
+          BASH
+          bash -n "${RUNNER_TEMP}/release-run-utils.sh"
+
+      - name: Run exact-head sequence through Package
+        id: runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${RUNNER_TEMP}/release-run-utils.sh"
+
+          ai_run_id="$(wait_for_pr_run 'AI Change Proof')"
+          write_run_evidence "$ai_run_id" ai-run.json
+          validate_run ai-run.json pull_request 'AI change gate'
+
+          docs_run_id="$(wait_for_pr_run 'Release Documentation')"
+          write_run_evidence "$docs_run_id" release-docs-run.json
+          validate_run release-docs-run.json pull_request 'Verify release documentation truth'
+
+          full_run_id="$(reuse_or_dispatch 'Full Validation' full-validation.yml full-validation-run.json \
+            'Resolve full-validation mode' \
+            'Full database validation' \
+            'Full Rust compile, lint, and tests' \
+            'Final browser product acceptance' \
+            'Full validation gate')"
+
+          foundation_run_id="$(reuse_or_dispatch 'Production Foundation' production-foundation.yml production-foundation-run.json \
+            'Render and verify production topology' \
+            'Apply migrations and roles on pinned Supabase PostgreSQL 17' \
+            'Start complete production stack')"
+
+          operations_run_id="$(reuse_or_dispatch 'Production Operations' production-operations.yml production-operations-run.json \
+            'Validate operations definitions and regressions' \
+            'Scan dependencies and production configuration' \
+            'Prove PostgreSQL PITR, Qdrant recovery, and migration rollback' \
+            'Prove backup, alerts, load, restart, and fail-closed configuration' \
+            'Production operations gate')"
+
+          package_run_id="$(reuse_or_dispatch 'Package' package.yml package-run.json \
+            'Validate package definitions' \
+            'Docker image and release bundle')"
+
+          {
+            echo "ai_run_id=$ai_run_id"
+            echo "docs_run_id=$docs_run_id"
+            echo "full_run_id=$full_run_id"
+            echo "foundation_run_id=$foundation_run_id"
+            echo "operations_run_id=$operations_run_id"
+            echo "package_run_id=$package_run_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload pre-appliance exact-head evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: final-release-pre-appliance-evidence
+          path: |
+            release-entry.json
+            manual-external-pr.json
+            ai-run.json
+            release-docs-run.json
+            full-validation-run.json
+            production-foundation-run.json
+            production-operations-run.json
+            package-run.json
+          if-no-files-found: error
+          retention-days: 14
+
+  complete-appliance:
+    name: Complete exact-head appliance proof
+    needs: serialize
+    uses: ./.github/workflows/air-gapped-appliance.yml
+    with:
+      version: rc-${{ github.event.pull_request.head.sha }}
+      complete: true
+      create_archive: false
+
+  aggregate:
+    name: Final automated release gate
+    if: always()
+    needs:
+      - serialize
+      - complete-appliance
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      SERIALIZE_RESULT: ${{ needs.serialize.result }}
+      APPLIANCE_RESULT: ${{ needs.complete-appliance.result }}
+    steps:
+      - name: Enforce upstream exact-head outcomes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SERIALIZE_RESULT" = success
+          test "$APPLIANCE_RESULT" = success
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: final-release-pre-appliance-evidence
+          path: evidence/pre
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: air-gapped-appliance-gate
+          path: evidence/appliance-gate
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: air-gapped-appliance-evidence
+          path: evidence/appliance
+
+      - name: Verify appliance manifest, provenance inventory and exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$HEAD_SHA" evidence/appliance-gate/air-gapped-appliance-gate.json evidence/appliance <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          expected_sha = sys.argv[1]
+          gate = json.load(open(sys.argv[2], encoding="utf-8"))
+          root = Path(sys.argv[3])
+          assert gate["head_sha"] == expected_sha, gate
+          assert gate["validation"] == "success", gate
+          assert gate["offline_appliance"] == "success", gate
+          assert gate["native_arm64"] == "success", gate
+
+          manifests = list(root.rglob("release-manifest.json"))
+          assert len(manifests) == 1, manifests
+          manifest = json.load(manifests[0].open(encoding="utf-8"))
+          assert manifest["release"]["git_sha"] == expected_sha
+          assert manifest["release"]["platform"] == "linux/amd64"
+          assert len(manifest["images"]) >= 10
+          assert all(row["source_digest"].startswith("sha256:") for row in manifest["images"])
+          assert any(row["path"] == "provenance/release-builder.json" for row in manifest["files"]), "release-builder provenance missing from signed manifest inventory"
+          assert any(row["path"] == "sbom/release-files.spdx.json" for row in manifest["files"]), "release SBOM missing from manifest inventory"
+
+          evidence_files = list(root.rglob("appliance-evidence.json"))
+          assert len(evidence_files) == 1, evidence_files
+          evidence = json.load(evidence_files[0].open(encoding="utf-8"))
+          assert evidence["head_sha"] == expected_sha
+          assert evidence["offline_startup"] == "success"
+          assert evidence["registry_pull_policy"] == "never"
+          PY
+
+      - name: Write final exact-head automated disposition
+        shell: bash
+        env:
+          AI_RUN_ID: ${{ needs.serialize.outputs.ai_run_id }}
+          DOCS_RUN_ID: ${{ needs.serialize.outputs.docs_run_id }}
+          FULL_RUN_ID: ${{ needs.serialize.outputs.full_run_id }}
+          FOUNDATION_RUN_ID: ${{ needs.serialize.outputs.foundation_run_id }}
+          OPERATIONS_RUN_ID: ${{ needs.serialize.outputs.operations_run_id }}
+          PACKAGE_RUN_ID: ${{ needs.serialize.outputs.package_run_id }}
+        run: |
+          set -euo pipefail
+          cat > final-release-acceptance.json <<EOF
+          {
+            "schema_version": 1,
+            "pr": ${PR_NUMBER},
+            "head_sha": "${HEAD_SHA}",
+            "automated_gates": {
+              "ai_change_proof_run_id": ${AI_RUN_ID},
+              "release_documentation_run_id": ${DOCS_RUN_ID},
+              "full_validation_run_id": ${FULL_RUN_ID},
+              "production_foundation_run_id": ${FOUNDATION_RUN_ID},
+              "production_operations_run_id": ${OPERATIONS_RUN_ID},
+              "package_run_id": ${PACKAGE_RUN_ID},
+              "air_gapped_appliance": "success"
+            },
+            "manual_external_gate": "PR #16 required; not inferred from CI",
+            "automated_release_classification": "ready for final validation",
+            "ready_for_contracted_production": false
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: final-release-acceptance-evidence
+          path: |
+            final-release-acceptance.json
+            evidence/pre/**
+            evidence/appliance-gate/**
+          if-no-files-found: error
+          retention-days: 14

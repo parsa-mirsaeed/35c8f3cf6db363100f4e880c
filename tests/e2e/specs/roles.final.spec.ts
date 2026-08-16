@@ -30,6 +30,11 @@ async function signInEnglish(page: Page, email: string): Promise<void> {
   await signIn(page, email);
 }
 
+async function signOut(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /sign out|خروج/i }).click();
+  await expect(page).toHaveURL(/\/$/);
+}
+
 async function establishSession(page: Page, email: string): Promise<void> {
   // Direct-route acceptance must begin from a valid authenticated browser
   // context, not by tearing down a live hydrated Dioxus document. The browser
@@ -122,6 +127,60 @@ test('student sees only persisted enrollment and assignment state @final @workfl
   await expect(page.getByText('E2E Class A1', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('E2E Assignment A1', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('E2E Class B1', { exact: true })).toHaveCount(0);
+});
+
+test('student submission is graded by the authorized teacher and appears in persisted grades @final @workflows', async ({ page }, testInfo) => {
+  const assignmentTitle = testInfo.project.name === 'mobile-chromium'
+    ? 'E2E Submission Journey Mobile'
+    : 'E2E Submission Journey Desktop';
+  const submittedWork = `Persisted ${testInfo.project.name} submission`;
+  const feedback = `Verified ${testInfo.project.name} feedback`;
+
+  // Student performs the contracted submission workflow against the real server.
+  await signInEnglish(page, 'e2e-student-a@example.test');
+  await actionWithIcon(page, 'assignment').click();
+  await expect(page.getByText(assignmentTitle, { exact: true })).toBeVisible();
+  await page.getByText(assignmentTitle, { exact: true }).first().click();
+  await page.getByRole('button', { name: 'Start Assignment', exact: true }).click();
+
+  const workEditor = page.locator('textarea').first();
+  await expect(workEditor).toBeVisible();
+  await workEditor.fill(submittedWork);
+  await page.getByRole('button', { name: 'Submit Assignment', exact: true }).click();
+  await expect(workEditor).toHaveCount(0);
+  await signOut(page);
+
+  // The School A teacher sees that submission, records a grade, and persists feedback.
+  await signInEnglish(page, 'e2e-teacher-a@example.test');
+  await actionWithIcon(page, 'grading').click();
+  await expect(page.getByText(assignmentTitle, { exact: true })).toBeVisible();
+  await expect(page.getByText(submittedWork, { exact: true })).toBeVisible();
+
+  const submissionCard = page
+    .getByText(assignmentTitle, { exact: true })
+    .locator('xpath=ancestor::div[contains(@class,"rounded-xl")][.//button[contains(normalize-space(.),"Grade Submission")]][1]');
+  await submissionCard.getByRole('button', { name: 'Grade Submission', exact: true }).click();
+
+  const gradingDialog = page.getByRole('dialog');
+  await expect(gradingDialog).toBeVisible();
+  await gradingDialog.locator('input[type="number"]').fill('91');
+  await gradingDialog.locator('textarea').fill(feedback);
+  await gradingDialog.getByRole('button', { name: 'Save Grade', exact: true }).click();
+  await expect(gradingDialog).toHaveCount(0);
+  await expect(page.getByText(assignmentTitle, { exact: true })).toHaveCount(0);
+  await signOut(page);
+
+  // The student reads the persisted grade from the production grade view.
+  await signInEnglish(page, 'e2e-student-a@example.test');
+  await actionWithIcon(page, 'grade').click();
+  const classCard = page
+    .getByText('E2E Class A1', { exact: true })
+    .locator('xpath=ancestor::div[contains(@class,"glass-card")][1]');
+  await classCard.getByRole('button', { name: 'View Details', exact: true }).click();
+
+  const gradesDialog = page.getByRole('dialog');
+  await expect(gradesDialog).toContainText(assignmentTitle);
+  await expect(gradesDialog).toContainText('91/100');
 });
 
 test('parent sees only the authorized child enrollment @final @workflows', async ({ page }) => {

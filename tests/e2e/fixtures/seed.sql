@@ -2,9 +2,9 @@
 -- Loaded into the local CI PostgreSQL before the production-like server starts.
 --
 -- Schools A and B, a PlatformAdmin, managers/teachers/students/parents for both
--- schools, active and inactive accounts, one class per school, one published
--- assignment with a submission and grade, and published knowledge assets in
--- both schools for object-level tenant-denial evidence.
+-- schools, active and inactive accounts, classes, published assignments,
+-- submissions/grades, and published knowledge assets. Separate desktop/mobile
+-- assignment IDs keep stateful acceptance deterministic across Playwright projects.
 
 BEGIN;
 
@@ -56,15 +56,25 @@ INSERT INTO enrollments (class_section_id, student_id) VALUES
 ON CONFLICT DO NOTHING;
 
 INSERT INTO assignments (id, teacher_id, class_section_id, subject_id, title, body, due_at, status, published_at) VALUES
-  ('f0000000-0000-0000-0000-0000000000a1', 'c0000000-0000-0000-0000-0000000000a2', 'e0000000-0000-0000-0000-0000000000a1', 'd0000000-0000-0000-0000-0000000000a1', 'E2E Assignment A1', 'Synthetic body', NOW() + INTERVAL '7 days', 'Published', NOW())
+  ('f0000000-0000-0000-0000-0000000000a1', 'c0000000-0000-0000-0000-0000000000a2', 'e0000000-0000-0000-0000-0000000000a1', 'd0000000-0000-0000-0000-0000000000a1', 'E2E Assignment A1', 'Synthetic body', NOW() + INTERVAL '7 days', 'Published', NOW()),
+  ('f0000000-0000-0000-0000-0000000000a2', 'c0000000-0000-0000-0000-0000000000a2', 'e0000000-0000-0000-0000-0000000000a1', 'd0000000-0000-0000-0000-0000000000a1', 'E2E Submission Journey Desktop', 'Desktop stateful acceptance body', NOW() + INTERVAL '8 days', 'Published', NOW()),
+  ('f0000000-0000-0000-0000-0000000000a3', 'c0000000-0000-0000-0000-0000000000a2', 'e0000000-0000-0000-0000-0000000000a1', 'd0000000-0000-0000-0000-0000000000a1', 'E2E Submission Journey Mobile', 'Mobile stateful acceptance body', NOW() + INTERVAL '9 days', 'Published', NOW()),
+  ('f0000000-0000-0000-0000-0000000000a4', 'c0000000-0000-0000-0000-0000000000a2', 'e0000000-0000-0000-0000-0000000000a1', 'd0000000-0000-0000-0000-0000000000a1', 'E2E Authorization Submission A', 'School A authorization probe', NOW() + INTERVAL '10 days', 'Published', NOW()),
+  ('f0000000-0000-0000-0000-0000000000b1', 'c0000000-0000-0000-0000-0000000000b2', 'e0000000-0000-0000-0000-0000000000b1', 'd0000000-0000-0000-0000-0000000000a1', 'E2E Authorization Submission B', 'School B authorization probe', NOW() + INTERVAL '10 days', 'Published', NOW())
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO custom_assignments (id, assignment_id, student_id, due_at, status) VALUES
-  ('f1000000-0000-0000-0000-0000000000a1', 'f0000000-0000-0000-0000-0000000000a1', 'c0000000-0000-0000-0000-0000000000a3', NOW() + INTERVAL '7 days', 'Graded')
+  ('f1000000-0000-0000-0000-0000000000a1', 'f0000000-0000-0000-0000-0000000000a1', 'c0000000-0000-0000-0000-0000000000a3', NOW() + INTERVAL '7 days', 'Graded'),
+  ('f1000000-0000-0000-0000-0000000000a2', 'f0000000-0000-0000-0000-0000000000a2', 'c0000000-0000-0000-0000-0000000000a3', NOW() + INTERVAL '8 days', 'Assigned'),
+  ('f1000000-0000-0000-0000-0000000000a3', 'f0000000-0000-0000-0000-0000000000a3', 'c0000000-0000-0000-0000-0000000000a3', NOW() + INTERVAL '9 days', 'Assigned'),
+  ('f1000000-0000-0000-0000-0000000000a4', 'f0000000-0000-0000-0000-0000000000a4', 'c0000000-0000-0000-0000-0000000000a3', NOW() + INTERVAL '10 days', 'Submitted'),
+  ('f1000000-0000-0000-0000-0000000000b1', 'f0000000-0000-0000-0000-0000000000b1', 'c0000000-0000-0000-0000-0000000000b3', NOW() + INTERVAL '10 days', 'Submitted')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO submissions (id, custom_assignment_id, student_id, content, grade, graded_by) VALUES
-  ('f2000000-0000-0000-0000-0000000000a1', 'f1000000-0000-0000-0000-0000000000a1', 'c0000000-0000-0000-0000-0000000000a3', '{"text":"synthetic"}'::jsonb, 18.50, 'c0000000-0000-0000-0000-0000000000a2')
+  ('f2000000-0000-0000-0000-0000000000a1', 'f1000000-0000-0000-0000-0000000000a1', 'c0000000-0000-0000-0000-0000000000a3', '{"text":"synthetic"}'::jsonb, 18.50, 'c0000000-0000-0000-0000-0000000000a2'),
+  ('f2000000-0000-0000-0000-0000000000a4', 'f1000000-0000-0000-0000-0000000000a4', 'c0000000-0000-0000-0000-0000000000a3', '{"text":"school-a authorization submission"}'::jsonb, NULL, NULL),
+  ('f2000000-0000-0000-0000-0000000000b1', 'f1000000-0000-0000-0000-0000000000b1', 'c0000000-0000-0000-0000-0000000000b3', '{"text":"school-b authorization submission"}'::jsonb, NULL, NULL)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO knowledge_assets (id, school_id, title, status, created_by, published_at) VALUES

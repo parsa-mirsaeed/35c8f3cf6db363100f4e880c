@@ -248,33 +248,49 @@ pub fn Modal(
     on_close: Callback<()>,
     children: Element,
 ) -> Element {
+    let locale = use_locale();
+
     rsx! {
         if open {
             div {
                 class: "fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6",
-                
+
                 // Backdrop
                 div {
                     class: "absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity",
+                    "aria-hidden": "true",
                     onclick: move |_| on_close.call(()),
                 }
 
-                // Modal Content
+                // Modal Content. The close control is autofocus so keyboard and
+                // assistive-technology users enter the modal instead of staying
+                // on an obscured background control.
                 div {
                     class: "relative w-full max-w-lg transform rounded-xl glassmorphism bg-white dark:bg-gray-800 shadow-2xl transition-all p-6",
+                    role: "dialog",
+                    "aria-modal": "true",
+                    "aria-labelledby": "edutalent-modal-title",
                     onclick: |e| e.stop_propagation(),
 
                     // Header
                     div {
                         class: "flex items-center justify-between mb-6",
                         h2 {
+                            id: "edutalent-modal-title",
                             class: "text-xl font-bold text-gray-900 dark:text-white",
                             "{title}"
                         }
                         button {
-                            class: "text-gray-400 hover:text-gray-500 dark:hover:text-gray-300 transition-colors",
+                            r#type: "button",
+                            class: "text-gray-400 hover:text-gray-500 dark:hover:text-gray-300 transition-colors rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800",
+                            "aria-label": locale.t("common.close"),
+                            autofocus: true,
                             onclick: move |_| on_close.call(()),
-                            span { class: "material-icons-outlined", "close" }
+                            span {
+                                class: "material-icons-outlined",
+                                "aria-hidden": "true",
+                                "close"
+                            }
                         }
                     }
 

@@ -1,8 +1,8 @@
 // @smoke @authorization — PR-12 negative journeys using direct URL and object-ID manipulation.
 //
 // Authorization evidence does not depend on hidden buttons: tests exercise the
-// role route directly and tamper an actual server-function request with a known
-// object ID from another seeded school.
+// role route directly and tamper actual server-function requests with known
+// object IDs from another seeded school.
 import { test, expect, type Page } from '@playwright/test';
 import { enforceOfflineAllowlist, assertNoUnexpectedOrigins } from '../fixtures/network-policy';
 import { watchConsole, assertNoConsoleErrors } from '../fixtures/console-guard';
@@ -11,6 +11,10 @@ const STUDENT = { email: 'e2e-student-a@example.test', password: 'e2e-password' 
 const TEACHER = { email: 'e2e-teacher-a@example.test', password: 'e2e-password' };
 const SCHOOL_A_ASSET = 'f3000000-0000-0000-0000-0000000000a1';
 const SCHOOL_B_ASSET = 'f3000000-0000-0000-0000-0000000000b1';
+const SCHOOL_A_CUSTOM_ASSIGNMENT = 'f1000000-0000-0000-0000-0000000000a2';
+const SCHOOL_B_CUSTOM_ASSIGNMENT = 'f1000000-0000-0000-0000-0000000000b1';
+const SCHOOL_A_SUBMISSION = 'f2000000-0000-0000-0000-0000000000a4';
+const SCHOOL_B_SUBMISSION = 'f2000000-0000-0000-0000-0000000000b1';
 
 async function signIn(page: Page, email: string, password: string): Promise<void> {
   await page.goto('/');
@@ -18,6 +22,14 @@ async function signIn(page: Page, email: string, password: string): Promise<void
   await page.locator('input[type="password"]').fill(password);
   await page.getByRole('button', { name: /sign in|ورود/i }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+}
+
+function actionWithIcon(page: Page, icon: string) {
+  return page.locator('button', {
+    has: page.locator('span.material-icons-outlined', {
+      hasText: new RegExp(`^${icon}$`),
+    }),
+  }).first();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -44,6 +56,60 @@ test('student direct navigation to teacher-only area is denied @smoke @authoriza
     deniedByRedirect || deniedByStatus || deniedByBody,
     `expected teacher-only route to deny a student (url=${page.url()}, status=${response?.status()})`,
   ).toBeTruthy();
+});
+
+test('student cannot submit a School B assignment by tampering its object ID @smoke @authorization', async ({ page }) => {
+  await signIn(page, STUDENT.email, STUDENT.password);
+  await actionWithIcon(page, 'assignment').click();
+
+  await page.getByText('E2E Submission Journey Desktop', { exact: true }).first().click();
+  await actionWithIcon(page, 'edit').click();
+  await page.locator('textarea').first().fill('School A authorization probe');
+
+  let tamperObserved = false;
+  await page.route('**/api/submissions/submit', async (route) => {
+    const original = route.request().postData();
+    expect(original, 'submission request must contain a custom-assignment identifier').toBeTruthy();
+    expect(original).toContain(SCHOOL_A_CUSTOM_ASSIGNMENT);
+    const tampered = original!.replace(SCHOOL_A_CUSTOM_ASSIGNMENT, SCHOOL_B_CUSTOM_ASSIGNMENT);
+    tamperObserved = true;
+    const response = await route.fetch({ postData: tampered });
+    await route.fulfill({ response });
+  });
+
+  await actionWithIcon(page, 'send').click();
+  await expect.poll(() => tamperObserved).toBeTruthy();
+  await expect(page.locator('body')).toContainText(/not found|unauthorized|forbidden|failed|error|دسترسی|خطا/i);
+});
+
+test('teacher cannot grade a School B submission by tampering its object ID @smoke @authorization', async ({ page }) => {
+  await signIn(page, TEACHER.email, TEACHER.password);
+  await actionWithIcon(page, 'grading').click();
+
+  const assignmentTitle = page.getByText('E2E Authorization Submission A', { exact: true });
+  await expect(assignmentTitle).toBeVisible();
+  const submissionCard = assignmentTitle.locator(
+    'xpath=ancestor::div[contains(@class,"rounded-xl")][.//button[.//span[normalize-space()="grading"]]][1]',
+  );
+  await submissionCard.locator('xpath=.//button[.//span[normalize-space()="grading"]]').click();
+
+  let tamperObserved = false;
+  await page.route('**/api/teacher/submissions/grade', async (route) => {
+    const original = route.request().postData();
+    expect(original, 'grade request must contain a submission identifier').toBeTruthy();
+    expect(original).toContain(SCHOOL_A_SUBMISSION);
+    const tampered = original!.replace(SCHOOL_A_SUBMISSION, SCHOOL_B_SUBMISSION);
+    tamperObserved = true;
+    const response = await route.fetch({ postData: tampered });
+    await route.fulfill({ response });
+  });
+
+  await page.locator('input[type="number"]').fill('90');
+  await page.locator('textarea').fill('Cross-school grade must be rejected');
+  await page.locator('xpath=//button[.//span[normalize-space()="check"]]').click();
+
+  await expect.poll(() => tamperObserved).toBeTruthy();
+  await expect(page.locator('body')).toContainText(/not owned|not found|unauthorized|forbidden|failed|error|دسترسی|خطا/i);
 });
 
 test('teacher cannot mutate a School B knowledge asset by tampering its object ID @smoke @authorization', async ({ page }) => {

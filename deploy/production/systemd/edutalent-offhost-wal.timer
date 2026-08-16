@@ -1,0 +1,12 @@
+[Unit]
+Description=Synchronize verified EduTalent WAL off-host every ten minutes
+
+[Timer]
+OnBootSec=7min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=true
+Unit=edutalent-offhost-wal.service
+
+[Install]
+WantedBy=timers.target

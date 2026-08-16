@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EduTalent encrypted full backup daily
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=edutalent-backup.service
+
+[Install]
+WantedBy=timers.target

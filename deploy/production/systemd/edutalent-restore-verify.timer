@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EduTalent restore verification weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00
+RandomizedDelaySec=30min
+Persistent=true
+Unit=edutalent-restore-verify.service
+
+[Install]
+WantedBy=timers.target

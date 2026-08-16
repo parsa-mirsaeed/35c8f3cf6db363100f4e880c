@@ -1,0 +1,30 @@
+[Unit]
+Description=EduTalent continuous PostgreSQL WAL receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+User=edutalent-operator
+Group=edutalent-operator
+EnvironmentFile=/etc/edutalent/operations.env
+ExecStart=/opt/edutalent/deploy/production/edutalent-operations pitr-start
+ExecStop=/opt/edutalent/deploy/production/edutalent-operations pitr-stop
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/edutalent/operations /mnt/edutalent-backup
+
+[Install]
+WantedBy=multi-user.target

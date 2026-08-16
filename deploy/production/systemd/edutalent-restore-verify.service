@@ -1,0 +1,26 @@
+[Unit]
+Description=EduTalent newest-backup restore verification
+After=network-online.target edutalent-wal.service
+Wants=network-online.target edutalent-wal.service
+
+[Service]
+Type=oneshot
+User=edutalent-operator
+Group=edutalent-operator
+EnvironmentFile=/etc/edutalent/operations.env
+Environment=EDUTALENT_OPERATIONS_COMMAND=/opt/edutalent/deploy/production/edutalent-operations
+ExecStart=/bin/bash /opt/edutalent/deploy/production/systemd/run-latest-restore-drill
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/edutalent/operations /mnt/edutalent-backup

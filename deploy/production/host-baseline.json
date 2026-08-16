@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "baseline_id": "edutalent-single-node-ubuntu-24.04-v1",
+  "status": "qualification baseline; target-host acceptance is required before production",
+  "operating_system": {
+    "id": "ubuntu",
+    "version_id": "24.04",
+    "architectures": [
+      "x86_64"
+    ],
+    "minimum_kernel": "6.8.0"
+  },
+  "container_runtime": {
+    "minimum_docker_engine": "24.0.0",
+    "minimum_docker_compose": "2.24.4",
+    "rootless_preferred": true,
+    "rootful_requires_tailored_security_review": true
+  },
+  "capacity": {
+    "minimum_cpu_cores": 4,
+    "minimum_memory_bytes": 8589934592,
+    "minimum_root_free_bytes": 21474836480,
+    "minimum_root_free_inodes": 100000,
+    "storage_medium": "ssd",
+    "note": "The free-space threshold is only an installation/operations floor. School data, model, document, WAL and retention capacity must be measured and approved separately."
+  },
+  "filesystems": {
+    "allowed_root_types": [
+      "ext4",
+      "xfs"
+    ],
+    "data_at_rest_encryption_required": true,
+    "encryption_evidence": "manual target-host evidence required"
+  },
+  "time": {
+    "synchronization_required": true,
+    "maximum_clock_skew_seconds": 60
+  },
+  "network": {
+    "required_public_tcp_ports": [
+      80,
+      443
+    ],
+    "firewall_required": true,
+    "dns_names_required": 3,
+    "tls_minimum_days_remaining": 14,
+    "administration_must_be_cidr_restricted": true
+  },
+  "operations": {
+    "dedicated_unprivileged_operator_required": true,
+    "separate_backup_filesystem_required": true,
+    "minimum_backup_free_bytes": 10737418240,
+    "backup_passphrase_separate_from_media": true,
+    "backup_passphrase_allowed_modes": [
+      "0400",
+      "0600"
+    ],
+    "continuous_wal_reception_required": true
+  },
+  "availability": {
+    "architecture": "single-node",
+    "high_availability": false,
+    "statement": "The supported first-release topology is a single server and is not highly available. Planned and fault-induced interruptions must be reflected in acceptance and contract scope."
+  },
+  "security_benchmarks": {
+    "cis_docker": "1.8.0",
+    "cis_ubuntu_24_04_lts": "2.0.0",
+    "note": "Benchmark versions were rechecked against the official CIS catalogue in August 2026; acceptance records remain tailored assessments, not certification claims."
+  }
+}

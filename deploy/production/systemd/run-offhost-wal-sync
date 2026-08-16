@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+OPERATIONS_STATE="${EDUTALENT_OPERATIONS_STATE_DIR:-/var/lib/edutalent/operations}"
+LOCAL_WAL_DIR="${EDUTALENT_WAL_DIR:-${OPERATIONS_STATE}/wal}"
+OFFHOST_WAL_DIR="${EDUTALENT_OFFHOST_WAL_DIR:-${EDUTALENT_OFFHOST_BACKUP_DIR:-}/wal}"
+
+[[ "${LOCAL_WAL_DIR}" == /* ]] || { echo "Local WAL directory must be absolute." >&2; exit 1; }
+[[ -n "${OFFHOST_WAL_DIR}" && "${OFFHOST_WAL_DIR}" == /* ]] || { echo "EDUTALENT_OFFHOST_WAL_DIR (or EDUTALENT_OFFHOST_BACKUP_DIR) is required and must be absolute." >&2; exit 1; }
+[[ -d "${LOCAL_WAL_DIR}" ]] || { echo "Local WAL directory is missing: ${LOCAL_WAL_DIR}" >&2; exit 1; }
+mkdir -p -- "${OFFHOST_WAL_DIR}"
+[[ -w "${OFFHOST_WAL_DIR}" ]] || { echo "Off-host WAL directory is not writable: ${OFFHOST_WAL_DIR}" >&2; exit 1; }
+
+local_real="$(realpath "${LOCAL_WAL_DIR}")"
+offhost_real="$(realpath "${OFFHOST_WAL_DIR}")"
+[[ "${local_real}" != "${offhost_real}" ]] || { echo "Off-host WAL target must differ from the local WAL directory." >&2; exit 1; }
+
+copied=0
+verified=0
+while IFS= read -r source; do
+  [[ -n "${source}" ]] || continue
+  name="$(basename "${source}")"
+  [[ "${name}" =~ ^[0-9A-F]{24}$ ]] || continue
+  source_sha="$(sha256sum "${source}" | awk '{print $1}')"
+  destination="${offhost_real}/${name}"
+  if [[ -f "${destination}" ]]; then
+    destination_sha="$(sha256sum "${destination}" | awk '{print $1}')"
+    [[ "${destination_sha}" == "${source_sha}" ]] || {
+      echo "Existing off-host WAL segment hash mismatch: ${name}" >&2
+      exit 1
+    }
+    verified=$((verified + 1))
+    continue
+  fi
+  partial="${offhost_real}/.${name}.partial.$$.tmp"
+  trap 'rm -f -- "${partial:-}"' EXIT
+  cp --reflink=auto --sparse=never -- "${source}" "${partial}"
+  chmod 0600 "${partial}"
+  copied_sha="$(sha256sum "${partial}" | awk '{print $1}')"
+  [[ "${copied_sha}" == "${source_sha}" ]] || { echo "Off-host WAL copy SHA-256 verification failed: ${name}" >&2; exit 1; }
+  mv -- "${partial}" "${destination}"
+  sync "${destination}" 2>/dev/null || sync
+  trap - EXIT
+  copied=$((copied + 1))
+done < <(find "${local_real}" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9A-F]{24}' -print | sort)
+
+latest_local="$(find "${local_real}" -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9A-F]{24}' -printf '%f\n' | sort | tail -n1)"
+[[ -n "${latest_local}" ]] || { echo "No completed WAL segments are available for off-host synchronization." >&2; exit 1; }
+[[ -f "${offhost_real}/${latest_local}" ]] || { echo "Latest WAL segment was not present off-host after synchronization." >&2; exit 1; }
+latest_sha="$(sha256sum "${local_real}/${latest_local}" | awk '{print $1}')"
+offhost_sha="$(sha256sum "${offhost_real}/${latest_local}" | awk '{print $1}')"
+[[ "${latest_sha}" == "${offhost_sha}" ]] || { echo "Latest off-host WAL verification failed." >&2; exit 1; }
+
+echo "Off-host WAL synchronization verified: copied=${copied} existing_verified=${verified} latest=${latest_local}"

@@ -32,9 +32,7 @@ pub(crate) fn supplemental_translation(key: &'static str, locale: Locale) -> Opt
 
         // Persian uses a 0–20 display scale. Override the legacy 0–100 copy so
         // validation and labels agree with Locale::max_grade().
-        (Locale::Fa, "submissions.validation_range") => {
-            Some("لطفاً یک نمره عددی معتبر وارد کنید")
-        }
+        (Locale::Fa, "submissions.validation_range") => Some("لطفاً یک نمره عددی معتبر وارد کنید"),
         (Locale::Fa, "submissions.grade_range_label") => Some("نمره (۰-۲۰)"),
         (Locale::Fa, "submissions.grade_label") => Some("نمره"),
         _ => None,

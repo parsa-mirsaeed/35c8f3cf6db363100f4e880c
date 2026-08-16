@@ -1,6 +1,6 @@
 # EduTalent production systemd units
 
-These units are reference templates for the supported single-node host baseline. They automate local monitoring, encrypted backups, verified off-host copy, restore verification, and continuous WAL reception without adding internet telemetry or granting the service account `sudo`.
+These units are reference templates for the supported single-node host baseline. They automate local monitoring, encrypted backups, verified off-host backup/WAL copy, restore verification, and continuous WAL reception without adding internet telemetry or granting the service account `sudo`.
 
 ## Installation assumptions
 
@@ -17,6 +17,7 @@ These units are reference templates for the supported single-node host baseline.
 EDUTALENT_OPERATIONS_STATE_DIR=/var/lib/edutalent/operations
 EDUTALENT_BACKUP_DIR=/mnt/edutalent-backup
 EDUTALENT_OFFHOST_BACKUP_DIR=/mnt/edutalent-offhost
+EDUTALENT_OFFHOST_WAL_DIR=/mnt/edutalent-offhost/wal
 EDUTALENT_BACKUP_PASSPHRASE_FILE=/etc/edutalent/backup.passphrase
 EDUTALENT_APP_ENV=/opt/edutalent/deploy/production/.env.edutalent
 EDUTALENT_SUPABASE_ENV=/opt/edutalent/deploy/production/runtime/supabase/.env
@@ -32,20 +33,24 @@ Copy the units into `/etc/systemd/system/`, review paths and the Docker context 
 sudo systemctl daemon-reload
 sudo systemctl enable --now edutalent-wal.service
 sudo systemctl enable --now edutalent-wal-verify.timer
+sudo systemctl enable --now edutalent-offhost-wal.timer
 sudo systemctl enable --now edutalent-monitor.timer
 sudo systemctl enable --now edutalent-backup.timer
 sudo systemctl enable --now edutalent-offhost-copy.timer
 sudo systemctl enable --now edutalent-restore-verify.timer
 ```
 
-`edutalent-backup` performs an encrypted backup and immediate cryptographic/manifest verification. `edutalent-offhost-copy` selects the newest verified encrypted archive, verifies its source SHA-256, copies only the encrypted archive plus metadata to the mounted off-host destination using an atomic partial file, and verifies the copied SHA-256 before publication. It never reads or copies the backup passphrase. `edutalent-restore-verify` separately restores the newest verified local archive into the temporary drill database so checksum verification is not confused with restoration proof. `edutalent-wal-verify` exercises the running receiver and forces a WAL boundary periodically.
+`edutalent-backup` performs an encrypted backup and immediate cryptographic/manifest verification. `edutalent-offhost-copy` selects the newest verified encrypted archive, verifies its source SHA-256, copies only the encrypted archive plus metadata to the mounted off-host destination using an atomic partial file, and verifies the copied SHA-256 before publication. It never reads or copies the backup passphrase. `edutalent-wal-verify` exercises the running receiver and forces a WAL boundary periodically; `edutalent-offhost-wal` copies only completed 24-hex WAL segment files to the off-host mount, SHA-256 verifies new and existing segments, and fails closed on any mismatch. `edutalent-restore-verify` separately restores the newest verified local archive into the temporary drill database so checksum verification is not confused with restoration proof.
 
-Before enabling the units, run the live host preflight with operations checks and retain its JSON output:
+Before enabling the units, run the live host preflight with operations checks and the pre-start DNS/port/time check, retaining both JSON outputs:
 
 ```bash
 python3 /opt/edutalent/deploy/production/host_preflight.py \
   --require-operations \
   --output /var/lib/edutalent/operations/host-preflight.json
+python3 /opt/edutalent/deploy/production/host_network_preflight.py \
+  --app-env /opt/edutalent/deploy/production/.env.edutalent \
+  --output /var/lib/edutalent/operations/host-network-preflight.json
 ```
 
 An automatic PASS does not complete target-host acceptance. Encryption, firewall/daemon tailoring, proof that `/mnt/edutalent-offhost` is genuinely off-appliance, passphrase escrow, measured RPO/RTO/load, and replacement-host recovery must be recorded in `../operations/TARGET_HOST_ACCEPTANCE.md`.

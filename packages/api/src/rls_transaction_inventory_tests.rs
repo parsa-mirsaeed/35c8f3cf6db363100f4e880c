@@ -121,8 +121,9 @@ fn auth_middleware_owns_the_request_transaction_boundary() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/middleware/auth_guard.rs"),
     )
     .expect("read auth middleware");
-    assert!(middleware.contains("AuthorizedTx::begin(&state.services.raw_pool"));
-    assert!(middleware.contains("tx.scope(next.run(request)"));
+    let compact_middleware = middleware.split_whitespace().collect::<String>();
+    assert!(compact_middleware.contains("AuthorizedTx::begin(&state.services.raw_pool"));
+    assert!(compact_middleware.contains("tx.scope(next.run(request),|response|"));
 
     let app_state =
         fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app_state.rs"))

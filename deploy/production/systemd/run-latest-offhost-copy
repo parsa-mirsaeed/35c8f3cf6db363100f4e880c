@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+: "${EDUTALENT_BACKUP_DIR:?EDUTALENT_BACKUP_DIR is required}"
+: "${EDUTALENT_OFFHOST_BACKUP_DIR:?EDUTALENT_OFFHOST_BACKUP_DIR is required}"
+[[ "${EDUTALENT_BACKUP_DIR}" == /* && "${EDUTALENT_OFFHOST_BACKUP_DIR}" == /* ]] || {
+  echo "Backup and off-host backup directories must be absolute paths." >&2
+  exit 1
+}
+[[ -d "${EDUTALENT_BACKUP_DIR}" ]] || { echo "Backup directory is missing: ${EDUTALENT_BACKUP_DIR}" >&2; exit 1; }
+[[ -d "${EDUTALENT_OFFHOST_BACKUP_DIR}" ]] || { echo "Off-host backup mount is missing: ${EDUTALENT_OFFHOST_BACKUP_DIR}" >&2; exit 1; }
+[[ -w "${EDUTALENT_OFFHOST_BACKUP_DIR}" ]] || { echo "Off-host backup mount is not writable." >&2; exit 1; }
+
+backup_real="$(realpath "${EDUTALENT_BACKUP_DIR}")"
+offhost_real="$(realpath "${EDUTALENT_OFFHOST_BACKUP_DIR}")"
+[[ "${backup_real}" != "${offhost_real}" ]] || { echo "Off-host target must differ from the local backup directory." >&2; exit 1; }
+
+latest_metadata="$(
+  find "${backup_real}" -maxdepth 1 -type f -name 'edutalent-backup-*.tar.gz.enc.metadata.json' \
+    -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-
+)"
+[[ -n "${latest_metadata}" ]] || { echo "No verified backup metadata found in ${backup_real}." >&2; exit 1; }
+archive="${latest_metadata%.metadata.json}"
+[[ -f "${archive}" ]] || { echo "Backup archive missing for ${latest_metadata}." >&2; exit 1; }
+
+read -r metadata_name expected_sha < <(
+  python3 - "${latest_metadata}" <<'PY'
+import json, sys
+from pathlib import Path
+metadata = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+archive = str(metadata.get("archive", ""))
+sha = str(metadata.get("sha256", "")).lower()
+if not archive or len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+    raise SystemExit("Backup metadata is missing a valid archive name/SHA-256.")
+print(archive, sha)
+PY
+)
+[[ "${metadata_name}" == "$(basename "${archive}")" ]] || {
+  echo "Backup metadata archive name does not match source archive." >&2
+  exit 1
+}
+source_sha="$(sha256sum "${archive}" | awk '{print $1}')"
+[[ "${source_sha}" == "${expected_sha}" ]] || { echo "Source backup SHA-256 does not match metadata." >&2; exit 1; }
+
+partial="${offhost_real}/.${metadata_name}.partial.$$.tmp"
+destination="${offhost_real}/${metadata_name}"
+destination_metadata="${destination}.metadata.json"
+cleanup() { rm -f -- "${partial}"; }
+trap cleanup EXIT
+
+cp --reflink=auto --sparse=never -- "${archive}" "${partial}"
+chmod 0600 "${partial}"
+copied_sha="$(sha256sum "${partial}" | awk '{print $1}')"
+[[ "${copied_sha}" == "${expected_sha}" ]] || { echo "Off-host backup copy SHA-256 verification failed." >&2; exit 1; }
+mv -f -- "${partial}" "${destination}"
+cp -- "${latest_metadata}" "${destination_metadata}.tmp"
+chmod 0600 "${destination_metadata}.tmp"
+mv -f -- "${destination_metadata}.tmp" "${destination_metadata}"
+sync "${destination}" "${destination_metadata}" 2>/dev/null || sync
+trap - EXIT
+
+echo "Verified encrypted off-host backup copy: ${destination}"

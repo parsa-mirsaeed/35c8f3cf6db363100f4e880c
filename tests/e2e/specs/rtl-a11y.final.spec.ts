@@ -75,16 +75,22 @@ test('shared grading modal exposes dialog semantics and moves keyboard focus ins
 
   const assignmentTitle = page.getByText('E2E Authorization Submission A', { exact: true });
   await expect(assignmentTitle).toBeVisible();
+  await expect(page.getByText('submissions.grade_btn', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('submissions.review_description', { exact: true })).toHaveCount(0);
+
   const submissionCard = assignmentTitle.locator(
-    'xpath=ancestor::div[contains(@class,"rounded-xl")][.//button[contains(normalize-space(.),"Grade Submission")]][1]',
+    'xpath=ancestor::div[contains(@class,"rounded-xl")][.//button[.//span[normalize-space()="grading"]]][1]',
   );
-  await submissionCard.getByRole('button', { name: 'Grade Submission', exact: true }).click();
+  const gradeButton = submissionCard.locator('xpath=.//button[.//span[normalize-space()="grading"]]');
+  await expect(gradeButton).toContainText('Grade Submission');
+  await gradeButton.click();
 
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveAttribute('aria-modal', 'true');
   await expect(dialog).toHaveAttribute('aria-labelledby', 'edutalent-modal-title');
   await expect(dialog.locator('#edutalent-modal-title')).toContainText('Grade Submission');
+  await expect(dialog).toContainText('Grade (0-100)');
 
   const closeButton = dialog.getByRole('button', { name: 'Close', exact: true });
   await expect(closeButton).toBeFocused();

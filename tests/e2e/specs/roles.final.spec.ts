@@ -139,9 +139,17 @@ test('student submission is graded by the authorized teacher and appears in pers
   // Student performs the contracted submission workflow against the real server.
   await signInEnglish(page, 'e2e-student-a@example.test');
   await actionWithIcon(page, 'assignment').click();
-  await expect(page.getByText(assignmentTitle, { exact: true })).toBeVisible();
-  await page.getByText(assignmentTitle, { exact: true }).first().click();
-  await page.getByRole('button', { name: 'Start Assignment', exact: true }).click();
+  const assignmentCard = page
+    .getByText(assignmentTitle, { exact: true })
+    .locator('xpath=ancestor::div[contains(@class,"glass-card")][1]');
+  await expect(assignmentCard).toBeVisible();
+  await assignmentCard.getByRole('button', { name: 'Start Assignment', exact: true }).click();
+
+  const detailsOverlay = page
+    .locator('div.fixed.inset-0.z-50')
+    .filter({ hasText: assignmentTitle });
+  await expect(detailsOverlay).toBeVisible();
+  await detailsOverlay.getByRole('button', { name: 'Start Assignment', exact: true }).click();
 
   const workEditor = page.locator('textarea').first();
   await expect(workEditor).toBeVisible();
@@ -155,14 +163,16 @@ test('student submission is graded by the authorized teacher and appears in pers
   await actionWithIcon(page, 'grading').click();
   await expect(page.getByText(assignmentTitle, { exact: true })).toBeVisible();
   await expect(page.getByText(submittedWork, { exact: true })).toBeVisible();
+  await expect(page.getByText('submissions.grade_btn', { exact: true })).toHaveCount(0);
 
   const submissionCard = page
     .getByText(assignmentTitle, { exact: true })
-    .locator('xpath=ancestor::div[contains(@class,"rounded-xl")][.//button[contains(normalize-space(.),"Grade Submission")]][1]');
-  await submissionCard.getByRole('button', { name: 'Grade Submission', exact: true }).click();
+    .locator('xpath=ancestor::div[contains(@class,"rounded-xl")][.//button[.//span[normalize-space()="grading"]]][1]');
+  await submissionCard.locator('xpath=.//button[.//span[normalize-space()="grading"]]').click();
 
   const gradingDialog = page.getByRole('dialog');
   await expect(gradingDialog).toBeVisible();
+  await expect(gradingDialog.locator('#edutalent-modal-title')).toContainText('Grade Submission');
   await gradingDialog.locator('input[type="number"]').fill('91');
   await gradingDialog.locator('textarea').fill(feedback);
   await gradingDialog.getByRole('button', { name: 'Save Grade', exact: true }).click();

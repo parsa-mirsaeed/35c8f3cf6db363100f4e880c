@@ -1,6 +1,6 @@
 //! Locale provider and language switching for the web application.
 
-use super::{t, Locale, LocalizedGrade};
+use super::{supplemental_translation, t, Locale, LocalizedGrade};
 use dioxus::prelude::*;
 
 #[derive(Clone, Copy)]
@@ -34,7 +34,9 @@ impl LocaleContext {
     }
 
     pub fn t(&self, key: &'static str) -> String {
-        t(key, self.current())
+        supplemental_translation(key, self.current())
+            .map(str::to_owned)
+            .unwrap_or_else(|| t(key, self.current()))
     }
 
     pub fn format_grade(&self, value: f64) -> String {

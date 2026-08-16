@@ -5,7 +5,11 @@
 // object IDs from another seeded school.
 import { test, expect, type Page } from '@playwright/test';
 import { enforceOfflineAllowlist, assertNoUnexpectedOrigins } from '../fixtures/network-policy';
-import { watchConsole, assertNoConsoleErrors } from '../fixtures/console-guard';
+import {
+  allowHttpResponse,
+  watchConsole,
+  assertNoConsoleErrors,
+} from '../fixtures/console-guard';
 
 const STUDENT = { email: 'e2e-student-a@example.test', password: 'e2e-password' };
 const TEACHER = { email: 'e2e-teacher-a@example.test', password: 'e2e-password' };
@@ -30,6 +34,15 @@ function actionWithIcon(page: Page, icon: string) {
       hasText: new RegExp(`^${icon}$`),
     }),
   }).first();
+}
+
+function allowExpectedAuthorizationDenial(path: string): void {
+  // Dioxus server-function authorization errors currently serialize as HTTP
+  // 500. Keep the browser guard strict everywhere else while also accepting
+  // 403/404 so the test remains correct if the transport mapping improves.
+  for (const status of [403, 404, 500]) {
+    allowHttpResponse(path, status);
+  }
 }
 
 test.beforeEach(async ({ page }) => {
@@ -67,6 +80,9 @@ test('student cannot submit a School B assignment by tampering its object ID @sm
   await page.locator('textarea').first().fill('School A authorization probe');
 
   let tamperObserved = false;
+  let denialStatus: number | undefined;
+  let denialBody = '';
+  allowExpectedAuthorizationDenial('/api/submissions/submit');
   await page.route('**/api/submissions/submit', async (route) => {
     const original = route.request().postData();
     expect(original, 'submission request must contain a custom-assignment identifier').toBeTruthy();
@@ -74,11 +90,15 @@ test('student cannot submit a School B assignment by tampering its object ID @sm
     const tampered = original!.replace(SCHOOL_A_CUSTOM_ASSIGNMENT, SCHOOL_B_CUSTOM_ASSIGNMENT);
     tamperObserved = true;
     const response = await route.fetch({ postData: tampered });
-    await route.fulfill({ response });
+    denialStatus = response.status();
+    denialBody = await response.text();
+    await route.fulfill({ response, body: denialBody });
   });
 
   await actionWithIcon(page, 'send').click();
   await expect.poll(() => tamperObserved).toBeTruthy();
+  expect([403, 404, 500]).toContain(denialStatus);
+  expect(denialBody).toMatch(/assignment not found|forbidden|unauthorized/i);
   await expect(page.locator('body')).toContainText(/not found|unauthorized|forbidden|failed|error|دسترسی|خطا/i);
 });
 
@@ -94,6 +114,9 @@ test('teacher cannot grade a School B submission by tampering its object ID @smo
   await submissionCard.locator('xpath=.//button[.//span[normalize-space()="grading"]]').click();
 
   let tamperObserved = false;
+  let denialStatus: number | undefined;
+  let denialBody = '';
+  allowExpectedAuthorizationDenial('/api/teacher/submissions/grade');
   await page.route('**/api/teacher/submissions/grade', async (route) => {
     const original = route.request().postData();
     expect(original, 'grade request must contain a submission identifier').toBeTruthy();
@@ -101,14 +124,20 @@ test('teacher cannot grade a School B submission by tampering its object ID @smo
     const tampered = original!.replace(SCHOOL_A_SUBMISSION, SCHOOL_B_SUBMISSION);
     tamperObserved = true;
     const response = await route.fetch({ postData: tampered });
-    await route.fulfill({ response });
+    denialStatus = response.status();
+    denialBody = await response.text();
+    await route.fulfill({ response, body: denialBody });
   });
 
-  await page.locator('input[type="number"]').fill('90');
+  // 18 is valid on both the Persian 0–20 and English 0–100 scales, ensuring
+  // client validation cannot mask the server authorization boundary.
+  await page.locator('input[type="number"]').fill('18');
   await page.locator('textarea').fill('Cross-school grade must be rejected');
   await page.locator('xpath=//button[.//span[normalize-space()="check"]]').click();
 
   await expect.poll(() => tamperObserved).toBeTruthy();
+  expect([403, 404, 500]).toContain(denialStatus);
+  expect(denialBody).toMatch(/not owned|not found|forbidden|unauthorized/i);
   await expect(page.locator('body')).toContainText(/not owned|not found|unauthorized|forbidden|failed|error|دسترسی|خطا/i);
 });
 

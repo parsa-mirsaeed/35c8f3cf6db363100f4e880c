@@ -6,12 +6,14 @@
 //! - Locale-specific grading (20-based for Farsi, 100-based for English)
 //! - Type-safe translation keys
 
-pub mod locale;
-pub mod translations;
 pub mod grading;
+pub mod locale;
 pub mod provider;
+pub mod translations;
+mod ui_translations;
 
-pub use locale::*;
-pub use translations::*;
 pub use grading::*;
+pub use locale::*;
 pub use provider::*;
+pub use translations::*;
+pub(crate) use ui_translations::supplemental_translation;

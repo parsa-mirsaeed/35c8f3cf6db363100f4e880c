@@ -1,5 +1,5 @@
 //! Internationalization (i18n) Module for EduTalent
-//! 
+//!
 //! Provides bilingual support for English and Farsi (Persian) with:
 //! - Farsi as the default language
 //! - RTL layout support

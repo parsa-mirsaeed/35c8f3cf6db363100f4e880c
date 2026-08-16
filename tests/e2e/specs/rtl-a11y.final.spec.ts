@@ -59,7 +59,10 @@ test('Persian grade dates and numbers are isolated LTR inside the RTL document @
 
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  const isolatedValues = dialog.locator('bdi[dir="ltr"]');
+  const seededGradeRow = dialog
+    .getByText('E2E Assignment A1', { exact: true })
+    .locator('xpath=ancestor::div[contains(@class,"rounded-lg")][1]');
+  const isolatedValues = seededGradeRow.locator('bdi[dir="ltr"]');
   await expect(isolatedValues).toHaveCount(3);
   for (let index = 0; index < 3; index += 1) {
     await expect(isolatedValues.nth(index)).toHaveCSS('direction', 'ltr');

@@ -154,7 +154,7 @@ test('student submission is graded by the authorized teacher and appears in pers
   const workEditor = page.locator('textarea').first();
   await expect(workEditor).toBeVisible();
   await workEditor.fill(submittedWork);
-  await page.getByRole('button', { name: 'Submit Assignment', exact: true }).click();
+  await page.getByRole('button', { name: /Submit Assignment$/ }).click();
   await expect(workEditor).toHaveCount(0);
   await signOut(page);
 

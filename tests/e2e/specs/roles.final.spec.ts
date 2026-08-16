@@ -30,6 +30,17 @@ async function signInEnglish(page: Page, email: string): Promise<void> {
   await signIn(page, email);
 }
 
+async function establishSession(page: Page, email: string): Promise<void> {
+  // Direct-route acceptance must begin from a valid authenticated browser
+  // context, not by tearing down a live hydrated Dioxus document. The browser
+  // context request client shares its cookie jar with pages in the context, so
+  // the role alias below is the first authenticated document navigation.
+  const response = await page.context().request.post('/api/auth/login', {
+    data: { email, password: PASSWORD },
+  });
+  expect(response.ok(), `session setup failed for ${email}`).toBeTruthy();
+}
+
 function actionWithIcon(page: Page, icon: string) {
   return page.locator('button', {
     has: page.locator('span.material-icons-outlined', {
@@ -50,11 +61,7 @@ test.afterEach(() => {
 
 for (const role of roles) {
   test(`${role.name} reaches the canonical dashboard and role alias @final @roles`, async ({ page }) => {
-    await signIn(page, role.email);
-    // The alias assertion is a direct-route acceptance check, not a teardown
-    // race. Let canonical dashboard resources settle before forcing a full
-    // document navigation so an in-flight Wasm fetch is not aborted by the test.
-    await page.waitForLoadState('networkidle');
+    await establishSession(page, role.email);
     const response = await page.goto(role.alias);
     expect(response === null || response.status() < 400).toBeTruthy();
     await expect(page).toHaveURL(new RegExp(`${role.alias.replaceAll('/', '\\/')}$`));

@@ -1,0 +1,25 @@
+[Unit]
+Description=EduTalent verified encrypted off-host backup copy
+After=network-online.target edutalent-backup.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=edutalent-operator
+Group=edutalent-operator
+EnvironmentFile=/etc/edutalent/operations.env
+ExecStart=/bin/bash /opt/edutalent/deploy/production/systemd/run-latest-offhost-copy
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/edutalent/operations /mnt/edutalent-backup /mnt/edutalent-offhost

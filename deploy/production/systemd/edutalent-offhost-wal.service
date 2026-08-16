@@ -1,0 +1,26 @@
+[Unit]
+Description=EduTalent verified off-host WAL synchronization
+After=edutalent-wal-verify.service network-online.target
+Wants=network-online.target
+Requires=edutalent-wal.service
+
+[Service]
+Type=oneshot
+User=edutalent-operator
+Group=edutalent-operator
+EnvironmentFile=/etc/edutalent/operations.env
+ExecStart=/bin/bash /opt/edutalent/deploy/production/systemd/run-offhost-wal-sync
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/edutalent/operations /mnt/edutalent-offhost

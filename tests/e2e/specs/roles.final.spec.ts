@@ -30,8 +30,14 @@ async function signInEnglish(page: Page, email: string): Promise<void> {
   await signIn(page, email);
 }
 
-async function signOut(page: Page): Promise<void> {
-  await page.getByRole('button', { name: /sign out|خروج/i }).click();
+async function endSessionForRoleSwitch(page: Page): Promise<void> {
+  // Logout/session termination has its own Tier-1 browser journey. This final
+  // stateful workflow uses the real logout endpoint only to switch fixture
+  // actors, avoiding coupling the student→teacher→student chain to whether the
+  // responsive shell renders logout inline or behind its mobile profile menu.
+  const response = await page.context().request.post('/api/auth/logout');
+  expect(response.ok(), 'role-switch logout endpoint must succeed').toBeTruthy();
+  await page.goto('/');
   await expect(page).toHaveURL(/\/$/);
 }
 
@@ -156,7 +162,7 @@ test('student submission is graded by the authorized teacher and appears in pers
   await workEditor.fill(submittedWork);
   await page.getByRole('button', { name: /Submit Assignment$/ }).click();
   await expect(workEditor).toHaveCount(0);
-  await signOut(page);
+  await endSessionForRoleSwitch(page);
 
   // The School A teacher sees that submission, records a grade, and persists feedback.
   await signInEnglish(page, 'e2e-teacher-a@example.test');
@@ -175,10 +181,10 @@ test('student submission is graded by the authorized teacher and appears in pers
   await expect(gradingDialog.locator('#edutalent-modal-title')).toContainText('Grade Submission');
   await gradingDialog.locator('input[type="number"]').fill('91');
   await gradingDialog.locator('textarea').fill(feedback);
-  await gradingDialog.getByRole('button', { name: 'Save Grade', exact: true }).click();
+  await gradingDialog.getByRole('button', { name: /^Save Grade\b/ }).click();
   await expect(gradingDialog).toHaveCount(0);
   await expect(page.getByText(assignmentTitle, { exact: true })).toHaveCount(0);
-  await signOut(page);
+  await endSessionForRoleSwitch(page);
 
   // The student reads the persisted grade from the production grade view.
   await signInEnglish(page, 'e2e-student-a@example.test');

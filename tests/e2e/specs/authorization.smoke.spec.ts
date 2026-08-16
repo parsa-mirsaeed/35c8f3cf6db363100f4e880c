@@ -52,23 +52,37 @@ test.afterEach(() => {
   assertNoConsoleErrors();
 });
 
-test('student direct navigation to teacher-only area is denied @smoke @authorization', async ({ page }) => {
+test('student direct navigation to teacher-only area is denied @smoke @authorization', async ({ page, context }) => {
   await signIn(page, STUDENT.email, STUDENT.password);
 
-  const response = await page.goto('/dashboard/teacher');
-  const deniedByStatus = response !== null && [401, 403, 404].includes(response.status());
+  // Probe the guarded URL as the first document in a fresh authenticated page.
+  // Re-navigating the already-hydrated Dioxus dashboard can surface a WASM
+  // `unreachable` during teardown even though the forbidden route correctly
+  // renders Access Denied. Sharing the browser context preserves the session
+  // cookie while avoiding that unrelated unload race; the console guard stays
+  // strict on the page that actually exercises the authorization boundary.
+  const forbiddenPage = await context.newPage();
+  await enforceOfflineAllowlist(forbiddenPage);
+  watchConsole(forbiddenPage);
 
-  // A production Dioxus document may initially render the guarded loading shell
-  // with HTTP 200. Wait for hydrated session state to resolve before judging the
-  // route guard; redirects, explicit denial status, and the rendered denial view
-  // are all valid usability-layer outcomes.
-  await expect.poll(async () => {
-    const deniedByRedirect = /\/$|\/dashboard$/.test(new URL(page.url()).pathname);
-    const deniedByBody = await page.locator('body').evaluate((body) =>
-      /forbidden|unauthorized|access denied|not found|دسترسی/i.test(body.textContent ?? ''),
-    );
-    return deniedByRedirect || deniedByStatus || deniedByBody;
-  }).toBeTruthy();
+  try {
+    const response = await forbiddenPage.goto('/dashboard/teacher');
+    const deniedByStatus = response !== null && [401, 403, 404].includes(response.status());
+
+    // A production Dioxus document may initially render the guarded loading shell
+    // with HTTP 200. Wait for hydrated session state to resolve before judging the
+    // route guard; redirects, explicit denial status, and the rendered denial view
+    // are all valid usability-layer outcomes.
+    await expect.poll(async () => {
+      const deniedByRedirect = /\/$|\/dashboard$/.test(new URL(forbiddenPage.url()).pathname);
+      const deniedByBody = await forbiddenPage.locator('body').evaluate((body) =>
+        /forbidden|unauthorized|access denied|not found|دسترسی/i.test(body.textContent ?? ''),
+      );
+      return deniedByRedirect || deniedByStatus || deniedByBody;
+    }).toBeTruthy();
+  } finally {
+    await forbiddenPage.close();
+  }
 });
 
 test('student cannot submit a School B assignment by tampering its object ID @smoke @authorization', async ({ page }) => {

@@ -181,7 +181,10 @@ jobs:
             for attempt in $(seq 1 180); do
               run_id="$(find_run_id "$workflow" pull_request)"
               if [[ -n "$run_id" ]]; then
-                wait_for_run "$run_id"
+                if ! wait_for_run "$run_id"; then
+                  echo "Exact-head ${workflow} pull_request run ${run_id} did not succeed." >&2
+                  return 1
+                fi
                 printf '%s\n' "$run_id"
                 return 0
               fi
@@ -201,7 +204,10 @@ jobs:
               wait_status=$?
               set -e
               if [[ "$wait_status" -eq 0 ]]; then
-                write_run_evidence "$existing" "$evidence"
+                if ! write_run_evidence "$existing" "$evidence"; then
+                  echo "Unable to write evidence for existing exact-head ${workflow} run ${existing}." >&2
+                  return 1
+                fi
                 if validate_run "$evidence" workflow_dispatch "$@"; then
                   echo "Reusing complete exact-head ${workflow} run ${existing}" >&2
                   printf '%s\n' "$existing"
@@ -216,9 +222,18 @@ jobs:
             for attempt in $(seq 1 120); do
               run_id="$(find_run_id "$workflow" workflow_dispatch)"
               if [[ -n "$run_id" ]] && (( run_id > previous )); then
-                wait_for_run "$run_id"
-                write_run_evidence "$run_id" "$evidence"
-                validate_run "$evidence" workflow_dispatch "$@"
+                if ! wait_for_run "$run_id"; then
+                  echo "New exact-head ${workflow} run ${run_id} failed; refusing downstream release evidence." >&2
+                  return 1
+                fi
+                if ! write_run_evidence "$run_id" "$evidence"; then
+                  echo "Unable to write evidence for new exact-head ${workflow} run ${run_id}." >&2
+                  return 1
+                fi
+                if ! validate_run "$evidence" workflow_dispatch "$@"; then
+                  echo "New exact-head ${workflow} run ${run_id} failed required-job validation." >&2
+                  return 1
+                fi
                 printf '%s\n' "$run_id"
                 return 0
               fi
@@ -235,6 +250,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s inherit_errexit
           source "${RUNNER_TEMP}/release-run-utils.sh"
 
           ai_run_id="$(wait_for_pr_run 'AI Change Proof')"

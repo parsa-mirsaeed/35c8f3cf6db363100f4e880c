@@ -1,10 +1,33 @@
 # PR-12 Manual Keyboard and Screen-Reader Acceptance
 
-This record exists because PR-12 requires human keyboard and screen-reader acceptance in addition to automated WCAG checks. Do not pre-fill a pass result from CI; a human tester must complete the evidence below on the final release candidate.
+## Follow-up ownership
 
-## Test record
+This document is one evidence section of the dedicated **manual/external production acceptance** follow-up. Automated/browser PR-12 originally merged at main commit `52365ddfbb3196ee46261cbc771bc957c4467882`; the repository owner subsequently directed that **all human-needed production verifications** be consolidated into the same follow-up PR.
 
-- PR / exact head SHA:
+The final automated production-readiness sequence through plan PR-15 is now merged on `main` at `102c2ef56edf31dc5bff7982b234481a7fcbc43b`. PR-15's exact validated source head was `45daddb1fb9763388a9df64450c9f1aeab53225c`, and Final Release Acceptance run `31971376680` completed successfully while explicitly recording `ready_for_contracted_production: false`.
+
+These automated facts are only the test baseline. This split does **not** mean keyboard or screen-reader acceptance has passed. A human tester must complete and sign the record below against the exact installed frozen release candidate. Automated axe/Playwright evidence must not be substituted for the human result.
+
+The cross-cutting manual/external record is `docs/security/manual-external-production-acceptance.md`.
+
+If testing finds a WCAG 2.2 AA defect, fix it in code with regression coverage before sign-off unless the production-readiness process explicitly permits a documented risk acceptance with owner, date, rationale, and review/expiry. If the candidate source or installed artifact changes in a way that could affect accessibility, rerun the impacted acceptance journeys.
+
+## Frozen automated baseline
+
+- Repository: `parsa-mirsaeed/35c8f3cf6db363100f4e880c`
+- Final automated baseline on `main`: `102c2ef56edf31dc5bff7982b234481a7fcbc43b`
+- PR-15 exact validated source head: `45daddb1fb9763388a9df64450c9f1aeab53225c`
+- Final Release Acceptance workflow run: `31971376680`
+- Final Release Acceptance artifact digest: `sha256:c4bb60cac2cd472019da1f2e06be6746e69b6667cf4253e5ffcf769f08902297`
+- Automated classification: `ready for final validation`
+- Automated contracted-production decision: `false`
+
+## Human test record
+
+Populate during the actual accessibility session. Do not pre-fill PASS from CI.
+
+- Exact installed release/source SHA: `102c2ef56edf31dc5bff7982b234481a7fcbc43b` baseline; verify before testing
+- Installed signed artifact/build digest:
 - Tester:
 - Date (UTC):
 - Browser / version:
@@ -74,10 +97,10 @@ Result / notes:
 
 ## Findings
 
-List every defect with severity, reproduction steps and issue/PR reference. WCAG 2.2 AA findings must be fixed before acceptance unless the production-readiness plan permits a documented risk acceptance with an explicit owner and date.
+List every defect with severity, reproduction steps and issue/PR reference. WCAG 2.2 AA findings must be fixed before acceptance unless the production-readiness process permits a documented risk acceptance with an explicit owner and date.
 
 - Findings:
-- Accepted risks (owner + date + rationale), if any:
+- Accepted risks (owner + date + rationale + review/expiry), if any:
 
 ## Sign-off
 
@@ -85,4 +108,5 @@ List every defect with severity, reproduction steps and issue/PR reference. WCAG
 - Screen-reader acceptance: PASS / FAIL
 - Tester name:
 - Sign-off date:
-- Final exact head SHA verified unchanged:
+- Final exact source SHA verified unchanged:
+- Installed signed artifact/digest verified:

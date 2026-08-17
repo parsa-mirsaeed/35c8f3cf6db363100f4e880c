@@ -1,0 +1,410 @@
+name: Final Release Acceptance
+
+on:
+  pull_request:
+    types:
+      - ready_for_review
+      - synchronize
+      - reopened
+    paths:
+      - docs/release/release-candidate-acceptance.md
+      - .github/workflows/final-release-acceptance.yml
+      - scripts/release/final-release-run-utils.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-release-acceptance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  REPOSITORY: ${{ github.repository }}
+  HEAD_REF: ${{ github.event.pull_request.head.ref }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+
+jobs:
+  preflight:
+    name: Freeze candidate and prerequisites
+    if: github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      ai_run_id: ${{ steps.runs.outputs.ai_run_id }}
+      docs_run_id: ${{ steps.runs.outputs.docs_run_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Enforce frozen release-candidate entry criteria
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          grep -Fq 'PR #16' docs/release/release-candidate-acceptance.md
+          grep -Fq 'ready for final validation' docs/release/release-candidate-acceptance.md
+          bash -n scripts/release/final-release-run-utils.sh
+          source scripts/release/final-release-run-utils.sh
+          check_release_entry release-entry.json manual-external-pr.json
+
+      - name: Require exact-head AI and release-documentation gates
+        id: runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source scripts/release/final-release-run-utils.sh
+
+          ai_run_id="$(wait_for_pr_run 'AI Change Proof')"
+          write_run_evidence "$ai_run_id" ai-run.json
+          validate_run ai-run.json pull_request 'AI change gate'
+
+          docs_run_id="$(wait_for_pr_run 'Release Documentation')"
+          write_run_evidence "$docs_run_id" release-docs-run.json
+          validate_run release-docs-run.json pull_request 'Verify release documentation truth'
+
+          {
+            echo "ai_run_id=$ai_run_id"
+            echo "docs_run_id=$docs_run_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: final-release-preflight-evidence
+          path: |
+            release-entry.json
+            manual-external-pr.json
+            ai-run.json
+            release-docs-run.json
+          if-no-files-found: error
+          retention-days: 14
+
+  full_validation:
+    name: Complete Full Validation proof
+    needs: preflight
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      run_id: ${{ steps.run.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          show-progress: false
+
+      - name: Dispatch or reuse complete exact-head Full Validation
+        id: run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source scripts/release/final-release-run-utils.sh
+          run_id="$(reuse_or_dispatch 'Full Validation' full-validation.yml full-validation-run.json \
+            'Resolve full-validation mode' \
+            'Full database validation' \
+            'Full Rust compile, lint, and tests' \
+            'Final browser product acceptance' \
+            'Full validation gate')"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: final-release-full-validation-evidence
+          path: full-validation-run.json
+          if-no-files-found: error
+          retention-days: 14
+
+  foundation:
+    name: Complete Production Foundation proof
+    needs: full_validation
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 165
+    outputs:
+      run_id: ${{ steps.run.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          show-progress: false
+
+      - name: Dispatch or reuse complete exact-head Production Foundation
+        id: run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source scripts/release/final-release-run-utils.sh
+          run_id="$(reuse_or_dispatch 'Production Foundation' production-foundation.yml production-foundation-run.json \
+            'Render and verify production topology' \
+            'Apply migrations and roles on pinned Supabase PostgreSQL 17' \
+            'Start complete production stack')"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: final-release-foundation-evidence
+          path: production-foundation-run.json
+          if-no-files-found: error
+          retention-days: 14
+
+  operations:
+    name: Complete Production Operations proof
+    needs: foundation
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    outputs:
+      run_id: ${{ steps.run.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          show-progress: false
+
+      - name: Dispatch or reuse complete exact-head Production Operations
+        id: run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source scripts/release/final-release-run-utils.sh
+          run_id="$(reuse_or_dispatch 'Production Operations' production-operations.yml production-operations-run.json \
+            'Validate operations definitions and regressions' \
+            'Scan dependencies and production configuration' \
+            'Prove PostgreSQL PITR, Qdrant recovery, and migration rollback' \
+            'Prove backup, alerts, load, restart, and fail-closed configuration' \
+            'Production operations gate')"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: final-release-operations-evidence
+          path: production-operations-run.json
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: Complete Package proof
+    needs: operations
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      run_id: ${{ steps.run.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          show-progress: false
+
+      - name: Dispatch or reuse complete exact-head Package
+        id: run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source scripts/release/final-release-run-utils.sh
+          run_id="$(reuse_or_dispatch 'Package' package.yml package-run.json \
+            'Validate package definitions' \
+            'Docker image and release bundle')"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: final-release-package-evidence
+          path: package-run.json
+          if-no-files-found: error
+          retention-days: 14
+
+  complete_appliance:
+    name: Complete exact-head appliance proof
+    needs: package
+    uses: ./.github/workflows/air-gapped-appliance.yml
+    with:
+      version: rc-${{ github.event.pull_request.head.sha }}
+      complete: true
+      create_archive: false
+
+  aggregate:
+    name: Final automated release gate
+    if: always()
+    needs:
+      - preflight
+      - full_validation
+      - foundation
+      - operations
+      - package
+      - complete_appliance
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+      FULL_RESULT: ${{ needs.full_validation.result }}
+      FOUNDATION_RESULT: ${{ needs.foundation.result }}
+      OPERATIONS_RESULT: ${{ needs.operations.result }}
+      PACKAGE_RESULT: ${{ needs.package.result }}
+      APPLIANCE_RESULT: ${{ needs.complete_appliance.result }}
+      AI_RUN_ID: ${{ needs.preflight.outputs.ai_run_id }}
+      DOCS_RUN_ID: ${{ needs.preflight.outputs.docs_run_id }}
+      FULL_RUN_ID: ${{ needs.full_validation.outputs.run_id }}
+      FOUNDATION_RUN_ID: ${{ needs.foundation.outputs.run_id }}
+      OPERATIONS_RUN_ID: ${{ needs.operations.outputs.run_id }}
+      PACKAGE_RUN_ID: ${{ needs.package.outputs.run_id }}
+    steps:
+      - name: Enforce upstream exact-head outcomes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PREFLIGHT_RESULT" = success
+          test "$FULL_RESULT" = success
+          test "$FOUNDATION_RESULT" = success
+          test "$OPERATIONS_RESULT" = success
+          test "$PACKAGE_RESULT" = success
+          test "$APPLIANCE_RESULT" = success
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          show-progress: false
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: final-release-preflight-evidence
+          path: evidence/preflight
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: final-release-full-validation-evidence
+          path: evidence/full-validation
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: final-release-foundation-evidence
+          path: evidence/foundation
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: final-release-operations-evidence
+          path: evidence/operations
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: final-release-package-evidence
+          path: evidence/package
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: air-gapped-appliance-gate
+          path: evidence/appliance-gate
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: air-gapped-appliance-evidence
+          path: evidence/appliance
+
+      - name: Verify appliance manifest, provenance inventory and exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$HEAD_SHA" evidence/appliance-gate/air-gapped-appliance-gate.json evidence/appliance <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          expected_sha = sys.argv[1]
+          gate = json.load(open(sys.argv[2], encoding="utf-8"))
+          root = Path(sys.argv[3])
+          assert gate["head_sha"] == expected_sha, gate
+          assert gate["validation"] == "success", gate
+          assert gate["offline_appliance"] == "success", gate
+          assert gate["native_arm64"] == "success", gate
+
+          manifests = list(root.rglob("release-manifest.json"))
+          assert len(manifests) == 1, manifests
+          manifest = json.load(manifests[0].open(encoding="utf-8"))
+          assert manifest["release"]["git_sha"] == expected_sha
+          assert manifest["release"]["platform"] == "linux/amd64"
+          assert len(manifest["images"]) >= 10
+          assert all(row["source_digest"].startswith("sha256:") for row in manifest["images"])
+          assert any(row["path"] == "provenance/release-builder.json" for row in manifest["files"]), "release-builder provenance missing from signed manifest inventory"
+          assert any(row["path"] == "sbom/release-files.spdx.json" for row in manifest["files"]), "release SBOM missing from manifest inventory"
+
+          evidence_files = list(root.rglob("appliance-evidence.json"))
+          assert len(evidence_files) == 1, evidence_files
+          evidence = json.load(evidence_files[0].open(encoding="utf-8"))
+          assert evidence["head_sha"] == expected_sha
+          assert evidence["offline_startup"] == "success"
+          assert evidence["registry_pull_policy"] == "never"
+          PY
+
+      - name: Recheck mutable blockers before final disposition
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/release/final-release-run-utils.sh
+          check_release_entry evidence/final-release-state.json evidence/manual-external-pr-final.json
+
+      - name: Write final exact-head automated disposition
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > final-release-acceptance.json <<EOF
+          {
+            "schema_version": 1,
+            "pr": ${PR_NUMBER},
+            "head_sha": "${HEAD_SHA}",
+            "automated_gates": {
+              "ai_change_proof_run_id": ${AI_RUN_ID},
+              "release_documentation_run_id": ${DOCS_RUN_ID},
+              "full_validation_run_id": ${FULL_RUN_ID},
+              "production_foundation_run_id": ${FOUNDATION_RUN_ID},
+              "production_operations_run_id": ${OPERATIONS_RUN_ID},
+              "package_run_id": ${PACKAGE_RUN_ID},
+              "air_gapped_appliance": "success"
+            },
+            "manual_external_gate": "PR #16 required; not inferred from CI",
+            "automated_release_classification": "ready for final validation",
+            "ready_for_contracted_production": false
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: final-release-acceptance-evidence
+          path: |
+            final-release-acceptance.json
+            evidence/**
+          if-no-files-found: error
+          retention-days: 14

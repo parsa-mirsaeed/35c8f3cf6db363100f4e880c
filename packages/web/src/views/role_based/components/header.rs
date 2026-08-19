@@ -6,11 +6,7 @@ use dioxus::prelude::*;
 /// and functional utilities; the previous inert global search and decorative
 /// clock have been removed.
 #[component]
-pub fn Header(
-    user: User,
-    page_title: String,
-    on_open_navigation: EventHandler,
-) -> Element {
+pub fn Header(user: User, page_title: String, on_open_navigation: EventHandler) -> Element {
     let locale = use_locale();
 
     rsx! {

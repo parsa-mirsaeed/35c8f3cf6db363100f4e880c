@@ -53,7 +53,11 @@ pub fn StudentOverviewSection(on_navigate: EventHandler<String>) -> Element {
     } else {
         "Start with work that needs attention, then review your classes and grades."
     };
-    let view_all = if is_fa { "مشاهده همه" } else { "View all" };
+    let view_all = if is_fa {
+        "مشاهده همه"
+    } else {
+        "View all"
+    };
     let loading_assignments = if is_fa {
         "در حال بارگذاری تکلیف‌ها…"
     } else {

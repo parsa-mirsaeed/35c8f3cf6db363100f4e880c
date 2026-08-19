@@ -52,10 +52,26 @@ pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
     } else {
         "Review the children and enrollments this account is authorized to see. Incomplete capabilities remain hidden until they are ready."
     };
-    let enrolled_classes_label = if is_fa { "کلاس‌های ثبت‌نام‌شده" } else { "Enrolled classes" };
-    let view_details = if is_fa { "مشاهده جزئیات" } else { "View details" };
-    let loading_family = if is_fa { "در حال بارگذاری اطلاعات خانواده…" } else { "Loading family data…" };
-    let failed_family = if is_fa { "بارگذاری اطلاعات خانواده ناموفق بود." } else { "Unable to load family data." };
+    let enrolled_classes_label = if is_fa {
+        "کلاس‌های ثبت‌نام‌شده"
+    } else {
+        "Enrolled classes"
+    };
+    let view_details = if is_fa {
+        "مشاهده جزئیات"
+    } else {
+        "View details"
+    };
+    let loading_family = if is_fa {
+        "در حال بارگذاری اطلاعات خانواده…"
+    } else {
+        "Loading family data…"
+    };
+    let failed_family = if is_fa {
+        "بارگذاری اطلاعات خانواده ناموفق بود."
+    } else {
+        "Unable to load family data."
+    };
 
     rsx! {
         div { class: "et-page-stack",

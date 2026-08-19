@@ -64,8 +64,16 @@ pub fn SchoolManagerOverviewSection(on_navigate: EventHandler<String>) -> Elemen
     } else {
         "Manage the school through production-backed workflows. Only available capabilities are shown."
     };
-    let quick_actions = if is_fa { "اقدام‌های اصلی" } else { "Primary actions" };
-    let knowledge_title = if is_fa { "ارسال منابع دانشی" } else { "Knowledge submissions" };
+    let quick_actions = if is_fa {
+        "اقدام‌های اصلی"
+    } else {
+        "Primary actions"
+    };
+    let knowledge_title = if is_fa {
+        "ارسال منابع دانشی"
+    } else {
+        "Knowledge submissions"
+    };
     let knowledge_description = if is_fa {
         "منابع کنترل‌شده مدرسه را برای بررسی ثبت کنید."
     } else {

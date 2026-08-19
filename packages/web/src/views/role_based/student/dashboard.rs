@@ -54,10 +54,26 @@ pub fn StudentOverviewSection(on_navigate: EventHandler<String>) -> Element {
         "Start with work that needs attention, then review your classes and grades."
     };
     let view_all = if is_fa { "مشاهده همه" } else { "View all" };
-    let loading_assignments = if is_fa { "در حال بارگذاری تکلیف‌ها…" } else { "Loading assignments…" };
-    let failed_assignments = if is_fa { "بارگذاری تکلیف‌ها ناموفق بود." } else { "Unable to load assignments." };
-    let loading_classes = if is_fa { "در حال بارگذاری کلاس‌ها…" } else { "Loading classes…" };
-    let failed_classes = if is_fa { "بارگذاری کلاس‌ها ناموفق بود." } else { "Unable to load classes." };
+    let loading_assignments = if is_fa {
+        "در حال بارگذاری تکلیف‌ها…"
+    } else {
+        "Loading assignments…"
+    };
+    let failed_assignments = if is_fa {
+        "بارگذاری تکلیف‌ها ناموفق بود."
+    } else {
+        "Unable to load assignments."
+    };
+    let loading_classes = if is_fa {
+        "در حال بارگذاری کلاس‌ها…"
+    } else {
+        "Loading classes…"
+    };
+    let failed_classes = if is_fa {
+        "بارگذاری کلاس‌ها ناموفق بود."
+    } else {
+        "Unable to load classes."
+    };
 
     rsx! {
         div { class: "et-page-stack",
@@ -87,7 +103,7 @@ pub fn StudentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                             .filter(|item| item.status == "pending" || item.status == "overdue")
                             .count();
                         rsx! {
-                            div { class: "et-stat-grid",
+                            div { class: "et-panel grid grid-cols-1 md:grid-cols-2",
                                 div { class: "et-stat",
                                     p { class: "et-stat-label", "{locale.t(\"dashboard.pending_tasks\")}" }
                                     p { class: "et-stat-value", "{pending_count}" }
@@ -95,10 +111,6 @@ pub fn StudentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                                 div { class: "et-stat",
                                     p { class: "et-stat-label", "{locale.t(\"dashboard.enrolled_classes\")}" }
                                     p { class: "et-stat-value", "{enrolled_class_count}" }
-                                }
-                                div { class: "et-stat",
-                                    p { class: "et-stat-label", "{locale.t(\"nav.grades\")}" }
-                                    p { class: "et-stat-value", "—" }
                                 }
                             }
                             div { class: "et-panel",

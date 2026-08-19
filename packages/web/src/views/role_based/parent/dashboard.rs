@@ -1,5 +1,5 @@
 use crate::application::AuthHooks;
-use crate::i18n::use_locale;
+use crate::i18n::{use_locale, Locale};
 use crate::views::role_based::components::ResponsiveDashboardLayout;
 use api::server_functions::parent_scoped_functions::get_parent_children_scoped;
 use dioxus::prelude::*;
@@ -46,37 +46,41 @@ pub fn ParentDashboard() -> Element {
 pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
     let children = use_resource(move || async move { get_parent_children_scoped().await });
+    let is_fa = locale.current() == Locale::Fa;
+    let intro = if is_fa {
+        "فرزندان و ثبت‌نام‌هایی را ببینید که این حساب مجاز به مشاهده آن‌هاست. قابلیت‌های تکمیل‌نشده تا زمان آماده‌شدن در این نما نمایش داده نمی‌شوند."
+    } else {
+        "Review the children and enrollments this account is authorized to see. Incomplete capabilities remain hidden until they are ready."
+    };
+    let enrolled_classes_label = if is_fa { "کلاس‌های ثبت‌نام‌شده" } else { "Enrolled classes" };
+    let view_details = if is_fa { "مشاهده جزئیات" } else { "View details" };
+    let loading_family = if is_fa { "در حال بارگذاری اطلاعات خانواده…" } else { "Loading family data…" };
+    let failed_family = if is_fa { "بارگذاری اطلاعات خانواده ناموفق بود." } else { "Unable to load family data." };
 
     rsx! {
         div { class: "et-page-stack",
             header { class: "et-overview-intro",
                 h2 { class: "et-overview-title", "{locale.t(\"parent.dashboard.sections.overview\")}" }
-                p { class: "et-overview-copy",
-                    "Review the children and enrollments this account is authorized to see. Unsupported reports, attendance, calendar, and messaging metrics remain hidden."
-                }
+                p { class: "et-overview-copy", "{intro}" }
             }
 
             match &*children.read() {
-                None => rsx! { div { class: "et-state-panel", "Loading family data…" } },
-                Some(Err(_)) => rsx! { div { class: "et-state-panel et-state-panel--error", "Unable to load family data." } },
+                None => rsx! { div { class: "et-state-panel", "{loading_family}" } },
+                Some(Err(_)) => rsx! { div { class: "et-state-panel et-state-panel--error", "{failed_family}" } },
                 Some(Ok(items)) if items.is_empty() => rsx! {
                     div { class: "et-state-panel", "{locale.t(\"parent.dashboard.empty.no_children\")}" }
                 },
                 Some(Ok(items)) => {
                     let total_classes: i64 = items.iter().map(|child| child.enrolled_classes).sum();
                     rsx! {
-                        div { class: "et-stat-grid",
+                        div { class: "et-panel grid grid-cols-1 md:grid-cols-2",
                             div { class: "et-stat",
                                 p { class: "et-stat-label", "{locale.t(\"parent.dashboard.stats.children\")}" }
                                 p { class: "et-stat-value", "{items.len()}" }
                             }
                             div { class: "et-stat",
-                                p { class: "et-stat-label", "Enrolled classes" }
+                                p { class: "et-stat-label", "{enrolled_classes_label}" }
                                 p { class: "et-stat-value", "{total_classes}" }
-                            }
-                            div { class: "et-stat",
-                                p { class: "et-stat-label", "Available data" }
-                                p { class: "et-stat-value", "Current" }
                             }
                         }
 
@@ -86,7 +90,7 @@ pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                                 button {
                                     class: "et-inline-action",
                                     onclick: move |_| on_navigate.call("children".to_string()),
-                                    "View details"
+                                    "{view_details}"
                                 }
                             }
                             div { class: "et-panel",
@@ -96,7 +100,7 @@ pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                                             h4 { class: "et-list-title", "{child.name}" }
                                             p { class: "et-list-meta", "{child.grade_level}" }
                                         }
-                                        div { class: "et-list-aside", "{child.enrolled_classes} enrolled classes" }
+                                        div { class: "et-list-aside", "{child.enrolled_classes} {enrolled_classes_label}" }
                                     }
                                 }
                             }

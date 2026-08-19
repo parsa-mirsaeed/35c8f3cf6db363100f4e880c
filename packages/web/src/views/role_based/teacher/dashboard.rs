@@ -49,7 +49,11 @@ pub fn TeacherOverviewSection(on_navigate: EventHandler<String>) -> Element {
     } else {
         "See what needs attention, then move directly into assignments, grading, classes, or governed knowledge."
     };
-    let primary_actions = if is_fa { "اقدام‌های اصلی" } else { "Primary actions" };
+    let primary_actions = if is_fa {
+        "اقدام‌های اصلی"
+    } else {
+        "Primary actions"
+    };
     let grading_description = if is_fa {
         "کارهای ارسال‌شده را بررسی و بازخورد را ثبت کنید."
     } else {
@@ -60,13 +64,21 @@ pub fn TeacherOverviewSection(on_navigate: EventHandler<String>) -> Element {
     } else {
         "Create and manage class assignments."
     };
-    let knowledge_title = if is_fa { "منابع دانشی" } else { "Knowledge assets" };
+    let knowledge_title = if is_fa {
+        "منابع دانشی"
+    } else {
+        "Knowledge assets"
+    };
     let knowledge_description = if is_fa {
         "منابع تأییدشده را برای تولید کنترل‌شده انتخاب کنید."
     } else {
         "Choose approved sources for governed generation."
     };
-    let view_all = if is_fa { "مشاهده همه" } else { "View all" };
+    let view_all = if is_fa {
+        "مشاهده همه"
+    } else {
+        "View all"
+    };
 
     rsx! {
         div { class: "et-page-stack",

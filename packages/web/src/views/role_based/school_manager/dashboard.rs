@@ -58,38 +58,52 @@ pub fn SchoolManagerDashboard() -> Element {
 #[component]
 pub fn SchoolManagerOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
+
     rsx! {
-        div { class: "space-y-6",
-            div { class: "glass-card p-6",
-                h2 { class: "text-xl font-bold text-gray-900 dark:text-white", "{locale.t(\"dashboard.overview\")}" }
-                p { class: "mt-2 text-sm text-gray-500 dark:text-gray-400",
-                    "This release exposes operational school management actions only. Synthetic activity, uptime, latency, storage, active-user, and report metrics are not displayed."
+        div { class: "et-page-stack",
+            header { class: "et-overview-intro",
+                h2 { class: "et-overview-title", "{locale.t(\"dashboard.overview\")}" }
+                p { class: "et-overview-copy",
+                    "Manage the school through production-backed workflows. Only available capabilities are shown."
                 }
             }
-            div { class: "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4",
-                ManagerAction {
-                    icon: "groups".to_string(),
-                    title: locale.t("school_manager.actions.add_user"),
-                    description: locale.t("school_manager.actions.add_user_desc"),
-                    on_click: move |_| on_navigate.call("users".to_string()),
+
+            section { class: "et-section",
+                div { class: "et-section-heading",
+                    h3 { class: "et-section-title", "{locale.t(\"dashboard.quick_actions\")}" }
                 }
-                ManagerAction {
-                    icon: "class".to_string(),
-                    title: locale.t("school_manager.actions.create_class"),
-                    description: locale.t("school_manager.actions.create_class_desc"),
-                    on_click: move |_| on_navigate.call("classes".to_string()),
+                div { class: "et-action-grid",
+                    ManagerAction {
+                        icon: "groups".to_string(),
+                        title: locale.t("school_manager.actions.add_user"),
+                        description: locale.t("school_manager.actions.add_user_desc"),
+                        on_click: move |_| on_navigate.call("users".to_string()),
+                    }
+                    ManagerAction {
+                        icon: "class".to_string(),
+                        title: locale.t("school_manager.actions.create_class"),
+                        description: locale.t("school_manager.actions.create_class_desc"),
+                        on_click: move |_| on_navigate.call("classes".to_string()),
+                    }
+                    ManagerAction {
+                        icon: "upload_file".to_string(),
+                        title: "Knowledge submissions".to_string(),
+                        description: "Register governed school sources for review.".to_string(),
+                        on_click: move |_| on_navigate.call("knowledge-submissions".to_string()),
+                    }
+                    ManagerAction {
+                        icon: "settings".to_string(),
+                        title: locale.t("school_manager.actions.system_settings"),
+                        description: locale.t("school_manager.actions.system_settings_desc"),
+                        on_click: move |_| on_navigate.call("settings".to_string()),
+                    }
                 }
-                ManagerAction {
-                    icon: "upload_file".to_string(),
-                    title: "Knowledge submissions".to_string(),
-                    description: "Register governed school sources for platform review.".to_string(),
-                    on_click: move |_| on_navigate.call("knowledge-submissions".to_string()),
-                }
-                ManagerAction {
-                    icon: "settings".to_string(),
-                    title: locale.t("school_manager.actions.system_settings"),
-                    description: locale.t("school_manager.actions.system_settings_desc"),
-                    on_click: move |_| on_navigate.call("settings".to_string()),
+            }
+
+            div { class: "et-info-note",
+                span { class: "material-icons-outlined text-lg", "aria-hidden": "true", "verified_user" }
+                p {
+                    "Operational summaries appear here only when they are backed by real school data. Synthetic activity, uptime, latency, storage and trend metrics are intentionally omitted."
                 }
             }
         }
@@ -105,11 +119,18 @@ fn ManagerAction(
 ) -> Element {
     rsx! {
         button {
-            class: "glass-card p-5 text-left min-h-[120px] hover:-translate-y-0.5 transition-transform",
+            class: "et-action-card",
             onclick: move |_| on_click.call(()),
-            span { class: "material-icons-outlined text-primary text-2xl", "{icon}" }
-            h3 { class: "mt-3 font-semibold text-gray-900 dark:text-white", "{title}" }
-            p { class: "mt-1 text-sm text-gray-500 dark:text-gray-400", "{description}" }
+            div { class: "et-action-card-top",
+                span { class: "et-action-icon",
+                    span { class: "material-icons-outlined text-xl", "aria-hidden": "true", "{icon}" }
+                }
+                span { class: "material-icons-outlined et-action-arrow", "aria-hidden": "true", "arrow_forward" }
+            }
+            div {
+                h3 { class: "et-action-title", "{title}" }
+                p { class: "et-action-description", "{description}" }
+            }
         }
     }
 }

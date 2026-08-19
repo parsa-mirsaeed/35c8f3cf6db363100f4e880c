@@ -66,19 +66,25 @@ pub fn ClassManagementSection() -> Element {
             page_notice.set(None);
 
             if class_name().trim().is_empty() {
-                form_error.set(Some(locale.t("school_manager.classes.errors.name_required")));
+                form_error.set(Some(
+                    locale.t("school_manager.classes.errors.name_required"),
+                ));
                 is_submitting.set(false);
                 return;
             }
 
             if selected_subject_id().is_empty() {
-                form_error.set(Some(locale.t("school_manager.classes.errors.subject_required")));
+                form_error.set(Some(
+                    locale.t("school_manager.classes.errors.subject_required"),
+                ));
                 is_submitting.set(false);
                 return;
             }
 
             if term().trim().is_empty() {
-                form_error.set(Some(locale.t("school_manager.classes.errors.term_required")));
+                form_error.set(Some(
+                    locale.t("school_manager.classes.errors.term_required"),
+                ));
                 is_submitting.set(false);
                 return;
             }
@@ -415,7 +421,9 @@ fn ClassDetailModal(
         let class_id = class.id.clone();
 
         if student_id.is_empty() {
-            error_msg.set(Some(locale.t("school_manager.classes.errors.select_student_required")));
+            error_msg.set(Some(
+                locale.t("school_manager.classes.errors.select_student_required"),
+            ));
             return;
         }
 

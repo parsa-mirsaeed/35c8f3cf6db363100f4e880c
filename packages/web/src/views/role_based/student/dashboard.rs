@@ -43,6 +43,10 @@ pub fn StudentOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
     let classes = use_resource(move || async move { get_student_classes_view().await });
     let assignments = use_resource(move || async move { get_student_assignments().await });
+    let enrolled_class_count = match classes.read().as_ref() {
+        Some(Ok(items)) => items.len().to_string(),
+        _ => "—".to_string(),
+    };
 
     rsx! {
         div { class: "et-page-stack",
@@ -81,12 +85,7 @@ pub fn StudentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                                 }
                                 div { class: "et-stat",
                                     p { class: "et-stat-label", "{locale.t(\"dashboard.enrolled_classes\")}" }
-                                    p { class: "et-stat-value",
-                                        match &*classes.read() {
-                                            Some(Ok(classes)) => "{classes.len()}",
-                                            _ => "—",
-                                        }
-                                    }
+                                    p { class: "et-stat-value", "{enrolled_class_count}" }
                                 }
                                 div { class: "et-stat",
                                     p { class: "et-stat-label", "{locale.t(\"nav.grades\")}" }

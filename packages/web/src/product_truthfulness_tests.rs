@@ -136,6 +136,9 @@ mod tests {
         let remake = main_source
             .find("href: DASHBOARD_REMAKE_CSS")
             .expect("dashboard remake stylesheet should be linked");
-        assert!(base < remake, "dashboard overrides must load after base styles");
+        assert!(
+            base < remake,
+            "dashboard overrides must load after base styles"
+        );
     }
 }

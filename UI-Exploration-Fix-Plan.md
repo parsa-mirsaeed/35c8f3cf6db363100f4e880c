@@ -4,17 +4,17 @@
 
 This document is the running engineering record for issues discovered while interactively exploring the EduTalent production-topology UI before the next implementation PR.
 
-The workflow for this exploration phase is deliberately:
+Exploration workflow:
 
 1. reproduce one UI/functional problem at a time;
-2. identify the actual backend/database/frontend root cause rather than recording only the visible symptom;
-3. prove the diagnosis with the narrowest safe local diagnostic change when necessary;
-4. record the issue here with implementation and regression-test requirements;
+2. identify the backend/database/frontend root cause rather than recording only the visible symptom;
+3. use only the narrowest safe local diagnostic change when needed to continue exploration;
+4. record the finding here with implementation and regression-test requirements;
 5. continue exploring without implementing repository fixes yet;
 6. after exploration is sufficiently complete, implement the accumulated findings together in one focused PR;
-7. run the smallest workflows/tests that fully cover the changed surfaces, then make the PR merge-ready.
+7. run only the tests/workflows necessary to cover the changed surfaces and make the PR merge-ready.
 
-A local diagnostic database patch is evidence for diagnosis only. It must not be treated as repository-complete or formal production acceptance evidence. Every durable database correction must be delivered as a forward migration with regression coverage.
+Local diagnostic database changes are evidence only. They are not repository-complete fixes or formal production acceptance evidence. Durable database corrections must be delivered as forward migrations with regression coverage.
 
 ---
 
@@ -22,8 +22,10 @@ A local diagnostic database patch is evidence for diagnosis only. It must not be
 
 | # | Area | Severity | Status | Summary |
 |---|---|---|---|---|
-| 1 | Class Management / PostgreSQL RLS / UI feedback | High | Root-caused; local fix proven; repository fix pending | Class creation succeeds but class-list refresh returns HTTP 500 because `enrollments` and `students` SELECT policies recurse; UI also provides no success confirmation and discards refresh errors. |
-| 2 | School Manager User Creation / endpoint capability contract / account provisioning | High | Root-caused; repository fix pending | Student creation UI calls `/api/user_management/create`, but production policy intentionally marks that server function `Disabled`, so authorization fails closed with HTTP 404 before the handler executes. Existing implementations are not safe to enable unchanged. |
+| 1 | Class Management / PostgreSQL RLS / UI feedback | High | Root-caused; local fix proven; repository fix pending | Class creation succeeds but class-list refresh returns HTTP 500 because `enrollments` and `students` SELECT policies recurse. UI also gives no success confirmation and discards refresh errors. |
+| 2 | School Manager User Provisioning / endpoint contract / form validation | High | Root-caused; repository fix pending | Student, Teacher and Parent creation forms call `/api/user_management/create`, but production marks that endpoint `Disabled`, so requests fail closed with HTTP 404. Existing provisioning code is not safe to enable unchanged. Several form required-field indicators also disagree with actual browser validation. |
+| 3 | Manager Knowledge Submission / source ingestion | Medium-High | Functional URL registration verified; capability gap recorded | Controlled-URL registration succeeds, but the UI has no direct local file picker/upload path. Lifecycle wording also needs to distinguish registration from OCR, embedding and publication. |
+| 4 | Platform Admin Knowledge Workflow / lifecycle UX / action gating | High UX / Medium functional | Root-caused from UI + lifecycle code; repository fix pending | The admin workflow exposes raw lifecycle operations without guidance. Destructive Archive has no confirmation, audit is developer-oriented, and invalid actions such as Attach verified OCR remain visible for `archived`, `embedded` and `published` assets. |
 
 ---
 
@@ -31,56 +33,18 @@ A local diagnostic database patch is evidence for diagnosis only. It must not be
 
 ## User-visible behavior
 
-From the School Manager Class Management UI:
+From School Manager → Class Management:
 
-- creating a class appears not to succeed;
-- no positive `class created successfully` feedback is shown;
-- the newly created class does not appear in the class list;
-- browser console repeatedly reports:
+- class creation appears unsuccessful;
+- no positive success feedback is shown;
+- the new class does not appear in the list;
+- browser console reports HTTP 500 from `api/classes/get_school_classes`.
 
-```text
-api/classes/get_school_classes: Failed to load resource: server responded with status 500
-```
-
-However, direct database inspection proves that the class row was inserted successfully.
-
-Observed created row during exploration:
-
-```text
-id:         8bb60147-a83d-4a66-9e95-becb8468d8db
-name:       ۵/۳
-term:       1405/1
-school_id:  00000000-0000-0000-0000-000000000001
-subject_id: 491253de-1314-4c9d-87f6-58d4dc7e540e
-subject:    Mathematics / MATH
-```
-
-The insert path itself therefore works.
-
-## Exact application behavior
-
-`create_class_section()` performs the class insert successfully.
-
-The UI then closes the create-class modal and restarts the class-list resource. The class-list resource calls `get_school_classes()`.
-
-`get_school_classes()` performs a query that includes:
-
-- `class_sections`;
-- `subjects`;
-- a correlated `COUNT(*)` over `enrollments`;
-- `teaching_assignments`;
-- `teachers`;
-- `users`.
-
-The UI loader currently converts the class-list call with `.await.ok()`, so the detailed server error is discarded. This makes a successful insert followed by a failed refresh look like a failed create operation.
-
-There is also no success-toast/success-message path after a successful class creation.
+Direct database inspection proved the class row was successfully inserted.
 
 ## Root cause
 
-The production database uses forced PostgreSQL Row Level Security.
-
-The relevant policies create a recursion cycle:
+The production database uses forced PostgreSQL RLS. The policies form a recursion cycle:
 
 ```text
 enrollments_select_policy
@@ -91,433 +55,392 @@ enrollments_select_policy
     -> ...
 ```
 
-Exact failure reproduced as the dedicated `edutalent_app` role under the same School Manager transaction-scoped RLS context used by the application:
+The exact application-role reproduction returned:
 
 ```text
 ERROR: infinite recursion detected in policy for relation "enrollments"
 ```
 
-The problematic authorization relationships are conceptually:
+The runtime role was verified as non-superuser and `NOBYPASSRLS`; the failure is policy design, not missing grants or corrupt class data.
 
-```text
-students_select_policy
-    teacher visibility
-    -> enrollments
-    -> teaching_assignments
-    -> teachers
+## Local diagnostic proof
 
-enrollments_select_policy
-    student / parent visibility
-    -> students
-```
+A local-only bounded `SECURITY DEFINER` helper was introduced to perform the student/parent relationship check without recursively re-entering `students` RLS. `enrollments_select_policy` was locally adjusted to call that helper.
 
-Because both RLS-protected relations refer back to each other through policy expressions, PostgreSQL recursively expands the policies and aborts the query.
+The exact previously failing class-list query then succeeded as `edutalent_app`, and the class became visible in the UI.
 
-This is a policy-design defect, not corrupt class data, missing permissions, or a bad School Manager account.
-
-## Security facts already verified
-
-The runtime database identity remains correctly constrained:
-
-```text
-role:        edutalent_app
-superuser:   false
-bypassrls:   false
-createrole:  false
-createdb:    false
-login:       true
-```
-
-`edutalent_app` has the expected SELECT privileges on the participating tables, so the failure is not a missing table grant.
-
-The exact School Manager transaction context was verified:
-
-```text
-app.user_id   = 19a958d1-94a2-4466-9d36-fc4d1172ee83
-app.user_role = SchoolManager
-app.school_id = 00000000-0000-0000-0000-000000000001
-```
-
-The user and school rows are visible correctly under that context.
-
-## Local diagnostic fix that proved the diagnosis
-
-A local-only database helper was introduced to remove the direct `enrollments -> students` policy dependency while retaining the same user/parent authorization semantics.
-
-The diagnostic helper was shaped as a narrow `SECURITY DEFINER` function:
-
-```sql
-public.enrollment_student_actor_matches(p_student_id uuid)
-```
-
-Behavior:
-
-- returns true only when the supplied student belongs to the current transaction user as either:
-  - `students.user_id = get_user_id()`, or
-  - `students.parent_id = get_user_id()`;
-- uses a fixed `search_path`;
-- is `STABLE`;
-- is not executable by `PUBLIC`;
-- is executable only by the dedicated application runtime role for the diagnostic test;
-- does not grant `BYPASSRLS` to `edutalent_app`;
-- does not disable or weaken RLS globally.
-
-`enrollments_select_policy` was locally recreated so its student/parent branch calls that bounded helper instead of directly selecting from `students`.
-
-After that diagnostic change, the exact previously failing class-list query succeeded under `edutalent_app`:
-
-```text
-id                                   name  term    subject_name  subject_code  student_count
-8bb60147-a83d-4a66-9e95-becb8468d8db ۵/۳  1405/1  Mathematics   MATH          0
-```
-
-The Class Management UI then displayed the class correctly.
-
-This proves that the RLS recursion is the root cause of the HTTP 500.
+This proves the RLS recursion is the root cause.
 
 ## Required repository implementation
 
-### A. Add a new forward migration
+- Add a new forward migration. Do not edit the historical migration that originally created the policies.
+- Introduce the narrowest relationship helper required to break the cycle.
+- Use fixed `search_path`, schema-qualified objects, restricted EXECUTE privileges and no broad RLS bypass.
+- Recreate the affected policy while preserving Student, Parent, Teacher and SchoolManager authorization semantics.
+- Keep FORCE RLS enabled and keep `edutalent_app` `NOBYPASSRLS`.
+- Add an explicit regression using the same class-list query shape under the dedicated runtime role.
+- Fix class-create UX so successful persistence is acknowledged even if the following list refresh fails.
+- Stop swallowing the class-list error with `.await.ok()`; provide safe user feedback and structured server-side logging.
 
-Do **not** edit the historical migration that originally created the RLS policies. EduTalent's migration runner stores migration-file checksums and intentionally fails closed if an already-applied migration changes.
+## Required regression coverage
 
-Add a new timestamped migration under `migrations/` that:
+- Student sees own enrollment, not unrelated enrollment.
+- Parent sees child's enrollment, not unrelated enrollment.
+- Assigned Teacher sees class enrollments, unrelated Teacher does not.
+- SchoolManager sees same-school classes/enrollments, not cross-school data.
+- Runtime application identity remains non-superuser and `NOBYPASSRLS`.
+- Exact `class_sections + subjects + COUNT(enrollments)` query executes without recursive-policy failure.
 
-1. introduces the narrow relationship helper needed to break the recursion;
-2. uses `SECURITY DEFINER` only for the minimum relationship check required;
-3. uses a fixed `SET search_path = pg_catalog, public`;
-4. is `STABLE` where appropriate;
-5. schema-qualifies governed objects/functions;
-6. revokes function execution from `PUBLIC`;
-7. grants only the necessary runtime execution privilege;
-8. drops and recreates `enrollments_select_policy` without a direct `students` lookup that recursively re-enters `students_select_policy`;
-9. preserves all intended authorization behavior;
-10. keeps FORCE ROW LEVEL SECURITY enabled;
-11. does not grant the long-running application identity `BYPASSRLS`, elevated role membership, or broader schema privileges.
+## Acceptance criteria
 
-### B. Preserve intended authorization semantics
-
-Regression behavior must prove all of the following:
-
-#### Student
-
-- can see the student's own enrollment;
-- cannot see another student's unrelated enrollment.
-
-#### Parent
-
-- can see an enrollment belonging to their child;
-- cannot see an unrelated student's enrollment.
-
-#### Teacher
-
-- can see enrollments for a class assigned to that teacher;
-- cannot see enrollments for an unrelated class/school.
-
-#### School Manager
-
-- can see enrollments/classes within the manager's current school;
-- cannot see cross-school enrollment/class data.
-
-#### Runtime role
-
-- remains non-superuser;
-- remains `NOBYPASSRLS`;
-- retains no privileged role memberships;
-- cannot execute any helper that it does not need;
-- cannot obtain global/unscoped student data from the helper.
-
-### C. Add an explicit RLS recursion regression test
-
-The regression suite must include the exact query shape that exposed the production defect, executed as the dedicated NOBYPASSRLS runtime identity inside a transaction carrying canonical application context.
-
-At minimum:
-
-```text
-SchoolManager context
-    -> SELECT class_sections
-    -> JOIN subjects
-    -> correlated COUNT(*) FROM enrollments
-    -> must return successfully
-    -> must not raise recursive-policy errors
-```
-
-The test should fail if either `students_select_policy` or `enrollments_select_policy` later reintroduces a recursion cycle.
-
-Prefer extending the repository's existing transaction-scoped RLS verification workflow rather than creating an unrelated high-cost workflow.
-
-### D. Fix class-management success/error UX
-
-After a successful `create_class_section()` call:
-
-- show a clear success confirmation, e.g. `Class created successfully`;
-- restart/refetch the list;
-- keep the newly created class visible when the refresh succeeds.
-
-If the insert succeeds but the refresh fails:
-
-- do not imply that class creation failed;
-- show a differentiated message such as:
-
-```text
-Class was created, but the class list could not be refreshed.
-```
-
-The class-list loader must not silently discard server errors with `.await.ok()`.
-
-Expose an actionable error state to the UI while keeping sensitive internal database details out of user-facing messages.
-
-### E. Server-side observability
-
-`get_school_classes()` currently maps database errors into a server-function error, but the production investigation produced no useful application log output for the failed request.
-
-As part of the consolidated PR, review whether this server function should emit structured server-side error logging with safe contextual fields such as:
-
-- operation: `get_school_classes`;
-- authenticated role;
-- school identifier where allowed by logging policy;
-- error class/code;
-
-without leaking secrets or authentication tokens.
-
-## Acceptance criteria for Issue 1
-
-Issue 1 is complete only when all of the following are true from clean repository state:
-
-- [ ] new forward migration applies successfully;
+- [ ] forward migration applies from clean repository state;
 - [ ] historical migration files remain unchanged;
-- [ ] `edutalent_app` remains `NOBYPASSRLS`;
-- [ ] exact class-list query no longer causes RLS recursion;
-- [ ] School Manager class list loads successfully;
-- [ ] creating a class persists the row;
-- [ ] created class appears in the UI after refresh;
-- [ ] successful creation shows a success confirmation;
-- [ ] failed list refresh produces visible but safe error feedback;
-- [ ] own/student/parent/teacher/manager authorization regression cases pass;
-- [ ] cross-school/cross-user negative authorization cases pass;
-- [ ] relevant migration/RLS tests are green;
-- [ ] relevant API/web tests are green;
-- [ ] no broad RLS bypass or permissive policy workaround is introduced.
-
-## Local exploration state
-
-During exploration, the current local database has the diagnostic RLS helper/policy adjustment applied manually. This allows continued UI exploration.
-
-Therefore:
-
-- it is useful for discovering additional UI problems;
-- it is **not** pristine exact-head database state anymore;
-- it must **not** be used as proof that the repository already contains the fix;
-- final verification for the consolidated PR must be repeated from clean repository-controlled migrations.
+- [ ] class list loads without HTTP 500;
+- [ ] created class appears after refresh;
+- [ ] success confirmation is shown;
+- [ ] refresh failure is differentiated from create failure;
+- [ ] positive and negative RLS tests pass;
+- [ ] no broad RLS bypass is introduced.
 
 ---
 
-# Issue 2 — School Manager student creation UI calls an intentionally disabled provisioning endpoint
+# Issue 2 — School Manager Student / Teacher / Parent provisioning calls an intentionally disabled endpoint
 
 ## User-visible behavior
 
-From School Manager → User Management → create student:
-
-- submitting the student form fails;
-- the UI displays a generic server-function error indicating HTTP 404;
-- browser console reports a failed request to:
+All three School Manager creation forms fail with HTTP 404 from:
 
 ```text
 /api/user_management/create
 ```
 
-The student email used during exploration is real and is intentionally omitted from this document and must remain absent from repository artifacts, test fixtures, commands, screenshots added to issues/PRs, and logs copied into review material.
+The real email used during exploration is intentionally omitted from this document and must remain absent from committed artifacts and automated test data.
 
-## Reproduction steps
+Teacher/Parent exploration also exposed required-field contract drift. Example: Teacher phone is browser-required but the label does not display a required marker. Some other fields are visually marked required while not carrying equivalent browser constraints.
 
-1. Sign in as a valid School Manager.
-2. Open User Management and the student-creation form.
-3. Complete the required fields using test data.
-4. Submit.
-5. Observe HTTP 404 from `/api/user_management/create` and the generic error banner.
+## Root cause
 
-Do not reuse the real exploration email in automated tests; use a generated reserved-domain address instead.
+The active UI imports and calls `user_management::create_user`, whose endpoint is `user_management/create`.
 
-## Expected behavior
+The production endpoint authorization manifest explicitly classifies that capability as `Disabled`. The deny-by-default middleware intentionally returns HTTP 404 for disabled endpoints before the handler executes.
 
-School Manager should be able to provision a student through an explicitly supported production capability. The operation should either complete coherently across Auth and application persistence or fail without leaving partial identities/records.
+Therefore these failed requests do not reach account creation. The failure is a frontend/production-capability contract mismatch.
 
-The UI must not expose a creation control whose only backend mutation route is intentionally unavailable.
+## Why the current handler must not simply be enabled
 
-## Actual behavior and exact route contract
+The existing provisioning path spans Supabase Auth and local application persistence. Auth creation happens before local user/role-specific writes and there is no complete compensation contract if later persistence fails. Re-enabling it unchanged could leave partial login-capable identities.
 
-The School Manager creation UI imports:
+The current UI also generates temporary credentials client-side. Student class selection is captured by the form but the current student branch does not fully guarantee the advertised enrollment behavior.
 
-```rust
-api::server_functions::user_management::{create_user, CreateUserPayload, ...}
-```
-
-and calls `create_user(payload).await`.
-
-That server function declares:
-
-```rust
-#[server(endpoint = "user_management/create")]
-```
-
-so the browser correctly generates a request for `/api/user_management/create`.
-
-However, `endpoint_authorization_manifest.psv` deliberately classifies:
-
-```text
-server|user_management/create|Disabled|...
-```
-
-The deny-by-default endpoint authorization middleware maps every `Disabled` endpoint to `NotFound`, which is returned as HTTP 404 without calling the handler.
-
-Therefore the observed 404 is not a missing file, malformed email, invalid student data, Supabase failure, PostgreSQL failure, or RLS failure. It is a frontend/production-capability contract mismatch: an active production UI invokes an endpoint that production policy intentionally makes undiscoverable.
-
-Because authorization returns 404 before `next.run(request)`, this specific failed request does not execute `create_user()` and therefore does not create an Auth identity or local EduTalent user/student record.
-
-## Why the existing endpoint must not simply be re-enabled
-
-`user_management::create_user` currently performs a multi-system provisioning sequence:
-
-1. resolve the School Manager and role;
-2. create the account in Supabase Auth;
-3. create the local `users` row;
-4. create a role-specific `teachers` or `students` record, or parent links;
-5. optionally perform teacher class assignments.
-
-As currently written, the external Auth creation occurs before the local database work and there is no explicit compensation path that deletes/invalidates the newly created Auth identity if later local persistence fails. The subsequent application writes are also not presented as one explicit database transaction. Re-enabling this endpoint unchanged could therefore expose partial-provisioning states such as an Auth identity without a complete local account/role record.
-
-The browser also currently generates a temporary password itself from the first eight characters of a random UUID and sends that password to the server. Production provisioning should not depend on client-generated temporary credentials. Credential generation/invitation semantics belong on the trusted server side with an explicit expiry/rotation/onboarding contract.
-
-The student form also captures a selected class section, but `create_user` only places that value into generic metadata. Its `Student` branch creates the student profile but does not create an `enrollments` row for the selected class. Therefore merely enabling the current endpoint would still leave part of the form's advertised behavior unfulfilled.
-
-## Existing alternative endpoints are not a complete replacement
-
-`students/create` is active for School Managers, but it only creates a `students` domain record for an **already existing**, active, same-school local user whose role is already `Student`. It does not provision the Supabase Auth identity or base `users` row. The UI cannot simply switch to this endpoint as a one-call replacement.
-
-The separate legacy `user_creation/create_student` endpoint is also explicitly `Disabled` in the production manifest. Its current implementation contains a TODO stating that it creates the Supabase Auth user but does not yet create the corresponding local database record. It is therefore not production-complete either.
-
-The correct fix is to define one coherent supported provisioning workflow rather than activating one of several incomplete overlapping paths.
-
-## Security and tenant-isolation requirements
-
-The consolidated implementation must preserve all of the following:
-
-- only an authenticated, active School Manager may provision users for the manager's current school;
-- school identity must come from the authenticated transaction/session, never from a browser-trusted school identifier;
-- requested role must be restricted to supported provisionable roles;
-- parent association must reference an active Parent in the same school;
-- any selected class must belong to the same school;
-- a student may be enrolled only into an authorized same-school class;
-- duplicate email handling must fail predictably and must not create duplicate/local-orphan identities;
-- Auth success followed by database failure must be compensated or designed around a durable provisioning state so no login-capable orphan remains;
-- database success must never be committed before the Auth identity contract is safely established unless the reverse failure is equally compensated;
-- temporary credential generation/invitation must occur server-side and secrets must never be logged;
-- user-facing errors must not reveal Supabase service credentials, tokens, internal SQL, or cross-tenant existence information;
-- audit-relevant provisioning events should follow the endpoint manifest's required-audit contract.
+The existing active `students/create` endpoint is not a complete replacement because it expects an already-existing local Student user. Another legacy student creation endpoint is also disabled/incomplete.
 
 ## Required repository implementation
 
-Before choosing which legacy function to retain, review the overlapping `user_management`, `user_creation`, and `students/create` paths and collapse the production workflow around one authoritative provisioning service/endpoint.
+Choose one authoritative production provisioning workflow for Student / Teacher / Parent creation and retire conflicting browser calls.
 
-The implementation should:
+The final service must:
 
-1. define one active SchoolManager-only account-provisioning endpoint for Student/Teacher/Parent creation, or separate hardened role-specific endpoints if that produces clearer authorization boundaries;
-2. derive school scope from the authenticated School Manager, not payload authority;
-3. generate invitation/temporary credentials on the server with an explicit secure onboarding contract;
-4. provision Supabase Auth and local application state with a documented compensation/saga strategy for cross-system failure;
-5. group local `users` + role-specific record + optional enrollment/assignment writes in an explicit database transaction where feasible;
-6. validate parent and class references against the authenticated school before mutation;
-7. make the selected student class produce an actual `enrollments` relationship if class assignment is part of the UI contract;
-8. return a typed result that distinguishes validation, duplicate-account, dependency, and safe internal failure classes;
-9. update the production authorization manifest only after the hardened endpoint is complete;
-10. remove or retire conflicting legacy browser calls so the active UI cannot target an endpoint marked `Disabled`;
-11. preserve deny-by-default behavior for every endpoint that remains disabled;
-12. avoid exposing the real exploration email in code, fixtures, tests, docs, PR descriptions, or committed screenshots.
+- derive school scope from the authenticated SchoolManager;
+- enforce provisionable roles server-side;
+- validate Parent and Class references within the same school;
+- use one identity UUID consistently across Supabase Auth and local `users`;
+- use an explicit compensation/saga strategy for Auth-vs-DB partial failures;
+- group local user + role-specific + enrollment/assignment writes transactionally where possible;
+- generate onboarding/temporary credentials on the trusted server side;
+- avoid logging credentials or sensitive dependency errors;
+- persist selected Student enrollment and Teacher assignments when the UI advertises them;
+- expose typed, safe result classes to the UI;
+- update the endpoint authorization manifest only after the hardened capability is complete.
 
-## Required UI behavior
+## Form validation contract
 
-The creation form should:
+For Student / Teacher / Parent forms, visible required markers, HTML/browser constraints, typed payload requirements and server validation must agree from one authoritative field contract.
 
-- call only an active production capability;
-- validate required fields locally for usability without treating client validation as authorization;
-- prevent duplicate submits while provisioning is in progress;
-- show a clear success state only after the full provisioning contract succeeds;
-- show a safe actionable failure state when provisioning does not complete;
-- not present a selected class as applied unless the enrollment was actually persisted;
-- never surface raw `ServerFnError` internals directly as the main user-facing copy;
-- use generated test addresses in automated/e2e coverage.
+Do not patch individual `*` labels independently.
 
-## Required regression tests
+## Required regression coverage
 
-Add focused coverage for:
+- active creation UI references only active production endpoint(s);
+- disabled legacy endpoints remain 404;
+- SchoolManager-only authorization is enforced;
+- same-school boundaries are enforced for parent/class references;
+- Auth and local UUIDs remain identical;
+- selected Student class creates a real enrollment;
+- Teacher assignments persist as advertised;
+- duplicate email and forced mid-provisioning failures do not leave partial login-capable identities;
+- required-field UI indicators and actual validation rules agree for all three role forms;
+- no real exploration email appears in committed tests/docs.
 
-### Endpoint/UI contract
+## Acceptance criteria
 
-- active School Manager user-creation UI must not reference a manifest endpoint classified `Disabled`;
-- anonymous and non-SchoolManager callers are denied;
-- the chosen production provisioning endpoint is present in the endpoint inventory/manifest with the intended policy;
-- disabled legacy paths remain HTTP 404.
+- [ ] Student creation works coherently;
+- [ ] Teacher creation works coherently;
+- [ ] Parent creation works coherently;
+- [ ] no active form calls a disabled endpoint;
+- [ ] partial failures are compensated safely;
+- [ ] visual and actual required-field rules match;
+- [ ] cross-school negative tests pass;
+- [ ] endpoint authorization remains deny-by-default.
 
-### Successful student provisioning
+---
 
-- one Auth user is created;
-- one local `users` row is created with the same identity UUID;
-- one `students` row is created for that user;
-- school IDs are consistent and come from the manager's school;
-- selected same-school class creates the expected enrollment when requested;
-- success is returned only after required state is coherent.
+# Issue 3 — Manager knowledge submission needs direct local file upload and clearer lifecycle semantics
 
-### Tenant/object boundaries
+## What was verified
 
-- cross-school parent ID is rejected without mutation;
-- cross-school class ID is rejected without mutation;
-- non-Parent association is rejected;
-- non-SchoolManager provisioning is rejected;
-- browser-supplied school scope cannot override authenticated scope.
+School Manager controlled-URL registration succeeded.
 
-### Failure/compensation
+Evidence from the UI and database:
 
-- duplicate Auth email produces no duplicate local account;
-- forced local-user insert failure after Auth creation leaves no login-capable orphan, according to the chosen compensation design;
-- forced student-profile/enrollment failure does not leave an incorrectly reported success;
-- retry behavior is deterministic/idempotent enough to avoid duplicate identities;
-- sensitive generated credentials are absent from logs/error telemetry.
+```text
+status = submitted
+source URL metadata persisted = true
+knowledge_asset.submitted audit event = 1
+OCR records = 0
+ingestion jobs = 0
+embedded chunks = 0
+```
 
-### UI
+That is a valid successful registration. The current design deliberately does not run OCR, embedding or publication automatically at manager submission time.
 
-- form displays success only on coherent provisioning success;
-- HTTP/validation/dependency failures render safe localized feedback;
-- class selection is reflected in persisted enrollment or the UI no longer claims that behavior;
-- submit button cannot create duplicate concurrent provisioning requests.
+## Capability gap
 
-## Acceptance criteria for Issue 2
+The form currently supports only:
 
-- [ ] active student-creation UI no longer calls `/api/user_management/create` while that endpoint is disabled;
-- [ ] one authoritative production provisioning workflow is selected and implemented;
-- [ ] endpoint authorization remains deny-by-default;
-- [ ] SchoolManager-only and same-school boundaries are enforced server-side;
-- [ ] Supabase Auth UUID and local `users` UUID are consistent;
-- [ ] student role-specific row is created coherently;
-- [ ] selected class is actually enrolled when the UI presents class assignment;
-- [ ] parent/class cross-school negative tests pass;
-- [ ] partial failure cannot leave an untracked login-capable Auth identity;
-- [ ] temporary credential/invitation handling is server-side and not logged;
-- [ ] disabled legacy endpoints remain unreachable unless deliberately replaced and reviewed;
-- [ ] UI success/error states accurately represent the durable result;
-- [ ] no real exploration email appears in committed artifacts or test data;
-- [ ] endpoint inventory/authorization tests and relevant API/web tests are green.
+- Controlled source URL;
+- Original filename;
+- subject/grade/description metadata.
 
-## Interaction with Issue 1
+There is no browser `<input type="file">` path and no direct upload of PDF bytes from the School Manager's computer.
 
-Issue 1's local RLS diagnostic patch allows continued class-list exploration and is independent of the HTTP 404 described here.
+For the intended on-premise/offline deployment model, requiring a separately hosted controlled URL is unnecessarily difficult for normal school staff.
 
-If Issue 2's final student-provisioning workflow creates an enrollment for the selected class, its regression tests will also exercise the enrollment RLS policies corrected by Issue 1. The consolidated PR should therefore implement the RLS correction first at migration/test level, then exercise provisioning/enrollment behavior against the corrected policy graph.
+## Required repository implementation
+
+Provide two clearly separated source options:
+
+```text
+Source document
+
+○ Upload file from this computer
+   [ Browse... ] curriculum-guide.pdf
+
+○ Controlled source URL
+   [ https://... ]
+```
+
+The local-upload path must:
+
+- stream/upload bytes to an EduTalent-controlled internal storage boundary;
+- enforce server-side size limits;
+- validate MIME/content expectations rather than trust the browser filename alone;
+- sanitize filenames and prevent path traversal;
+- calculate server-side SHA-256 and trustworthy file size;
+- associate the stored object with the authenticated school and created knowledge asset;
+- avoid exposing server filesystem paths to clients;
+- work in the air-gapped/on-premise deployment profile;
+- preserve the existing governed lifecycle and audit requirements.
+
+Controlled URL should remain available as an alternative for approved internal source stores.
+
+## Lifecycle UX requirement
+
+The manager success message must explicitly mean **registered/submitted**, not OCR-complete or published.
+
+Prefer a visible lifecycle such as:
+
+```text
+Submitted → OCR review → Embedding → Published
+                         ↘ Failed
+Submitted/Published → Archived
+```
+
+The UI should explain who performs the next action and whether the document is currently available to teachers/generation.
+
+## Required regression coverage
+
+- URL registration continues to work;
+- local PDF upload works;
+- unsupported/oversize/malformed upload is rejected safely;
+- server-calculated metadata is persisted;
+- cross-school access to uploaded sources is denied;
+- source bytes are not publicly exposed;
+- registration creates one audit event and starts at `submitted`;
+- registration does not falsely claim OCR/embedding/publication completion.
+
+## Acceptance criteria
+
+- [ ] SchoolManager can select a PDF directly from the computer;
+- [ ] controlled URL remains supported;
+- [ ] server-side validation/storage/hash behavior is covered;
+- [ ] submission status wording is truthful;
+- [ ] upload works in the target offline/on-premise topology.
+
+---
+
+# Issue 4 — Platform Admin knowledge lifecycle is operationally confusing and exposes invalid/destructive actions
+
+## User-visible behavior observed
+
+The Platform Admin successfully saw the SchoolManager submission.
+
+The UI then exposed buttons such as:
+
+- `Attach verified OCR`;
+- `Queue embedding` depending on state;
+- `Publish` depending on state;
+- `Archive`.
+
+During exploration the asset moved through:
+
+```text
+submitted
+  -> OCR text attached
+ocr_ready
+  -> Archive clicked
+archived
+```
+
+The audit trail recorded the submission, OCR verification and archive events, proving that the operations were real.
+
+However, the page did not explain what each state meant, what the next correct step was, or what Archive would do. After the asset became `archived`, the card still displayed `Attach verified OCR`.
+
+## Exact UI defect
+
+`Attach verified OCR` is currently rendered unconditionally for every asset status.
+
+That is incompatible with the backend lifecycle state machine. Attaching OCR updates the asset to `ocr_ready`; that transition is not valid from every state. In particular, an archived asset is not meant to be silently returned to OCR-ready by this action, and the database transition guard will reject invalid transitions.
+
+The same misleading action can also appear for states such as `embedded` and `published`, where direct transition to `ocr_ready` is not an ordinary allowed lifecycle action.
+
+Therefore the current UI advertises operations the backend state machine may reject.
+
+## Archive is too easy to trigger
+
+`Archive` currently executes immediately on click with no confirmation dialog or consequence explanation.
+
+Archiving is not cosmetic. The backend marks the asset archived and disables teacher asset selections; the service also attempts to mark associated vector content unpublished before persisting the archive state.
+
+A destructive lifecycle action with those consequences needs explicit confirmation and clear result feedback.
+
+## Audit trail usability problem
+
+The audit page currently shows raw developer/operator fields:
+
+- machine-oriented action names such as `knowledge_asset.ocr_verified`;
+- raw target UUIDs;
+- raw JSON details;
+- timestamps in technical formatting;
+- internal actor role strings.
+
+This is useful as low-level evidence but not sufficient as the primary workflow explanation for a human Platform Administrator.
+
+## Required UX redesign
+
+The asset card should become a guided workflow rather than a bag of operations.
+
+For example:
+
+```text
+DRL
+School: Test School
+Current state: OCR reviewed
+
+1. Submitted        ✓
+2. OCR verified     ✓
+3. Embedding        Next step
+4. Published        Not yet available
+
+[ Queue embedding ]
+[ More actions ▾ ]
+```
+
+Each state must show:
+
+- plain-language meaning;
+- whether teachers/generation can use the asset;
+- the recommended next action;
+- blocking prerequisite if the next action is unavailable;
+- failure reason and retry guidance where relevant.
+
+## Required action gating
+
+Actions must be derived from the lifecycle state machine, not rendered independently.
+
+At minimum:
+
+- `submitted`: allow OCR verification and archive;
+- `ocr_pending`: allow relevant OCR completion/review and archive;
+- `ocr_ready`: allow OCR correction/review if intended, queue embedding, archive;
+- `embedding_pending`: show processing status; avoid conflicting operations unless explicitly supported;
+- `embedded`: allow publish, re-embed if deliberately supported, archive; do not casually offer OCR reset;
+- `published`: show that the asset is live; allow archive or an explicit reviewed rollback workflow only if intentionally supported;
+- `failed`: show failure reason and only valid retry/recovery actions;
+- `archived`: treat as inactive/terminal unless a deliberate restore workflow is implemented; do not show actions that the backend will reject.
+
+The frontend state-to-action mapping should be tested against the backend/database transition rules so the two cannot drift.
+
+## Destructive action confirmation
+
+Before archive, show a confirmation that explains consequences, for example:
+
+```text
+Archive “DRL”?
+
+This will make the asset unavailable for governed generation and disable teacher selections.
+
+[ Cancel ] [ Archive asset ]
+```
+
+If active ingestion jobs or publication state will be affected, include that consequence in the confirmation/result.
+
+## Better audit presentation
+
+Keep the raw audit data available for diagnostics, but render a human-readable interpretation such as:
+
+```text
+18:43 — OCR verified by Platform Administrator
+18:43 — Asset archived by Platform Administrator
+18:07 — Submitted by School Manager
+```
+
+Advanced/raw details may be expandable rather than occupying the primary table.
+
+## Required regression coverage
+
+- every lifecycle state renders only valid actions;
+- archived assets do not expose invalid OCR/embed/publish actions;
+- published/embedded assets do not expose invalid OCR reset unless an explicit rollback workflow exists;
+- Archive requires confirmation;
+- cancelled confirmation produces no mutation;
+- successful archive updates UI and audit consistently;
+- failed lifecycle mutation shows a safe actionable error;
+- state labels and recommended next step match backend transition rules;
+- audit view produces understandable user-facing text while preserving raw audit evidence for diagnostics.
+
+## Acceptance criteria
+
+- [ ] Platform Admin can understand the current state without reading raw audit JSON;
+- [ ] one clear recommended next step is visible for each active lifecycle state;
+- [ ] invalid state transitions are not presented as clickable actions;
+- [ ] Archive requires explicit confirmation and explains consequences;
+- [ ] archived assets no longer show misleading `Attach verified OCR`;
+- [ ] audit trail is human-readable;
+- [ ] frontend state/action tests and backend lifecycle tests agree.
+
+---
+
+# Exploration-only Platform Admin account note
+
+The local UI exploration environment originally contained no PlatformAdmin user. A synthetic exploration account was therefore created with one shared UUID across Supabase Auth and the local `users` table and was scoped so the current active-session resolver could authenticate it.
+
+This account is local exploration support only. It is not evidence of a production operator bootstrap workflow and must not become a default credential in repository code or deployment artifacts.
+
+A separate production-readiness review should ensure a documented secure first-operator/bootstrap procedure exists before school deployment.
 
 ---
 
 # Template for the next exploration finding
-
-Each newly discovered issue should be appended before implementation using this structure:
 
 ```markdown
 # Issue N — concise title
@@ -535,7 +458,7 @@ Each newly discovered issue should be appended before implementation using this 
 ## Interaction/dependency with earlier issues
 ```
 
-Do not implement merely because an issue has been recorded unless continuing exploration is blocked. If a temporary diagnostic change is required to continue, document it explicitly as local-only and preserve the final repository implementation for the consolidated PR.
+Do not implement merely because an issue has been recorded unless continuing exploration is blocked. If a temporary diagnostic change is required to continue, document it as local-only and preserve the durable repository implementation for the consolidated PR.
 
 ---
 
@@ -551,4 +474,4 @@ Before implementation:
 4. define the minimum sufficient tests/workflows for the complete batch;
 5. preserve production security boundaries and migration immutability.
 
-The PR should not be considered merge-ready until every recorded issue included in its scope has its acceptance criteria satisfied and the relevant workflows are green.
+The PR is not merge-ready until every recorded issue included in its scope has its acceptance criteria satisfied and the relevant workflows are green.

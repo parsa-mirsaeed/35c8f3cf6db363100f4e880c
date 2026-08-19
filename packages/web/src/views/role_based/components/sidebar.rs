@@ -22,6 +22,10 @@ pub fn Sidebar(
     } else {
         "et-sidebar"
     };
+    let home_section = navigation_items
+        .first()
+        .map(|item| item.id.clone())
+        .unwrap_or_else(|| "overview".to_string());
 
     rsx! {
         aside {
@@ -32,7 +36,7 @@ pub fn Sidebar(
                 button {
                     class: "et-brand-button",
                     "aria-label": "EduTalent dashboard",
-                    onclick: move |_| on_navigate.call("overview".to_string()),
+                    onclick: move |_| on_navigate.call(home_section.clone()),
                     span { class: "et-brand-mark",
                         span { class: "material-icons-outlined", "school" }
                     }

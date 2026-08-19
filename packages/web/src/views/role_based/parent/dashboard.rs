@@ -1,5 +1,5 @@
 use crate::application::AuthHooks;
-use crate::i18n::use_locale;
+use crate::i18n::{use_locale, Locale};
 use crate::views::role_based::components::ResponsiveDashboardLayout;
 use api::server_functions::parent_scoped_functions::get_parent_children_scoped;
 use dioxus::prelude::*;
@@ -46,49 +46,80 @@ pub fn ParentDashboard() -> Element {
 pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
     let children = use_resource(move || async move { get_parent_children_scoped().await });
+    let is_fa = locale.current() == Locale::Fa;
+    let intro = if is_fa {
+        "فرزندان و ثبت‌نام‌هایی را ببینید که این حساب مجاز به مشاهده آن‌هاست. قابلیت‌های تکمیل‌نشده تا زمان آماده‌شدن در این نما نمایش داده نمی‌شوند."
+    } else {
+        "Review the children and enrollments this account is authorized to see. Incomplete capabilities remain hidden until they are ready."
+    };
+    let enrolled_classes_label = if is_fa {
+        "کلاس‌های ثبت‌نام‌شده"
+    } else {
+        "Enrolled classes"
+    };
+    let view_details = if is_fa {
+        "مشاهده جزئیات"
+    } else {
+        "View details"
+    };
+    let loading_family = if is_fa {
+        "در حال بارگذاری اطلاعات خانواده…"
+    } else {
+        "Loading family data…"
+    };
+    let failed_family = if is_fa {
+        "بارگذاری اطلاعات خانواده ناموفق بود."
+    } else {
+        "Unable to load family data."
+    };
 
     rsx! {
-        div { class: "space-y-6",
-            div { class: "glass-card p-5 border-l-4 border-blue-500",
-                h3 { class: "font-semibold text-gray-900 dark:text-white", "{locale.t(\"parent.dashboard.sections.overview\")}" }
-                p { class: "mt-1 text-sm text-gray-500 dark:text-gray-400",
-                    "This overview shows only authorized child and enrollment data. Messaging, reports, attendance, and calendar metrics are omitted until those features are implemented."
-                }
+        div { class: "et-page-stack",
+            header { class: "et-overview-intro",
+                h2 { class: "et-overview-title", "{locale.t(\"parent.dashboard.sections.overview\")}" }
+                p { class: "et-overview-copy", "{intro}" }
             }
+
             match &*children.read() {
-                None => rsx! { div { class: "glass-card p-8 animate-pulse text-gray-500", "Loading…" } },
-                Some(Err(_)) => rsx! { div { class: "glass-card p-8 text-center text-red-600", "Unable to load family data." } },
+                None => rsx! { div { class: "et-state-panel", "{loading_family}" } },
+                Some(Err(_)) => rsx! { div { class: "et-state-panel et-state-panel--error", "{failed_family}" } },
                 Some(Ok(items)) if items.is_empty() => rsx! {
-                    div { class: "glass-card p-8 text-center text-gray-500",
-                        "{locale.t(\"parent.dashboard.empty.no_children\")}"
-                    }
+                    div { class: "et-state-panel", "{locale.t(\"parent.dashboard.empty.no_children\")}" }
                 },
                 Some(Ok(items)) => {
                     let total_classes: i64 = items.iter().map(|child| child.enrolled_classes).sum();
                     rsx! {
-                        div { class: "grid grid-cols-1 md:grid-cols-2 gap-4",
-                            div { class: "glass-card p-5",
-                                p { class: "text-sm text-gray-500", "{locale.t(\"parent.dashboard.stats.children\")}" }
-                                p { class: "text-2xl font-bold text-gray-900 dark:text-white", "{items.len()}" }
+                        div { class: "et-panel grid grid-cols-1 md:grid-cols-2",
+                            div { class: "et-stat",
+                                p { class: "et-stat-label", "{locale.t(\"parent.dashboard.stats.children\")}" }
+                                p { class: "et-stat-value", "{items.len()}" }
                             }
-                            div { class: "glass-card p-5",
-                                p { class: "text-sm text-gray-500", "Enrolled classes" }
-                                p { class: "text-2xl font-bold text-gray-900 dark:text-white", "{total_classes}" }
+                            div { class: "et-stat",
+                                p { class: "et-stat-label", "{enrolled_classes_label}" }
+                                p { class: "et-stat-value", "{total_classes}" }
                             }
                         }
-                        div { class: "grid grid-cols-1 md:grid-cols-2 gap-4",
-                            for child in items.iter() {
-                                div { key: "{child.id}", class: "glass-card p-5",
-                                    h4 { class: "font-semibold text-gray-900 dark:text-white", "{child.name}" }
-                                    p { class: "mt-1 text-sm text-gray-500", "{child.grade_level}" }
-                                    p { class: "mt-3 text-sm text-gray-600 dark:text-gray-300", "{child.enrolled_classes} enrolled classes" }
+
+                        section { class: "et-section",
+                            div { class: "et-section-heading",
+                                h3 { class: "et-section-title", "{locale.t(\"nav.children\")}" }
+                                button {
+                                    class: "et-inline-action",
+                                    onclick: move |_| on_navigate.call("children".to_string()),
+                                    "{view_details}"
                                 }
                             }
-                        }
-                        button {
-                            class: "btn-primary min-h-[44px] px-5",
-                            onclick: move |_| on_navigate.call("children".to_string()),
-                            "{locale.t(\"parent.dashboard.actions.view_classes\")}"
+                            div { class: "et-panel",
+                                for child in items.iter() {
+                                    div { key: "{child.id}", class: "et-list-row",
+                                        div { class: "et-list-primary",
+                                            h4 { class: "et-list-title", "{child.name}" }
+                                            p { class: "et-list-meta", "{child.grade_level}" }
+                                        }
+                                        div { class: "et-list-aside", "{child.enrolled_classes} {enrolled_classes_label}" }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

@@ -1,7 +1,7 @@
 use super::settings::profile::ProfileSettings;
 use super::{ClassManagementSection, ReportsSection, SettingsSection, UserManagementSection};
 use crate::application::AuthHooks;
-use crate::i18n::use_locale;
+use crate::i18n::{use_locale, Locale};
 use crate::views::role_based::components::ResponsiveDashboardLayout;
 use crate::views::role_based::ManagerKnowledgeSubmissionsSection;
 use dioxus::prelude::*;
@@ -58,39 +58,75 @@ pub fn SchoolManagerDashboard() -> Element {
 #[component]
 pub fn SchoolManagerOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
+    let is_fa = locale.current() == Locale::Fa;
+    let intro = if is_fa {
+        "عملیات مدرسه را از مسیرهای واقعی و فعال سامانه مدیریت کنید. فقط قابلیت‌های در دسترس نمایش داده می‌شوند."
+    } else {
+        "Manage the school through production-backed workflows. Only available capabilities are shown."
+    };
+    let quick_actions = if is_fa {
+        "اقدام‌های اصلی"
+    } else {
+        "Primary actions"
+    };
+    let knowledge_title = if is_fa {
+        "ارسال منابع دانشی"
+    } else {
+        "Knowledge submissions"
+    };
+    let knowledge_description = if is_fa {
+        "منابع کنترل‌شده مدرسه را برای بررسی ثبت کنید."
+    } else {
+        "Register governed school sources for review."
+    };
+    let truthfulness_note = if is_fa {
+        "خلاصه‌های عملیاتی فقط زمانی نمایش داده می‌شوند که از داده واقعی مدرسه پشتیبانی شوند؛ شاخص‌های ساختگی فعالیت، پایداری، تأخیر یا روند نمایش داده نمی‌شوند."
+    } else {
+        "Operational summaries appear only when backed by real school data. Synthetic activity, uptime, latency, storage and trend metrics are intentionally omitted."
+    };
+
     rsx! {
-        div { class: "space-y-6",
-            div { class: "glass-card p-6",
-                h2 { class: "text-xl font-bold text-gray-900 dark:text-white", "{locale.t(\"dashboard.overview\")}" }
-                p { class: "mt-2 text-sm text-gray-500 dark:text-gray-400",
-                    "This release exposes operational school management actions only. Synthetic activity, uptime, latency, storage, active-user, and report metrics are not displayed."
+        div { class: "et-page-stack",
+            header { class: "et-overview-intro",
+                h2 { class: "et-overview-title", "{locale.t(\"dashboard.overview\")}" }
+                p { class: "et-overview-copy", "{intro}" }
+            }
+
+            section { class: "et-section",
+                div { class: "et-section-heading",
+                    h3 { class: "et-section-title", "{quick_actions}" }
+                }
+                div { class: "et-action-grid",
+                    ManagerAction {
+                        icon: "groups".to_string(),
+                        title: locale.t("school_manager.actions.add_user"),
+                        description: locale.t("school_manager.actions.add_user_desc"),
+                        on_click: move |_| on_navigate.call("users".to_string()),
+                    }
+                    ManagerAction {
+                        icon: "class".to_string(),
+                        title: locale.t("school_manager.actions.create_class"),
+                        description: locale.t("school_manager.actions.create_class_desc"),
+                        on_click: move |_| on_navigate.call("classes".to_string()),
+                    }
+                    ManagerAction {
+                        icon: "upload_file".to_string(),
+                        title: knowledge_title.to_string(),
+                        description: knowledge_description.to_string(),
+                        on_click: move |_| on_navigate.call("knowledge-submissions".to_string()),
+                    }
+                    ManagerAction {
+                        icon: "settings".to_string(),
+                        title: locale.t("school_manager.actions.system_settings"),
+                        description: locale.t("school_manager.actions.system_settings_desc"),
+                        on_click: move |_| on_navigate.call("settings".to_string()),
+                    }
                 }
             }
-            div { class: "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4",
-                ManagerAction {
-                    icon: "groups".to_string(),
-                    title: locale.t("school_manager.actions.add_user"),
-                    description: locale.t("school_manager.actions.add_user_desc"),
-                    on_click: move |_| on_navigate.call("users".to_string()),
-                }
-                ManagerAction {
-                    icon: "class".to_string(),
-                    title: locale.t("school_manager.actions.create_class"),
-                    description: locale.t("school_manager.actions.create_class_desc"),
-                    on_click: move |_| on_navigate.call("classes".to_string()),
-                }
-                ManagerAction {
-                    icon: "upload_file".to_string(),
-                    title: "Knowledge submissions".to_string(),
-                    description: "Register governed school sources for platform review.".to_string(),
-                    on_click: move |_| on_navigate.call("knowledge-submissions".to_string()),
-                }
-                ManagerAction {
-                    icon: "settings".to_string(),
-                    title: locale.t("school_manager.actions.system_settings"),
-                    description: locale.t("school_manager.actions.system_settings_desc"),
-                    on_click: move |_| on_navigate.call("settings".to_string()),
-                }
+
+            div { class: "et-info-note",
+                span { class: "material-icons-outlined text-lg", "aria-hidden": "true", "verified_user" }
+                p { "{truthfulness_note}" }
             }
         }
     }
@@ -105,11 +141,18 @@ fn ManagerAction(
 ) -> Element {
     rsx! {
         button {
-            class: "glass-card p-5 text-left min-h-[120px] hover:-translate-y-0.5 transition-transform",
+            class: "et-action-card",
             onclick: move |_| on_click.call(()),
-            span { class: "material-icons-outlined text-primary text-2xl", "{icon}" }
-            h3 { class: "mt-3 font-semibold text-gray-900 dark:text-white", "{title}" }
-            p { class: "mt-1 text-sm text-gray-500 dark:text-gray-400", "{description}" }
+            div { class: "et-action-card-top",
+                span { class: "et-action-icon",
+                    span { class: "material-icons-outlined text-xl", "aria-hidden": "true", "{icon}" }
+                }
+                span { class: "material-icons-outlined et-action-arrow", "aria-hidden": "true", "arrow_forward" }
+            }
+            div {
+                h3 { class: "et-action-title", "{title}" }
+                p { class: "et-action-description", "{description}" }
+            }
         }
     }
 }

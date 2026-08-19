@@ -110,4 +110,35 @@ mod tests {
         assert!(!capabilities.derived_academic_metrics);
         assert!(!capabilities.synthetic_system_health);
     }
+
+    #[test]
+    fn dashboard_shell_does_not_advertise_inert_global_search() {
+        let header = include_str!("views/role_based/components/header.rs");
+        assert!(!header.contains("placeholder: \"{t_search}...\""));
+        assert!(!header.contains("Mobile Search Icon"));
+        assert!(!header.contains("common.search"));
+    }
+
+    #[test]
+    fn mobile_dashboard_navigation_does_not_drop_role_destinations() {
+        let layout = include_str!("views/role_based/components/dashboard_layout.rs");
+        assert!(!layout.contains(".take(4)"));
+        assert!(!layout.contains("window.inner_width"));
+        assert!(layout.contains("Sidebar"));
+    }
+
+    #[test]
+    fn dashboard_remake_stylesheet_is_loaded_after_base_styles() {
+        let main_source = include_str!("main.rs");
+        let base = main_source
+            .find("href: MAIN_CSS")
+            .expect("base stylesheet should be linked");
+        let remake = main_source
+            .find("href: DASHBOARD_REMAKE_CSS")
+            .expect("dashboard remake stylesheet should be linked");
+        assert!(
+            base < remake,
+            "dashboard overrides must load after base styles"
+        );
+    }
 }

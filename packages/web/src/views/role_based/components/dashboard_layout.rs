@@ -1,6 +1,6 @@
 use super::{Header, Sidebar};
 use crate::application::routing_service::RoutingService;
-use crate::domain::User;
+use crate::domain::{SystemRole, User};
 use crate::i18n::use_locale;
 use dioxus::prelude::*;
 
@@ -18,7 +18,15 @@ pub fn DashboardLayout(
 ) -> Element {
     let locale = use_locale();
     let mut mobile_nav_open = use_signal(|| false);
-    let navigation_items = RoutingService::get_navigation_items(&user, &locale);
+    let mut navigation_items = RoutingService::get_navigation_items(&user, &locale);
+
+    // Platform administration currently starts directly in the governed
+    // knowledge workspace. Do not show a fake "Overview" destination that
+    // renders the same screen under a different selected-navigation state.
+    if user.role == SystemRole::PlatformAdmin {
+        navigation_items.retain(|item| item.id != "overview");
+    }
+
     let page_title = navigation_items
         .iter()
         .find(|item| item.id == active_section)

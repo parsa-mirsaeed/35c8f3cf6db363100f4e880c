@@ -23,6 +23,7 @@ A local diagnostic database patch is evidence for diagnosis only. It must not be
 | # | Area | Severity | Status | Summary |
 |---|---|---|---|---|
 | 1 | Class Management / PostgreSQL RLS / UI feedback | High | Root-caused; local fix proven; repository fix pending | Class creation succeeds but class-list refresh returns HTTP 500 because `enrollments` and `students` SELECT policies recurse; UI also provides no success confirmation and discards refresh errors. |
+| 2 | School Manager User Creation / endpoint capability contract / account provisioning | High | Root-caused; repository fix pending | Student creation UI calls `/api/user_management/create`, but production policy intentionally marks that server function `Disabled`, so authorization fails closed with HTTP 404 before the handler executes. Existing implementations are not safe to enable unchanged. |
 
 ---
 
@@ -308,6 +309,209 @@ Therefore:
 - it is **not** pristine exact-head database state anymore;
 - it must **not** be used as proof that the repository already contains the fix;
 - final verification for the consolidated PR must be repeated from clean repository-controlled migrations.
+
+---
+
+# Issue 2 — School Manager student creation UI calls an intentionally disabled provisioning endpoint
+
+## User-visible behavior
+
+From School Manager → User Management → create student:
+
+- submitting the student form fails;
+- the UI displays a generic server-function error indicating HTTP 404;
+- browser console reports a failed request to:
+
+```text
+/api/user_management/create
+```
+
+The student email used during exploration is real and is intentionally omitted from this document and must remain absent from repository artifacts, test fixtures, commands, screenshots added to issues/PRs, and logs copied into review material.
+
+## Reproduction steps
+
+1. Sign in as a valid School Manager.
+2. Open User Management and the student-creation form.
+3. Complete the required fields using test data.
+4. Submit.
+5. Observe HTTP 404 from `/api/user_management/create` and the generic error banner.
+
+Do not reuse the real exploration email in automated tests; use a generated reserved-domain address instead.
+
+## Expected behavior
+
+School Manager should be able to provision a student through an explicitly supported production capability. The operation should either complete coherently across Auth and application persistence or fail without leaving partial identities/records.
+
+The UI must not expose a creation control whose only backend mutation route is intentionally unavailable.
+
+## Actual behavior and exact route contract
+
+The School Manager creation UI imports:
+
+```rust
+api::server_functions::user_management::{create_user, CreateUserPayload, ...}
+```
+
+and calls `create_user(payload).await`.
+
+That server function declares:
+
+```rust
+#[server(endpoint = "user_management/create")]
+```
+
+so the browser correctly generates a request for `/api/user_management/create`.
+
+However, `endpoint_authorization_manifest.psv` deliberately classifies:
+
+```text
+server|user_management/create|Disabled|...
+```
+
+The deny-by-default endpoint authorization middleware maps every `Disabled` endpoint to `NotFound`, which is returned as HTTP 404 without calling the handler.
+
+Therefore the observed 404 is not a missing file, malformed email, invalid student data, Supabase failure, PostgreSQL failure, or RLS failure. It is a frontend/production-capability contract mismatch: an active production UI invokes an endpoint that production policy intentionally makes undiscoverable.
+
+Because authorization returns 404 before `next.run(request)`, this specific failed request does not execute `create_user()` and therefore does not create an Auth identity or local EduTalent user/student record.
+
+## Why the existing endpoint must not simply be re-enabled
+
+`user_management::create_user` currently performs a multi-system provisioning sequence:
+
+1. resolve the School Manager and role;
+2. create the account in Supabase Auth;
+3. create the local `users` row;
+4. create a role-specific `teachers` or `students` record, or parent links;
+5. optionally perform teacher class assignments.
+
+As currently written, the external Auth creation occurs before the local database work and there is no explicit compensation path that deletes/invalidates the newly created Auth identity if later local persistence fails. The subsequent application writes are also not presented as one explicit database transaction. Re-enabling this endpoint unchanged could therefore expose partial-provisioning states such as an Auth identity without a complete local account/role record.
+
+The browser also currently generates a temporary password itself from the first eight characters of a random UUID and sends that password to the server. Production provisioning should not depend on client-generated temporary credentials. Credential generation/invitation semantics belong on the trusted server side with an explicit expiry/rotation/onboarding contract.
+
+The student form also captures a selected class section, but `create_user` only places that value into generic metadata. Its `Student` branch creates the student profile but does not create an `enrollments` row for the selected class. Therefore merely enabling the current endpoint would still leave part of the form's advertised behavior unfulfilled.
+
+## Existing alternative endpoints are not a complete replacement
+
+`students/create` is active for School Managers, but it only creates a `students` domain record for an **already existing**, active, same-school local user whose role is already `Student`. It does not provision the Supabase Auth identity or base `users` row. The UI cannot simply switch to this endpoint as a one-call replacement.
+
+The separate legacy `user_creation/create_student` endpoint is also explicitly `Disabled` in the production manifest. Its current implementation contains a TODO stating that it creates the Supabase Auth user but does not yet create the corresponding local database record. It is therefore not production-complete either.
+
+The correct fix is to define one coherent supported provisioning workflow rather than activating one of several incomplete overlapping paths.
+
+## Security and tenant-isolation requirements
+
+The consolidated implementation must preserve all of the following:
+
+- only an authenticated, active School Manager may provision users for the manager's current school;
+- school identity must come from the authenticated transaction/session, never from a browser-trusted school identifier;
+- requested role must be restricted to supported provisionable roles;
+- parent association must reference an active Parent in the same school;
+- any selected class must belong to the same school;
+- a student may be enrolled only into an authorized same-school class;
+- duplicate email handling must fail predictably and must not create duplicate/local-orphan identities;
+- Auth success followed by database failure must be compensated or designed around a durable provisioning state so no login-capable orphan remains;
+- database success must never be committed before the Auth identity contract is safely established unless the reverse failure is equally compensated;
+- temporary credential generation/invitation must occur server-side and secrets must never be logged;
+- user-facing errors must not reveal Supabase service credentials, tokens, internal SQL, or cross-tenant existence information;
+- audit-relevant provisioning events should follow the endpoint manifest's required-audit contract.
+
+## Required repository implementation
+
+Before choosing which legacy function to retain, review the overlapping `user_management`, `user_creation`, and `students/create` paths and collapse the production workflow around one authoritative provisioning service/endpoint.
+
+The implementation should:
+
+1. define one active SchoolManager-only account-provisioning endpoint for Student/Teacher/Parent creation, or separate hardened role-specific endpoints if that produces clearer authorization boundaries;
+2. derive school scope from the authenticated School Manager, not payload authority;
+3. generate invitation/temporary credentials on the server with an explicit secure onboarding contract;
+4. provision Supabase Auth and local application state with a documented compensation/saga strategy for cross-system failure;
+5. group local `users` + role-specific record + optional enrollment/assignment writes in an explicit database transaction where feasible;
+6. validate parent and class references against the authenticated school before mutation;
+7. make the selected student class produce an actual `enrollments` relationship if class assignment is part of the UI contract;
+8. return a typed result that distinguishes validation, duplicate-account, dependency, and safe internal failure classes;
+9. update the production authorization manifest only after the hardened endpoint is complete;
+10. remove or retire conflicting legacy browser calls so the active UI cannot target an endpoint marked `Disabled`;
+11. preserve deny-by-default behavior for every endpoint that remains disabled;
+12. avoid exposing the real exploration email in code, fixtures, tests, docs, PR descriptions, or committed screenshots.
+
+## Required UI behavior
+
+The creation form should:
+
+- call only an active production capability;
+- validate required fields locally for usability without treating client validation as authorization;
+- prevent duplicate submits while provisioning is in progress;
+- show a clear success state only after the full provisioning contract succeeds;
+- show a safe actionable failure state when provisioning does not complete;
+- not present a selected class as applied unless the enrollment was actually persisted;
+- never surface raw `ServerFnError` internals directly as the main user-facing copy;
+- use generated test addresses in automated/e2e coverage.
+
+## Required regression tests
+
+Add focused coverage for:
+
+### Endpoint/UI contract
+
+- active School Manager user-creation UI must not reference a manifest endpoint classified `Disabled`;
+- anonymous and non-SchoolManager callers are denied;
+- the chosen production provisioning endpoint is present in the endpoint inventory/manifest with the intended policy;
+- disabled legacy paths remain HTTP 404.
+
+### Successful student provisioning
+
+- one Auth user is created;
+- one local `users` row is created with the same identity UUID;
+- one `students` row is created for that user;
+- school IDs are consistent and come from the manager's school;
+- selected same-school class creates the expected enrollment when requested;
+- success is returned only after required state is coherent.
+
+### Tenant/object boundaries
+
+- cross-school parent ID is rejected without mutation;
+- cross-school class ID is rejected without mutation;
+- non-Parent association is rejected;
+- non-SchoolManager provisioning is rejected;
+- browser-supplied school scope cannot override authenticated scope.
+
+### Failure/compensation
+
+- duplicate Auth email produces no duplicate local account;
+- forced local-user insert failure after Auth creation leaves no login-capable orphan, according to the chosen compensation design;
+- forced student-profile/enrollment failure does not leave an incorrectly reported success;
+- retry behavior is deterministic/idempotent enough to avoid duplicate identities;
+- sensitive generated credentials are absent from logs/error telemetry.
+
+### UI
+
+- form displays success only on coherent provisioning success;
+- HTTP/validation/dependency failures render safe localized feedback;
+- class selection is reflected in persisted enrollment or the UI no longer claims that behavior;
+- submit button cannot create duplicate concurrent provisioning requests.
+
+## Acceptance criteria for Issue 2
+
+- [ ] active student-creation UI no longer calls `/api/user_management/create` while that endpoint is disabled;
+- [ ] one authoritative production provisioning workflow is selected and implemented;
+- [ ] endpoint authorization remains deny-by-default;
+- [ ] SchoolManager-only and same-school boundaries are enforced server-side;
+- [ ] Supabase Auth UUID and local `users` UUID are consistent;
+- [ ] student role-specific row is created coherently;
+- [ ] selected class is actually enrolled when the UI presents class assignment;
+- [ ] parent/class cross-school negative tests pass;
+- [ ] partial failure cannot leave an untracked login-capable Auth identity;
+- [ ] temporary credential/invitation handling is server-side and not logged;
+- [ ] disabled legacy endpoints remain unreachable unless deliberately replaced and reviewed;
+- [ ] UI success/error states accurately represent the durable result;
+- [ ] no real exploration email appears in committed artifacts or test data;
+- [ ] endpoint inventory/authorization tests and relevant API/web tests are green.
+
+## Interaction with Issue 1
+
+Issue 1's local RLS diagnostic patch allows continued class-list exploration and is independent of the HTTP 404 described here.
+
+If Issue 2's final student-provisioning workflow creates an enrollment for the selected class, its regression tests will also exercise the enrollment RLS policies corrected by Issue 1. The consolidated PR should therefore implement the RLS correction first at migration/test level, then exercise provisioning/enrollment behavior against the corrected policy graph.
 
 ---
 

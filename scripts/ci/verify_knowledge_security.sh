@@ -194,3 +194,4 @@ SELECT 'governed knowledge security invariants verified' AS result;
 SQL
 
 bash scripts/ci/verify_transaction_scoped_rls.sh
+bash scripts/ci/verify_class_enrollment_rls.sh

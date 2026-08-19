@@ -1,5 +1,5 @@
 use crate::application::AuthHooks;
-use crate::i18n::use_locale;
+use crate::i18n::{use_locale, Locale};
 use crate::views::role_based::components::ResponsiveDashboardLayout;
 use api::server_functions::dashboard_functions::{
     get_student_assignments, get_student_classes_view,
@@ -47,14 +47,23 @@ pub fn StudentOverviewSection(on_navigate: EventHandler<String>) -> Element {
         Some(Ok(items)) => items.len().to_string(),
         _ => "—".to_string(),
     };
+    let is_fa = locale.current() == Locale::Fa;
+    let intro = if is_fa {
+        "ابتدا کارهایی را ببینید که نیاز به اقدام دارند، سپس کلاس‌ها و نمره‌های خود را مرور کنید."
+    } else {
+        "Start with work that needs attention, then review your classes and grades."
+    };
+    let view_all = if is_fa { "مشاهده همه" } else { "View all" };
+    let loading_assignments = if is_fa { "در حال بارگذاری تکلیف‌ها…" } else { "Loading assignments…" };
+    let failed_assignments = if is_fa { "بارگذاری تکلیف‌ها ناموفق بود." } else { "Unable to load assignments." };
+    let loading_classes = if is_fa { "در حال بارگذاری کلاس‌ها…" } else { "Loading classes…" };
+    let failed_classes = if is_fa { "بارگذاری کلاس‌ها ناموفق بود." } else { "Unable to load classes." };
 
     rsx! {
         div { class: "et-page-stack",
             header { class: "et-overview-intro",
                 h2 { class: "et-overview-title", "{locale.t(\"dashboard.overview\")}" }
-                p { class: "et-overview-copy",
-                    "Start with work that needs attention, then review your classes and grades."
-                }
+                p { class: "et-overview-copy", "{intro}" }
             }
 
             section { class: "et-section",
@@ -63,12 +72,12 @@ pub fn StudentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                     button {
                         class: "et-inline-action",
                         onclick: move |_| on_navigate.call("assignments".to_string()),
-                        "View all"
+                        "{view_all}"
                     }
                 }
                 match &*assignments.read() {
-                    None => rsx! { StudentState { message: "Loading assignments…".to_string(), error: false } },
-                    Some(Err(_)) => rsx! { StudentState { message: "Unable to load assignments.".to_string(), error: true } },
+                    None => rsx! { StudentState { message: loading_assignments.to_string(), error: false } },
+                    Some(Err(_)) => rsx! { StudentState { message: failed_assignments.to_string(), error: true } },
                     Some(Ok(items)) if items.is_empty() => rsx! {
                         StudentState { message: locale.t("assignments.no_assignments"), error: false }
                     },
@@ -117,12 +126,12 @@ pub fn StudentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                     button {
                         class: "et-inline-action",
                         onclick: move |_| on_navigate.call("classes".to_string()),
-                        "View all"
+                        "{view_all}"
                     }
                 }
                 match &*classes.read() {
-                    None => rsx! { StudentState { message: "Loading classes…".to_string(), error: false } },
-                    Some(Err(_)) => rsx! { StudentState { message: "Unable to load classes.".to_string(), error: true } },
+                    None => rsx! { StudentState { message: loading_classes.to_string(), error: false } },
+                    Some(Err(_)) => rsx! { StudentState { message: failed_classes.to_string(), error: true } },
                     Some(Ok(items)) if items.is_empty() => rsx! {
                         StudentState { message: locale.t("classes.no_classes"), error: false }
                     },

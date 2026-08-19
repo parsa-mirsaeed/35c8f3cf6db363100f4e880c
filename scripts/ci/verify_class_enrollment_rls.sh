@@ -13,6 +13,19 @@ DATABASE_APP_USER="${app_role}" \
 DATABASE_APP_PASSWORD="${app_password}" \
     bash scripts/ci/configure_database_role.sh >/dev/null
 
+runtime_url="$(python3 - "${DATABASE_URL}" "${app_role}" "${app_password}" <<'PY'
+import sys
+from urllib.parse import quote, urlsplit, urlunsplit
+
+url, user, password = sys.argv[1:]
+parts = urlsplit(url)
+host = parts.hostname or "localhost"
+port = f":{parts.port}" if parts.port else ""
+netloc = f"{quote(user, safe='')}:{quote(password, safe='')}@{host}{port}"
+print(urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment)))
+PY
+)"
+
 # Fixed UUIDs make assertions readable. The CI database is disposable and the
 # fixture is removed at the end of the script.
 school_a="a1100000-0000-0000-0000-000000000001"
@@ -111,7 +124,7 @@ if [[ "${helper_state}" != "true|stable|search_path=pg_catalog, public|false" ]]
 fi
 
 runtime_helper_exec="$(
-    PGPASSWORD="${app_password}" psql "${DATABASE_URL/postgresql:\/\//postgresql://${app_role}:${app_password}@}" \
+    PGPASSWORD="${app_password}" psql "${runtime_url}" \
         --tuples-only --no-align --set=ON_ERROR_STOP=1 \
         --command="SELECT has_function_privilege(current_user, 'public.enrollment_student_actor_matches(uuid)', 'EXECUTE')"
 )"
@@ -120,19 +133,6 @@ if [[ "${runtime_helper_exec}" != "t" ]]; then
     echo "Runtime role cannot execute bounded enrollment helper" >&2
     exit 1
 fi
-
-runtime_url="$(python3 - "${DATABASE_URL}" "${app_role}" "${app_password}" <<'PY'
-import sys
-from urllib.parse import urlsplit, urlunsplit, quote
-
-url, user, password = sys.argv[1:]
-parts = urlsplit(url)
-host = parts.hostname or 'localhost'
-port = f':{parts.port}' if parts.port else ''
-netloc = f'{quote(user)}:{quote(password)}@{host}{port}'
-print(urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment)))
-PY
-)"
 
 query_enrollments() {
     local user_id="$1"

@@ -1,6 +1,6 @@
 use crate::application::routing_service::NavigationItem;
 use crate::domain::User;
-use crate::i18n::{use_locale, LanguageSwitcher};
+use crate::i18n::{use_locale, LanguageSwitcher, Locale};
 use dioxus::prelude::*;
 
 /// Shared role-aware navigation. On desktop this is persistent; on compact
@@ -16,7 +16,11 @@ pub fn Sidebar(
 ) -> Element {
     let locale = use_locale();
     let t_sign_out = locale.t("auth.sign_out");
-    let t_portal = locale.t("common.portal");
+    let t_portal = if locale.current() == Locale::Fa {
+        "پرتال"
+    } else {
+        "Portal"
+    };
     let sidebar_class = if mobile_open {
         "et-sidebar et-sidebar--mobile-open"
     } else {

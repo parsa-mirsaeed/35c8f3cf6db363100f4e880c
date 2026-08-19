@@ -7,6 +7,29 @@
 -- PostgreSQL expands both FORCE-RLS policies and aborts with:
 --   infinite recursion detected in policy for relation "enrollments"
 --
+-- EduTalent's migration runner may defer historical files until their helper
+-- dependencies exist. This correction must therefore run only after the legacy
+-- RLS policy migration and the transaction-scoped RLS finalizer have completed;
+-- otherwise this file could create enrollments_select_policy before the deferred
+-- historical migration attempts to create its original version.
+
+DO $prerequisites$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.edutalent_migration_files
+        WHERE path = 'migrations/20260103000001_enable_rls_policies.sql'
+    ) OR NOT EXISTS (
+        SELECT 1
+        FROM public.edutalent_migration_files
+        WHERE path = 'migrations/20260805121600_finalize_transaction_scoped_rls.sql'
+    ) THEN
+        RAISE EXCEPTION
+            'enrollment RLS recursion fix requires the finalized legacy RLS policy chain';
+    END IF;
+END
+$prerequisites$;
+
 -- The helper below performs only the narrow relationship check required by the
 -- enrollment policy. It executes as the migration owner (the controlled
 -- BYPASSRLS administration identity), has a fixed search path, returns only a
@@ -14,7 +37,6 @@
 -- role receives EXECUTE through scripts/ci/configure_database_role.sh, which
 -- grants application functions after migrations while keeping that role
 -- NOBYPASSRLS and without role memberships.
-
 CREATE OR REPLACE FUNCTION public.enrollment_student_actor_matches(
     p_student_id uuid
 )

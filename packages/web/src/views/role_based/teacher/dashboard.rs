@@ -1,5 +1,5 @@
 use crate::application::AuthHooks;
-use crate::i18n::use_locale;
+use crate::i18n::{use_locale, Locale};
 use crate::views::role_based::components::ResponsiveDashboardLayout;
 use api::server_functions::dashboard_functions::{
     get_teacher_assignments, get_teacher_dashboard_stats,
@@ -43,14 +43,36 @@ pub fn TeacherOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
     let stats = use_resource(move || async move { get_teacher_dashboard_stats().await });
     let assignments = use_resource(move || async move { get_teacher_assignments().await });
+    let is_fa = locale.current() == Locale::Fa;
+    let intro = if is_fa {
+        "ابتدا موارد نیازمند توجه را ببینید و سپس مستقیماً به تکلیف‌ها، ارزیابی، کلاس‌ها یا منابع دانشی بروید."
+    } else {
+        "See what needs attention, then move directly into assignments, grading, classes, or governed knowledge."
+    };
+    let primary_actions = if is_fa { "اقدام‌های اصلی" } else { "Primary actions" };
+    let grading_description = if is_fa {
+        "کارهای ارسال‌شده را بررسی و بازخورد را ثبت کنید."
+    } else {
+        "Review submitted work and record feedback."
+    };
+    let assignments_description = if is_fa {
+        "تکلیف‌های کلاس را ایجاد و مدیریت کنید."
+    } else {
+        "Create and manage class assignments."
+    };
+    let knowledge_title = if is_fa { "منابع دانشی" } else { "Knowledge assets" };
+    let knowledge_description = if is_fa {
+        "منابع تأییدشده را برای تولید کنترل‌شده انتخاب کنید."
+    } else {
+        "Choose approved sources for governed generation."
+    };
+    let view_all = if is_fa { "مشاهده همه" } else { "View all" };
 
     rsx! {
         div { class: "et-page-stack",
             header { class: "et-overview-intro",
                 h2 { class: "et-overview-title", "{locale.t(\"dashboard.overview\")}" }
-                p { class: "et-overview-copy",
-                    "See what needs attention, then move directly into assignments, grading, classes, or governed knowledge."
-                }
+                p { class: "et-overview-copy", "{intro}" }
             }
 
             match &*stats.read() {
@@ -67,25 +89,25 @@ pub fn TeacherOverviewSection(on_navigate: EventHandler<String>) -> Element {
 
             section { class: "et-section",
                 div { class: "et-section-heading",
-                    h3 { class: "et-section-title", "{locale.t(\"dashboard.quick_actions\")}" }
+                    h3 { class: "et-section-title", "{primary_actions}" }
                 }
                 div { class: "grid grid-cols-1 md:grid-cols-3 gap-4",
                     TeacherAction {
                         icon: "grading".to_string(),
                         title: locale.t("nav.grading"),
-                        description: "Review submitted work and record feedback.".to_string(),
+                        description: grading_description.to_string(),
                         on_click: move |_| on_navigate.call("submissions".to_string()),
                     }
                     TeacherAction {
                         icon: "assignment".to_string(),
                         title: locale.t("assignments.title"),
-                        description: "Create and manage class assignments.".to_string(),
+                        description: assignments_description.to_string(),
                         on_click: move |_| on_navigate.call("assignments".to_string()),
                     }
                     TeacherAction {
                         icon: "library_books".to_string(),
-                        title: "Knowledge assets".to_string(),
-                        description: "Choose approved sources for governed generation.".to_string(),
+                        title: knowledge_title.to_string(),
+                        description: knowledge_description.to_string(),
                         on_click: move |_| on_navigate.call("knowledge-assets".to_string()),
                     }
                 }
@@ -97,7 +119,7 @@ pub fn TeacherOverviewSection(on_navigate: EventHandler<String>) -> Element {
                     button {
                         class: "et-inline-action",
                         onclick: move |_| on_navigate.call("assignments".to_string()),
-                        "View all"
+                        "{view_all}"
                     }
                 }
                 match &*assignments.read() {

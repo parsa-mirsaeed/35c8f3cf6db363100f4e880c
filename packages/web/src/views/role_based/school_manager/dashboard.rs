@@ -1,7 +1,7 @@
 use super::settings::profile::ProfileSettings;
 use super::{ClassManagementSection, ReportsSection, SettingsSection, UserManagementSection};
 use crate::application::AuthHooks;
-use crate::i18n::use_locale;
+use crate::i18n::{use_locale, Locale};
 use crate::views::role_based::components::ResponsiveDashboardLayout;
 use crate::views::role_based::ManagerKnowledgeSubmissionsSection;
 use dioxus::prelude::*;
@@ -58,19 +58,35 @@ pub fn SchoolManagerDashboard() -> Element {
 #[component]
 pub fn SchoolManagerOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
+    let is_fa = locale.current() == Locale::Fa;
+    let intro = if is_fa {
+        "عملیات مدرسه را از مسیرهای واقعی و فعال سامانه مدیریت کنید. فقط قابلیت‌های در دسترس نمایش داده می‌شوند."
+    } else {
+        "Manage the school through production-backed workflows. Only available capabilities are shown."
+    };
+    let quick_actions = if is_fa { "اقدام‌های اصلی" } else { "Primary actions" };
+    let knowledge_title = if is_fa { "ارسال منابع دانشی" } else { "Knowledge submissions" };
+    let knowledge_description = if is_fa {
+        "منابع کنترل‌شده مدرسه را برای بررسی ثبت کنید."
+    } else {
+        "Register governed school sources for review."
+    };
+    let truthfulness_note = if is_fa {
+        "خلاصه‌های عملیاتی فقط زمانی نمایش داده می‌شوند که از داده واقعی مدرسه پشتیبانی شوند؛ شاخص‌های ساختگی فعالیت، پایداری، تأخیر یا روند نمایش داده نمی‌شوند."
+    } else {
+        "Operational summaries appear only when backed by real school data. Synthetic activity, uptime, latency, storage and trend metrics are intentionally omitted."
+    };
 
     rsx! {
         div { class: "et-page-stack",
             header { class: "et-overview-intro",
                 h2 { class: "et-overview-title", "{locale.t(\"dashboard.overview\")}" }
-                p { class: "et-overview-copy",
-                    "Manage the school through production-backed workflows. Only available capabilities are shown."
-                }
+                p { class: "et-overview-copy", "{intro}" }
             }
 
             section { class: "et-section",
                 div { class: "et-section-heading",
-                    h3 { class: "et-section-title", "{locale.t(\"dashboard.quick_actions\")}" }
+                    h3 { class: "et-section-title", "{quick_actions}" }
                 }
                 div { class: "et-action-grid",
                     ManagerAction {
@@ -87,8 +103,8 @@ pub fn SchoolManagerOverviewSection(on_navigate: EventHandler<String>) -> Elemen
                     }
                     ManagerAction {
                         icon: "upload_file".to_string(),
-                        title: "Knowledge submissions".to_string(),
-                        description: "Register governed school sources for review.".to_string(),
+                        title: knowledge_title.to_string(),
+                        description: knowledge_description.to_string(),
                         on_click: move |_| on_navigate.call("knowledge-submissions".to_string()),
                     }
                     ManagerAction {
@@ -102,9 +118,7 @@ pub fn SchoolManagerOverviewSection(on_navigate: EventHandler<String>) -> Elemen
 
             div { class: "et-info-note",
                 span { class: "material-icons-outlined text-lg", "aria-hidden": "true", "verified_user" }
-                p {
-                    "Operational summaries appear here only when they are backed by real school data. Synthetic activity, uptime, latency, storage and trend metrics are intentionally omitted."
-                }
+                p { "{truthfulness_note}" }
             }
         }
     }

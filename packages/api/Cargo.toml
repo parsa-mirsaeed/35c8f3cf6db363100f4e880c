@@ -73,6 +73,7 @@ server = [
     "dioxus/server",
     "dep:sqlx",
     "dep:jsonwebtoken",
+    "dep:supabase_rs",
     "dep:bcrypt",
     "dep:base64",
     "dep:reqwest",

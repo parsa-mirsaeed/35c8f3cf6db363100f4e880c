@@ -48,16 +48,20 @@ pub async fn knowledge_upload_handler(
 
     let user_id = Uuid::parse_str(&user.id)
         .map_err(|_| reject(StatusCode::UNAUTHORIZED, "Invalid active session"))?;
-    let school_id = sqlx::query_scalar::<_, Option<Uuid>>("SELECT school_id FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_optional(&*pool)
-        .await
-        .map_err(|error| {
-            error!(%error, user_id = %user_id, "knowledge upload school lookup failed");
-            reject(StatusCode::INTERNAL_SERVER_ERROR, "Unable to resolve school scope")
-        })?
-        .flatten()
-        .ok_or_else(|| reject(StatusCode::FORBIDDEN, "School manager has no school scope"))?;
+    let school_id =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT school_id FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&*pool)
+            .await
+            .map_err(|error| {
+                error!(%error, user_id = %user_id, "knowledge upload school lookup failed");
+                reject(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Unable to resolve school scope",
+                )
+            })?
+            .flatten()
+            .ok_or_else(|| reject(StatusCode::FORBIDDEN, "School manager has no school scope"))?;
 
     let upload = parse_upload(&mut multipart).await?;
     let title = required_text(upload.title, "Title is required")?;
@@ -165,7 +169,10 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<ParsedKnowledgeUpload
             }
             "file" => {
                 if upload.pdf_bytes.is_some() || upload.original_filename.is_some() {
-                    return Err(reject(StatusCode::BAD_REQUEST, "Only one PDF may be uploaded"));
+                    return Err(reject(
+                        StatusCode::BAD_REQUEST,
+                        "Only one PDF may be uploaded",
+                    ));
                 }
                 let filename = field.file_name().unwrap_or_default().trim().to_string();
                 if filename.is_empty() || filename.len() > MAX_FILENAME_BYTES {
@@ -175,8 +182,18 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<ParsedKnowledgeUpload
                 upload.original_filename = Some(filename);
                 upload.pdf_bytes = Some(bytes);
             }
-            "" => return Err(reject(StatusCode::BAD_REQUEST, "Upload field is missing a name")),
-            _ => return Err(reject(StatusCode::BAD_REQUEST, "Upload form contains an unsupported field")),
+            "" => {
+                return Err(reject(
+                    StatusCode::BAD_REQUEST,
+                    "Upload field is missing a name",
+                ))
+            }
+            _ => {
+                return Err(reject(
+                    StatusCode::BAD_REQUEST,
+                    "Upload form contains an unsupported field",
+                ))
+            }
         }
     }
 
@@ -187,17 +204,28 @@ async fn read_text_field(field: &mut Field<'_>, limit: usize) -> Result<String, 
     let bytes = read_limited_field(field, limit).await?;
     String::from_utf8(bytes)
         .map(|value| value.trim().to_string())
-        .map_err(|_| reject(StatusCode::BAD_REQUEST, "Upload metadata must be valid UTF-8"))
+        .map_err(|_| {
+            reject(
+                StatusCode::BAD_REQUEST,
+                "Upload metadata must be valid UTF-8",
+            )
+        })
 }
 
-async fn read_limited_field(field: &mut Field<'_>, limit: usize) -> Result<Vec<u8>, UploadRejection> {
+async fn read_limited_field(
+    field: &mut Field<'_>,
+    limit: usize,
+) -> Result<Vec<u8>, UploadRejection> {
     let mut bytes = Vec::new();
     while let Some(chunk) = field.chunk().await.map_err(|error| {
         warn!(%error, "unable to read knowledge upload field");
         reject(StatusCode::BAD_REQUEST, "Invalid upload body")
     })? {
         if bytes.len().saturating_add(chunk.len()) > limit {
-            return Err(reject(StatusCode::PAYLOAD_TOO_LARGE, "Upload field is too large"));
+            return Err(reject(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Upload field is too large",
+            ));
         }
         bytes.extend_from_slice(&chunk);
     }
@@ -228,24 +256,32 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
 
 fn validate_pdf(filename: &str, bytes: &[u8]) -> Result<(), UploadRejection> {
     if !filename.to_ascii_lowercase().ends_with(".pdf") {
-        return Err(reject(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Only PDF files are accepted"));
+        return Err(reject(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Only PDF files are accepted",
+        ));
     }
     if bytes.is_empty() || bytes.len() > MAX_KNOWLEDGE_PDF_BYTES {
-        return Err(reject(StatusCode::PAYLOAD_TOO_LARGE, "PDF is empty or too large"));
+        return Err(reject(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "PDF is empty or too large",
+        ));
     }
     if !bytes.starts_with(b"%PDF-") {
-        return Err(reject(StatusCode::UNSUPPORTED_MEDIA_TYPE, "File content is not a PDF"));
+        return Err(reject(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "File content is not a PDF",
+        ));
     }
-    if !bytes
-        .iter()
-        .rev()
-        .take(1024)
-        .copied()
-        .collect::<Vec<_>>()
+    let tail_start = bytes.len().saturating_sub(1024);
+    if !bytes[tail_start..]
         .windows(5)
-        .any(|window| window == b"FOE%%")
+        .any(|window| window == b"%%EOF")
     {
-        return Err(reject(StatusCode::UNSUPPORTED_MEDIA_TYPE, "PDF is incomplete"));
+        return Err(reject(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "PDF is incomplete",
+        ));
     }
     Ok(())
 }
@@ -279,7 +315,10 @@ async fn ensure_private_bucket(state: &AppState) -> Result<(), UploadRejection> 
             reject(StatusCode::BAD_GATEWAY, "Knowledge storage is unavailable")
         })?;
         if body.get("public").and_then(Value::as_bool) != Some(false) {
-            error!(bucket = KNOWLEDGE_SOURCE_BUCKET, "knowledge source bucket is not private");
+            error!(
+                bucket = KNOWLEDGE_SOURCE_BUCKET,
+                "knowledge source bucket is not private"
+            );
             return Err(reject(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Knowledge storage is not safely configured",
@@ -290,7 +329,10 @@ async fn ensure_private_bucket(state: &AppState) -> Result<(), UploadRejection> 
 
     if response.status().as_u16() != 404 {
         error!(status = %response.status(), "knowledge storage bucket lookup failed");
-        return Err(reject(StatusCode::BAD_GATEWAY, "Knowledge storage is unavailable"));
+        return Err(reject(
+            StatusCode::BAD_GATEWAY,
+            "Knowledge storage is unavailable",
+        ));
     }
 
     let create_url = format!(
@@ -321,7 +363,10 @@ async fn ensure_private_bucket(state: &AppState) -> Result<(), UploadRejection> 
     }
 
     error!(status = %response.status(), "knowledge storage bucket creation failed");
-    Err(reject(StatusCode::BAD_GATEWAY, "Knowledge storage is unavailable"))
+    Err(reject(
+        StatusCode::BAD_GATEWAY,
+        "Knowledge storage is unavailable",
+    ))
 }
 
 async fn verify_bucket_private(state: &AppState) -> Result<(), UploadRejection> {
@@ -337,7 +382,10 @@ async fn verify_bucket_private(state: &AppState) -> Result<(), UploadRejection> 
             reject(StatusCode::BAD_GATEWAY, "Knowledge storage is unavailable")
         })?;
     if !response.status().is_success() {
-        return Err(reject(StatusCode::BAD_GATEWAY, "Knowledge storage is unavailable"));
+        return Err(reject(
+            StatusCode::BAD_GATEWAY,
+            "Knowledge storage is unavailable",
+        ));
     }
     let body = response.json::<Value>().await.map_err(|error| {
         error!(%error, "knowledge storage bucket verification response was invalid");
@@ -378,7 +426,10 @@ async fn upload_storage_object(
         Ok(())
     } else {
         error!(status = %response.status(), object_key = %object_key, "knowledge source object upload was rejected");
-        Err(reject(StatusCode::BAD_GATEWAY, "Unable to store uploaded PDF"))
+        Err(reject(
+            StatusCode::BAD_GATEWAY,
+            "Unable to store uploaded PDF",
+        ))
     }
 }
 

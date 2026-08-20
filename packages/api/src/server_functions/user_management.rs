@@ -1,5 +1,5 @@
-use crate::domain::{RoleId, SchoolId, UserId};
 use crate::dioxus_fullstack::extract;
+use crate::domain::{RoleId, SchoolId, UserId};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -492,7 +492,9 @@ pub async fn create_user(payload: CreateUserPayload) -> Result<(), ServerFnError
                     let mut student_uuids = Vec::<Uuid>::new();
                     for student_id in students {
                         let raw = student_id.as_str().ok_or_else(|| {
-                            ServerFnError::new("Associated student identifiers must be UUID strings")
+                            ServerFnError::new(
+                                "Associated student identifiers must be UUID strings",
+                            )
                         })?;
                         student_uuids.push(Uuid::parse_str(raw).map_err(|_| {
                             ServerFnError::new("Associated student identifier is invalid")
@@ -532,8 +534,9 @@ pub async fn create_user(payload: CreateUserPayload) -> Result<(), ServerFnError
             }
         }
 
-        let supabase_service =
-            crate::services::supabase_auth::SupabaseAdminService::new(state.supabase_config.clone());
+        let supabase_service = crate::services::supabase_auth::SupabaseAdminService::new(
+            state.supabase_config.clone(),
+        );
         let user_metadata = json!({
             "name": name,
             "role": role.as_str(),
@@ -568,14 +571,12 @@ pub async fn create_user(payload: CreateUserPayload) -> Result<(), ServerFnError
             .await
         {
             tracing::error!(%error, %new_user_id, "Failed to create local user record");
-            return Err(
-                cleanup_auth_after_provisioning_failure(
-                    &supabase_service,
-                    new_user_id,
-                    "users",
-                )
-                .await,
-            );
+            return Err(cleanup_auth_after_provisioning_failure(
+                &supabase_service,
+                new_user_id,
+                "users",
+            )
+            .await);
         }
 
         match role {
@@ -587,14 +588,12 @@ pub async fn create_user(payload: CreateUserPayload) -> Result<(), ServerFnError
                     Ok(teacher_id) => teacher_id,
                     Err(error) => {
                         tracing::error!(%error, %new_user_id, "Failed to create teacher record");
-                        return Err(
-                            cleanup_auth_after_provisioning_failure(
-                                &supabase_service,
-                                new_user_id,
-                                "teachers",
-                            )
-                            .await,
-                        );
+                        return Err(cleanup_auth_after_provisioning_failure(
+                            &supabase_service,
+                            new_user_id,
+                            "teachers",
+                        )
+                        .await);
                     }
                 };
 
@@ -604,14 +603,12 @@ pub async fn create_user(payload: CreateUserPayload) -> Result<(), ServerFnError
                         .await
                     {
                         tracing::error!(%error, %new_user_id, "Failed to assign teacher classes");
-                        return Err(
-                            cleanup_auth_after_provisioning_failure(
-                                &supabase_service,
-                                new_user_id,
-                                "teaching_assignments",
-                            )
-                            .await,
-                        );
+                        return Err(cleanup_auth_after_provisioning_failure(
+                            &supabase_service,
+                            new_user_id,
+                            "teaching_assignments",
+                        )
+                        .await);
                     }
                 }
             }
@@ -626,36 +623,31 @@ pub async fn create_user(payload: CreateUserPayload) -> Result<(), ServerFnError
                     .await
                 {
                     tracing::error!(%error, %new_user_id, "Failed to create student record");
-                    return Err(
-                        cleanup_auth_after_provisioning_failure(
-                            &supabase_service,
-                            new_user_id,
-                            "students",
-                        )
-                        .await,
-                    );
+                    return Err(cleanup_auth_after_provisioning_failure(
+                        &supabase_service,
+                        new_user_id,
+                        "students",
+                    )
+                    .await);
                 }
             }
             ProvisionableRole::Parent => {
-                let parent_insert = sqlx::query(
-                    "INSERT INTO parents (id, user_id, school_id) VALUES ($1, $2, $3)",
-                )
-                .bind(Uuid::new_v4())
-                .bind(new_user_uuid)
-                .bind(school_uuid)
-                .execute(&*state.services.pool)
-                .await;
+                let parent_insert =
+                    sqlx::query("INSERT INTO parents (id, user_id, school_id) VALUES ($1, $2, $3)")
+                        .bind(Uuid::new_v4())
+                        .bind(new_user_uuid)
+                        .bind(school_uuid)
+                        .execute(&*state.services.pool)
+                        .await;
 
                 if let Err(error) = parent_insert {
                     tracing::error!(%error, %new_user_id, "Failed to create parent record");
-                    return Err(
-                        cleanup_auth_after_provisioning_failure(
-                            &supabase_service,
-                            new_user_id,
-                            "parents",
-                        )
-                        .await,
-                    );
+                    return Err(cleanup_auth_after_provisioning_failure(
+                        &supabase_service,
+                        new_user_id,
+                        "parents",
+                    )
+                    .await);
                 }
 
                 if !parent_student_ids.is_empty() {
@@ -664,14 +656,12 @@ pub async fn create_user(payload: CreateUserPayload) -> Result<(), ServerFnError
                         .await
                     {
                         tracing::error!(%error, %new_user_id, "Failed to link parent students");
-                        return Err(
-                            cleanup_auth_after_provisioning_failure(
-                                &supabase_service,
-                                new_user_id,
-                                "parent_student_links",
-                            )
-                            .await,
-                        );
+                        return Err(cleanup_auth_after_provisioning_failure(
+                            &supabase_service,
+                            new_user_id,
+                            "parent_student_links",
+                        )
+                        .await);
                     }
                 }
             }
@@ -779,6 +769,7 @@ pub async fn update_user_details(
             .map_err(|e| ServerFnError::new(format!("Invalid target user ID: {}", e)))?
             .into();
 
+        // Verify target user belongs to same school
         let target_user = user_repo
             .find_by_id(target_user_id)
             .await
@@ -786,9 +777,7 @@ pub async fn update_user_details(
             .ok_or_else(|| ServerFnError::new("Target user not found"))?;
 
         if target_user.school_id != current_user.school_id {
-            return Err(ServerFnError::new(
-                "Cannot update user from another school",
-            ));
+            return Err(ServerFnError::new("Cannot update user from another school"));
         }
 
         let update_request = UpdateUserRequest {

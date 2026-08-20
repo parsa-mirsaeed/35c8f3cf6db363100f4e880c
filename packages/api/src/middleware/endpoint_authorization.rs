@@ -238,6 +238,36 @@ mod tests {
     }
 
     #[test]
+    fn governed_knowledge_upload_is_school_manager_only_and_url_registration_is_retired() {
+        let upload_path = "/api/manager/knowledge-submissions/upload";
+        assert_eq!(
+            authorize_path(upload_path, None),
+            EndpointAuthorizationDecision::Unauthorized
+        );
+        assert_eq!(
+            authorize_path(upload_path, Some("SchoolManager")),
+            EndpointAuthorizationDecision::Allow
+        );
+        for role in ["PlatformAdmin", "Teacher", "Parent", "Student", "admin"] {
+            assert_eq!(
+                authorize_path(upload_path, Some(role)),
+                EndpointAuthorizationDecision::Forbidden,
+                "{role} must not reach school knowledge PDF upload"
+            );
+        }
+
+        let retired_path = "/api/manager/knowledge-submissions";
+        assert_eq!(
+            authorize_path(retired_path, None),
+            EndpointAuthorizationDecision::NotFound
+        );
+        assert_eq!(
+            authorize_path(retired_path, Some("SchoolManager")),
+            EndpointAuthorizationDecision::NotFound
+        );
+    }
+
+    #[test]
     fn incomplete_product_endpoints_fail_closed_before_role_authorization() {
         for (path, role) in [
             ("/api/dashboard/student/stats", "Student"),

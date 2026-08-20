@@ -218,6 +218,26 @@ mod tests {
     }
 
     #[test]
+    fn school_user_provisioning_is_school_manager_only() {
+        let path = "/api/user_management/create";
+        assert_eq!(
+            authorize_path(path, None),
+            EndpointAuthorizationDecision::Unauthorized
+        );
+        assert_eq!(
+            authorize_path(path, Some("SchoolManager")),
+            EndpointAuthorizationDecision::Allow
+        );
+        for role in ["PlatformAdmin", "Teacher", "Parent", "Student", "admin"] {
+            assert_eq!(
+                authorize_path(path, Some(role)),
+                EndpointAuthorizationDecision::Forbidden,
+                "{role} must not reach school user provisioning"
+            );
+        }
+    }
+
+    #[test]
     fn incomplete_product_endpoints_fail_closed_before_role_authorization() {
         for (path, role) in [
             ("/api/dashboard/student/stats", "Student"),

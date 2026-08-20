@@ -1,9 +1,11 @@
 use super::settings::profile::ProfileSettings;
-use super::{ClassManagementSection, ReportsSection, SettingsSection, UserManagementSection};
+use super::{
+    ClassManagementSection, ManagerKnowledgeUploadSection, ReportsSection, SettingsSection,
+    UserManagementSection,
+};
 use crate::application::AuthHooks;
 use crate::i18n::{use_locale, Locale};
 use crate::views::role_based::components::ResponsiveDashboardLayout;
-use crate::views::role_based::ManagerKnowledgeSubmissionsSection;
 use dioxus::prelude::*;
 
 #[component]
@@ -28,7 +30,7 @@ pub fn SchoolManagerDashboard() -> Element {
         let content = match section.as_str() {
             "users" => rsx! { UserManagementSection {} },
             "classes" => rsx! { ClassManagementSection {} },
-            "knowledge-submissions" => rsx! { ManagerKnowledgeSubmissionsSection {} },
+            "knowledge-submissions" => rsx! { ManagerKnowledgeUploadSection {} },
             "settings" => rsx! { SettingsSection {} },
             "profile" => rsx! { ProfileSettings {} },
             "reports"

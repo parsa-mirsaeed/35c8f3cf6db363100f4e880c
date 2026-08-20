@@ -41,21 +41,21 @@ pub fn ManagerKnowledgeUploadSection() -> Element {
             };
 
             spawn(async move {
-                let response = match Request::post("/api/manager/knowledge-submissions/upload")
-                    .body(form)
-                {
-                    Ok(request) => request.send().await,
-                    Err(error) => {
-                        notice.set(Some(format!("Unable to prepare upload: {error}")));
-                        busy.set(false);
-                        return;
-                    }
-                };
+                let response =
+                    match Request::post("/api/manager/knowledge-submissions/upload").body(form) {
+                        Ok(request) => request.send().await,
+                        Err(error) => {
+                            notice.set(Some(format!("Unable to prepare upload: {error}")));
+                            busy.set(false);
+                            return;
+                        }
+                    };
 
                 match response {
                     Ok(response) if (200..300).contains(&response.status()) => {
                         notice.set(Some(
-                            "PDF uploaded privately and registered for platform review.".to_string(),
+                            "PDF uploaded privately and registered for platform review."
+                                .to_string(),
                         ));
                         form_epoch.set(form_epoch() + 1);
                         assets.restart();

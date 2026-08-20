@@ -90,7 +90,7 @@ server|user_management/get_school_users|SchoolManagerOnly|SchoolManager|session_
 server|user_management/get_available_roles|SchoolManagerOnly|SchoolManager|session_school|provisionable_roles|read|bounded_list|none|user_management::get_available_roles|-
 server|user_management/deactivate|Disabled|-|none|none|write|disabled|required|user_management::deactivate_user|2026-10-01
 server|user_management/reactivate|Disabled|-|none|none|write|disabled|required|user_management::reactivate_user|2026-10-01
-server|user_management/create|Disabled|-|none|none|write|disabled|required|user_management::create_user|2026-10-01
+server|user_management/create|SchoolManagerOnly|SchoolManager|session_school|school_user_provisioning|write|bounded_payload|required|user_management::create_user|-
 server|user_management/get_stats|SchoolManagerOnly|SchoolManager|session_school|school_users|read|bounded_aggregate|none|user_management::get_user_stats|-
 server|user_management/update_details|Disabled|-|none|none|write|disabled|required|user_management::update_user_details|2026-10-01
 server|user_preferences/get|SessionOwner|-|session_school|session_user|read|standard|none|user_preferences_functions::get_user_preferences|-

@@ -8,6 +8,7 @@ use gloo_net::http::Request;
 use wasm_bindgen::JsCast;
 
 const MAX_PDF_MB: usize = 20;
+const KNOWLEDGE_UPLOAD_FORM_ID: &str = "manager-knowledge-upload-form";
 
 #[component]
 pub fn ManagerKnowledgeUploadSection() -> Element {
@@ -27,10 +28,10 @@ pub fn ManagerKnowledgeUploadSection() -> Element {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let form = event
-                .downcast::<web_sys::Event>()
-                .and_then(|event| event.target())
-                .and_then(|target| target.dyn_into::<web_sys::HtmlFormElement>().ok())
+            let form = web_sys::window()
+                .and_then(|window| window.document())
+                .and_then(|document| document.get_element_by_id(KNOWLEDGE_UPLOAD_FORM_ID))
+                .and_then(|element| element.dyn_into::<web_sys::HtmlFormElement>().ok())
                 .and_then(|form| web_sys::FormData::new_with_form(&form).ok());
 
             let Some(form) = form else {
@@ -56,7 +57,7 @@ pub fn ManagerKnowledgeUploadSection() -> Element {
                         notice.set(Some(
                             "PDF uploaded privately and registered for platform review.".to_string(),
                         ));
-                        form_epoch += 1;
+                        form_epoch.set(form_epoch() + 1);
                         assets.restart();
                     }
                     Ok(response) => {
@@ -84,7 +85,9 @@ pub fn ManagerKnowledgeUploadSection() -> Element {
         {
             let _ = event;
             busy.set(false);
-            notice.set(Some("File upload is available in the browser application.".to_string()));
+            notice.set(Some(
+                "File upload is available in the browser application.".to_string(),
+            ));
         }
     };
 
@@ -96,6 +99,7 @@ pub fn ManagerKnowledgeUploadSection() -> Element {
                 div { class: "grid grid-cols-1 xl:grid-cols-2 gap-6",
                     form {
                         key: "knowledge-upload-{form_epoch}",
+                        id: KNOWLEDGE_UPLOAD_FORM_ID,
                         class: "glass-card p-6 space-y-4",
                         enctype: "multipart/form-data",
                         onsubmit: submit,
@@ -137,7 +141,7 @@ pub fn ManagerKnowledgeUploadSection() -> Element {
                                 }
                             }
                             div {
-                                label { class: "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1", "Grade" }
+                                label { class: "block text-sm font-medium text-gray-700 dark:border-gray-700 dark:text-gray-300 mb-1", "Grade" }
                                 input {
                                     class: "w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-gray-900 dark:text-white",
                                     r#type: "text",
@@ -177,18 +181,24 @@ pub fn ManagerKnowledgeUploadSection() -> Element {
                             },
                             Some(Ok(items)) => rsx! {
                                 for item in items.iter() {
-                                    div { key: "{item.id}", class: "glass-card p-5 space-y-2",
-                                        div { class: "flex items-start justify-between gap-3",
-                                            h4 { class: "font-semibold text-gray-900 dark:text-white", "{item.title}" }
-                                            span { class: "rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-1 text-xs text-gray-700 dark:text-gray-300", "{item.status}" }
-                                        }
-                                        p { class: "text-sm text-gray-500 dark:text-gray-400",
-                                            "{}{}",
-                                            item.subject.as_deref().unwrap_or("General"),
-                                            item.grade.as_deref().map(|grade| format!(" · {grade}")).unwrap_or_default()
-                                        }
-                                        if let Some(description) = item.description.as_ref() {
-                                            p { class: "text-sm text-gray-600 dark:text-gray-300", "{description}" }
+                                    {
+                                        let metadata = match (item.subject.as_deref(), item.grade.as_deref()) {
+                                            (Some(subject), Some(grade)) => format!("{subject} · {grade}"),
+                                            (Some(subject), None) => subject.to_string(),
+                                            (None, Some(grade)) => grade.to_string(),
+                                            (None, None) => "General".to_string(),
+                                        };
+                                        rsx! {
+                                            div { key: "{item.id}", class: "glass-card p-5 space-y-2",
+                                                div { class: "flex items-start justify-between gap-3",
+                                                    h4 { class: "font-semibold text-gray-900 dark:text-white", "{item.title}" }
+                                                    span { class: "rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-1 text-xs text-gray-700 dark:text-gray-300", "{item.status}" }
+                                                }
+                                                p { class: "text-sm text-gray-500 dark:text-gray-400", "{metadata}" }
+                                                if let Some(description) = item.description.as_ref() {
+                                                    p { class: "text-sm text-gray-600 dark:text-gray-300", "{description}" }
+                                                }
+                                            }
                                         }
                                     }
                                 }

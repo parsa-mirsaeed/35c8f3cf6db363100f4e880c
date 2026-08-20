@@ -42,14 +42,20 @@ pub async fn get_school_classes() -> Result<Vec<ClassSectionResponse>, ServerFnE
         let user_uuid =
             Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid User ID"))?;
 
-        // Get user's school_id
         let user_row = sqlx::query!(r#"SELECT school_id FROM users WHERE id = $1"#, user_uuid)
             .fetch_optional(&**pool)
             .await
-            .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?
+            .map_err(|error| {
+                tracing::error!(
+                    operation = "get_school_classes.resolve_school",
+                    user_id = %user_uuid,
+                    error = %error,
+                    "Class list school lookup failed"
+                );
+                ServerFnError::new("Unable to load classes")
+            })?
             .ok_or_else(|| ServerFnError::new("User not found"))?;
 
-        // Get classes with student count and teacher name
         let rows = sqlx::query!(
             r#"
             SELECT
@@ -70,7 +76,16 @@ pub async fn get_school_classes() -> Result<Vec<ClassSectionResponse>, ServerFnE
         )
         .fetch_all(&**pool)
         .await
-        .map_err(|e| ServerFnError::new(format!("Database error: {}", e)))?;
+        .map_err(|error| {
+            tracing::error!(
+                operation = "get_school_classes.query",
+                school_id = %user_row.school_id,
+                role = %user.role,
+                error = %error,
+                "Class list query failed"
+            );
+            ServerFnError::new("Unable to load classes")
+        })?;
 
         Ok(rows
             .into_iter()

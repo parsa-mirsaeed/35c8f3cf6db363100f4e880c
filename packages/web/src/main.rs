@@ -75,7 +75,7 @@ async fn database_readiness(
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
-    use axum::routing::{get, post};
+    use axum::routing::post;
     use axum::Extension;
     use tracing::Level;
 
@@ -112,8 +112,8 @@ async fn main() {
     );
 
     let router = axum::Router::new()
-        .route("/healthz", get(|| async { "ok" }))
-        .route("/readyz", get(database_readiness))
+        .route("/healthz", axum::routing::get(|| async { "ok" }))
+        .route("/readyz", axum::routing::get(database_readiness))
         .route("/api/auth/login", post(api::handlers::login_handler))
         .route("/api/auth/logout", post(api::handlers::logout_handler))
         .route(
@@ -126,7 +126,7 @@ async fn main() {
         )
         .route(
             "/api/admin/knowledge-assets/source",
-            get(api::handlers::knowledge_source_handler),
+            axum::routing::get(api::handlers::knowledge_source_handler),
         )
         .serve_dioxus_application(ServeConfig::builder(), App)
         .layer(axum::middleware::from_fn(

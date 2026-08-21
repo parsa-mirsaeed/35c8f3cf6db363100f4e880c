@@ -58,7 +58,7 @@ server|notifications/get_all|SessionOwner|-|session_school|notification_owner|re
 server|notifications/get_unread|SessionOwner|-|session_school|notification_owner|read|bounded_list|none|notification_functions::get_unread_notifications|-
 server|notifications/get_summary|SessionOwner|-|session_school|notification_owner|read|bounded_aggregate|none|notification_functions::get_notification_summary|-
 server|notifications/mark_read|SessionOwner|-|session_school|notification_owner|write|standard|none|notification_functions::mark_notification_as_read|-
-server|notifications/mark_all_read|SessionOwner|-|session_school|notification_owner|write|bounded_mutation|none|notification_functions::mark_all_notifications_read|-
+server|notifications/mark_all_read|SessionOwner|-|session_school|notification_owner|write|bounded_mutation|none|notification_functions::mark_all_notifications_as_read|-
 server|profile/request_change|SessionOwner|-|session_school|session_user|write|bounded_payload|required|profile_change_requests::request_profile_change|-
 server|profile/get_pending_requests|SchoolManagerOnly|SchoolManager|session_school|school_profile_requests|read|bounded_list|required|profile_change_requests::get_pending_requests|-
 server|profile/decide_change|SchoolManagerOnly|SchoolManager|session_school|school_profile_request|write|standard|required|profile_change_requests::decide_profile_change|-

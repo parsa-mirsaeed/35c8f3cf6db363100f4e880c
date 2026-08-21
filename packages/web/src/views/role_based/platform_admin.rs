@@ -51,7 +51,9 @@ fn PlatformKnowledgeReviewSection() -> Element {
             return;
         }
         let Some((asset_id, _)) = selected_ocr_asset() else {
-            notice.set(Some("Select an asset before attaching verified OCR text.".to_string()));
+            notice.set(Some(
+                "Select an asset before attaching verified OCR text.".to_string(),
+            ));
             return;
         };
         if ocr_text().trim().is_empty() || provider().trim().is_empty() {
@@ -182,12 +184,7 @@ fn render_review_card(
     item: &AdminKnowledgeReviewAssetDto,
     mut busy: Signal<bool>,
     mut notice: Signal<Option<String>>,
-    mut assets: Resource<
-        Result<
-            Vec<AdminKnowledgeReviewAssetDto>,
-            dioxus::prelude::ServerFnError,
-        >,
-    >,
+    mut assets: Resource<Result<Vec<AdminKnowledgeReviewAssetDto>, dioxus::prelude::ServerFnError>>,
     mut selected_ocr_asset: Signal<Option<(String, String)>>,
     mut ocr_text: Signal<String>,
     mut archive_confirmation: Signal<Option<String>>,
@@ -202,10 +199,7 @@ fn render_review_card(
     let can_archive = status != "archived";
     let archive_pending = archive_confirmation().as_deref() == Some(asset.id.as_str());
     let (stage_title, next_step) = lifecycle_guidance(status, item.has_verified_ocr);
-    let source_href = format!(
-        "/api/admin/knowledge-assets/source?asset_id={}",
-        asset.id
-    );
+    let source_href = format!("/api/admin/knowledge-assets/source?asset_id={}", asset.id);
     let source_description = source_description(item);
 
     rsx! {
@@ -482,7 +476,10 @@ fn source_description(item: &AdminKnowledgeReviewAssetDto) -> String {
         .original_filename
         .as_deref()
         .unwrap_or("Source metadata unavailable");
-    match item.file_size_bytes.and_then(|value| u64::try_from(value).ok()) {
+    match item
+        .file_size_bytes
+        .and_then(|value| u64::try_from(value).ok())
+    {
         Some(bytes) => format!("{filename} · {}", format_file_size(bytes)),
         None => filename.to_string(),
     }

@@ -18,10 +18,14 @@ web-sys = { version = "0.3.82", features = [
     "Document",
     "Element",
     "HtmlInputElement",
+    "HtmlFormElement",
     "File",
     "FileList",
     "FileReader",
     "Blob",
+    "FormData",
+    "Event",
+    "EventTarget",
 ] }
 wasm-bindgen = "0.2"
 chrono = { version = "0.4", features = ["serde", "wasmbind"] }

@@ -116,6 +116,14 @@ async fn main() {
         .route("/readyz", axum::routing::get(database_readiness))
         .route("/api/auth/login", post(api::handlers::login_handler))
         .route("/api/auth/logout", post(api::handlers::logout_handler))
+        .route(
+            "/api/manager/knowledge-submissions/upload",
+            post(api::handlers::knowledge_upload_handler).layer(
+                axum::extract::DefaultBodyLimit::max(
+                    api::handlers::MAX_KNOWLEDGE_UPLOAD_BODY_BYTES,
+                ),
+            ),
+        )
         .serve_dioxus_application(ServeConfig::builder(), App)
         .layer(axum::middleware::from_fn(
             api::middleware::block_legacy_teacher_material_ingestion,

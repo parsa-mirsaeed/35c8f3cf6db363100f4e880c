@@ -3,8 +3,15 @@ use serde_json::{json, Value};
 
 // Auth module
 pub mod auth;
-pub use auth::{AuthenticatedUser, LoginRequest, LoginResponse, Claims, login_handler, logout_handler};
+pub use auth::{
+    login_handler, logout_handler, AuthenticatedUser, Claims, LoginRequest, LoginResponse,
+};
 
+// Governed knowledge source upload boundary
+pub mod knowledge_upload;
+pub use knowledge_upload::{
+    knowledge_upload_handler, MAX_KNOWLEDGE_PDF_BYTES, MAX_KNOWLEDGE_UPLOAD_BODY_BYTES,
+};
 
 /// Basic health check handler
 pub async fn health_check() -> Result<Json<Value>, StatusCode> {

@@ -53,7 +53,7 @@ dotenvy = { workspace = true, optional = true }
 config = { workspace = true, optional = true }
 
 # --- Axum 0.8 Upgrade ---
-axum = { version = "0.8", optional = true }
+axum = { version = "0.8", optional = true, features = ["multipart"] }
 axum-extra = { version = "0.10", optional = true, features = ["cookie"] }
 async-trait = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }

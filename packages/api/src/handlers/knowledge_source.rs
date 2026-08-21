@@ -69,7 +69,10 @@ pub async fn knowledge_source_handler(
     .await
     .map_err(|error| {
         error!(%error, %asset_id, "knowledge source lookup failed");
-        reject(StatusCode::INTERNAL_SERVER_ERROR, "Unable to load source metadata")
+        reject(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Unable to load source metadata",
+        )
     })?
     .ok_or_else(|| reject(StatusCode::NOT_FOUND, "Source document is unavailable"))?;
 
@@ -128,7 +131,10 @@ pub async fn knowledge_source_handler(
             %asset_id,
             "knowledge source storage rejected review read"
         );
-        return Err(reject(StatusCode::BAD_GATEWAY, "Source document is unavailable"));
+        return Err(reject(
+            StatusCode::BAD_GATEWAY,
+            "Source document is unavailable",
+        ));
     }
 
     if storage_response
@@ -216,11 +222,17 @@ pub async fn knowledge_source_handler(
             CACHE_CONTROL,
             HeaderValue::from_static("private, no-store, max-age=0"),
         )
-        .header("x-content-type-options", HeaderValue::from_static("nosniff"))
+        .header(
+            "x-content-type-options",
+            HeaderValue::from_static("nosniff"),
+        )
         .body(Body::from(bytes))
         .map_err(|error| {
             error!(%error, %asset_id, "knowledge source response construction failed");
-            reject(StatusCode::INTERNAL_SERVER_ERROR, "Unable to render source document")
+            reject(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Unable to render source document",
+            )
         })
 }
 

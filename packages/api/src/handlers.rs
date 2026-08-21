@@ -13,6 +13,10 @@ pub use knowledge_upload::{
     knowledge_upload_handler, MAX_KNOWLEDGE_PDF_BYTES, MAX_KNOWLEDGE_UPLOAD_BODY_BYTES,
 };
 
+// Platform-admin-only private source review boundary
+pub mod knowledge_source;
+pub use knowledge_source::knowledge_source_handler;
+
 /// Basic health check handler
 pub async fn health_check() -> Result<Json<Value>, StatusCode> {
     Ok(Json(json!({

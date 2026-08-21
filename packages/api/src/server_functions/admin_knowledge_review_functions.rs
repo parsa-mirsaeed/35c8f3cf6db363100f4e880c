@@ -122,13 +122,16 @@ pub async fn list_admin_knowledge_assets_for_review(
                 let source = source_by_asset.remove(&asset.id);
                 let source_review_available = source.as_ref().is_some_and(|source| {
                     source.mime_type == "application/pdf"
-                        && source.original_file_url.as_deref().is_some_and(|reference| {
-                            let expected_prefix = format!(
-                                "storage://{KNOWLEDGE_SOURCE_BUCKET}/{}/",
-                                asset.school_id
-                            );
-                            reference.starts_with(&expected_prefix)
-                        })
+                        && source
+                            .original_file_url
+                            .as_deref()
+                            .is_some_and(|reference| {
+                                let expected_prefix = format!(
+                                    "storage://{KNOWLEDGE_SOURCE_BUCKET}/{}/",
+                                    asset.school_id
+                                );
+                                reference.starts_with(&expected_prefix)
+                            })
                 });
                 let has_verified_ocr = ocr_asset_ids.contains(&asset.id);
                 AdminKnowledgeReviewAssetDto {

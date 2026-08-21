@@ -7,7 +7,7 @@ use crate::repositories::KnowledgeAssetRepository;
 #[cfg(feature = "server")]
 use sqlx::Row;
 #[cfg(feature = "server")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "server")]
 use uuid::Uuid;
 
@@ -19,6 +19,7 @@ pub struct AdminKnowledgeReviewAssetDto {
     pub source_review_available: bool,
     pub original_filename: Option<String>,
     pub file_size_bytes: Option<i64>,
+    pub has_verified_ocr: bool,
 }
 
 #[cfg(feature = "server")]
@@ -53,7 +54,7 @@ pub async fn list_admin_knowledge_assets_for_review(
         }
 
         let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
-        let rows = sqlx::query(
+        let source_rows = sqlx::query(
             r#"
             SELECT DISTINCT ON (asset_id)
                 asset_id,
@@ -74,8 +75,20 @@ pub async fn list_admin_knowledge_assets_for_review(
             ServerFnError::new("Unable to load governed source metadata")
         })?;
 
+        let ocr_rows = sqlx::query_scalar::<_, Uuid>(
+            "SELECT asset_id FROM knowledge_ocr_texts WHERE asset_id = ANY($1)",
+        )
+        .bind(&asset_ids)
+        .fetch_all(&*pool)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "platform knowledge OCR readiness list failed");
+            ServerFnError::new("Unable to load governed OCR readiness")
+        })?;
+        let ocr_asset_ids = ocr_rows.into_iter().collect::<HashSet<_>>();
+
         let mut source_by_asset = HashMap::<Uuid, SourceReviewMetadata>::new();
-        for row in rows {
+        for row in source_rows {
             let asset_id: Uuid = row.try_get("asset_id").map_err(|error| {
                 tracing::error!(%error, "platform knowledge source metadata decode failed");
                 ServerFnError::new("Unable to load governed source metadata")
@@ -117,6 +130,7 @@ pub async fn list_admin_knowledge_assets_for_review(
                             reference.starts_with(&expected_prefix)
                         })
                 });
+                let has_verified_ocr = ocr_asset_ids.contains(&asset.id);
                 AdminKnowledgeReviewAssetDto {
                     asset: asset.into(),
                     source_review_available,
@@ -124,6 +138,7 @@ pub async fn list_admin_knowledge_assets_for_review(
                         .as_ref()
                         .map(|source| source.original_filename.clone()),
                     file_size_bytes: source.and_then(|source| source.file_size_bytes),
+                    has_verified_ocr,
                 }
             })
             .collect())

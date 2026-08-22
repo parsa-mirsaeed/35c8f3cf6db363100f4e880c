@@ -4,6 +4,7 @@ route|/readyz|Public|-|public|none|read|health|none|web::main|-
 route|/api/auth/login|Public|-|public|session|write|auth_sensitive|security|handlers::login|-
 route|/api/auth/logout|Public|-|public|session|write|auth_sensitive|security|handlers::logout|-
 route|/api/manager/knowledge-submissions/upload|SchoolManagerOnly|SchoolManager|session_school|school_knowledge_upload|write|large_payload|required|handlers::knowledge_upload|-
+route|/api/admin/knowledge-assets/source|PlatformAdminOnly|PlatformAdmin|platform|knowledge_asset_source|read|large_payload|required|handlers::knowledge_source|-
 server|auth/whoami|SessionOwner|-|session_school|session_user|read|standard|none|auth_functions::whoami|-
 server|assignments/get_all|TeacherOnly|Teacher|session_school|teacher_assignments|read|bounded_list|none|assignment_functions::get_all_assignments|-
 server|assignments/get_by_id|TeacherOnly|Teacher|session_school|assignment_owner|read|standard|none|assignment_functions::get_assignment_by_id|-
@@ -45,6 +46,7 @@ server|admin/knowledge-audit|PlatformAdminOnly|PlatformAdmin|platform|knowledge_
 server|manager/knowledge-submissions|Disabled|-|none|none|write|disabled|required|knowledge_functions::create_manager_knowledge_submission|2026-10-01
 server|manager/knowledge-submissions/list|SchoolManagerOnly|SchoolManager|session_school|school_knowledge|read|bounded_list|none|knowledge_functions::list_manager_knowledge_submissions|-
 server|admin/knowledge-assets|PlatformAdminOnly|PlatformAdmin|platform|knowledge_assets|read|bounded_list|required|knowledge_functions::list_admin_knowledge_assets|-
+server|admin/knowledge-assets/review-list|PlatformAdminOnly|PlatformAdmin|platform|knowledge_assets|read|bounded_list|required|admin_knowledge_review_functions::list_admin_knowledge_assets_for_review|-
 server|admin/knowledge-assets/ocr-text|PlatformAdminOnly|PlatformAdmin|platform|knowledge_asset|write|large_payload|required|knowledge_functions::attach_admin_ocr_text|-
 server|admin/knowledge-assets/embed|PlatformAdminOnly|PlatformAdmin|platform|knowledge_asset|write|expensive|required|knowledge_functions::embed_admin_knowledge_asset|-
 server|admin/knowledge-assets/publish|PlatformAdminOnly|PlatformAdmin|platform|knowledge_asset|write|standard|required|knowledge_functions::publish_admin_knowledge_asset|-

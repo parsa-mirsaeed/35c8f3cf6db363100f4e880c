@@ -124,6 +124,10 @@ async fn main() {
                 ),
             ),
         )
+        .route(
+            "/api/admin/knowledge-assets/source",
+            axum::routing::get(api::handlers::knowledge_source_handler),
+        )
         .serve_dioxus_application(ServeConfig::builder(), App)
         .layer(axum::middleware::from_fn(
             api::middleware::block_legacy_teacher_material_ingestion,

@@ -93,7 +93,7 @@ fn ProvisioningForm(role: String) -> Element {
 
     let classes = use_resource(move || async move { get_school_classes().await });
     let subjects = use_resource(move || async move { get_subjects().await });
-    let students = use_resource(move || async move {
+    let mut students = use_resource(move || async move {
         get_school_users(
             Some("Student".to_string()),
             Some("active".to_string()),
@@ -101,7 +101,7 @@ fn ProvisioningForm(role: String) -> Element {
         )
         .await
     });
-    let parents = use_resource(move || async move {
+    let mut parents = use_resource(move || async move {
         get_school_users(Some("Parent".to_string()), Some("active".to_string()), None).await
     });
 
@@ -216,6 +216,11 @@ fn ProvisioningForm(role: String) -> Element {
         spawn(async move {
             match provision_school_user(request).await {
                 Ok(result) => {
+                    if role_value == "Student" {
+                        students.restart();
+                    } else if role_value == "Parent" {
+                        parents.restart();
+                    }
                     success.set(Some(result));
                     first_name.set(String::new());
                     last_name.set(String::new());

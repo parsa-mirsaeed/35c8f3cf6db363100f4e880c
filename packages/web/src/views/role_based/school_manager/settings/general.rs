@@ -2,168 +2,217 @@ use api::models::user_preferences::UpdateGeneralSettingsRequest;
 use api::server_functions::user_preferences_functions::{
     get_user_preferences, update_general_settings,
 };
+use crate::i18n::{use_locale, Locale};
 use dioxus::prelude::*;
-
-use crate::i18n::use_locale;
 
 #[component]
 pub fn GeneralSettings() -> Element {
-    // State for general settings
+    let locale = use_locale();
     let mut timezone = use_signal(|| "UTC".to_string());
-    let mut language = use_signal(|| "en".to_string());
+    let mut language = use_signal(|| locale.current().code().to_string());
     let mut date_format = use_signal(|| "YYYY-MM-DD".to_string());
     let mut time_format = use_signal(|| "24h".to_string());
-    let mut is_loading = use_signal(|| true);
-    let mut save_status = use_signal(|| String::new());
-    let mut is_success = use_signal(|| false);
-    let locale = use_locale();
+    let mut loading = use_signal(|| true);
+    let mut load_failed = use_signal(|| false);
+    let mut saving = use_signal(|| false);
+    let mut notice = use_signal(|| None::<(bool, String)>);
 
-    // Fetch current preferences using the canonical authenticated session.
-    let _prefs_resource = use_resource(move || async move {
-        if let Ok(prefs) = get_user_preferences().await {
-            timezone.set(prefs.timezone);
-            language.set(prefs.language);
-            date_format.set(prefs.date_format);
-            time_format.set(prefs.time_format);
+    let mut preferences = use_resource(move || async move { get_user_preferences().await });
+
+    use_effect(move || {
+        match preferences.read().as_ref() {
+            Some(Ok(value)) => {
+                timezone.set(value.timezone.clone());
+                language.set(value.language.clone());
+                date_format.set(value.date_format.clone());
+                time_format.set(value.time_format.clone());
+                load_failed.set(false);
+                loading.set(false);
+            }
+            Some(Err(_)) => {
+                load_failed.set(true);
+                loading.set(false);
+            }
+            None => loading.set(true),
         }
-        is_loading.set(false);
     });
 
-    rsx! {
-        div {
-            style: "background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);",
+    let save = move |_| {
+        if saving() {
+            return;
+        }
+        saving.set(true);
+        notice.set(None);
+        let request = UpdateGeneralSettingsRequest {
+            timezone: Some(timezone()),
+            language: Some(language()),
+            date_format: Some(date_format()),
+            time_format: Some(time_format()),
+        };
+        spawn(async move {
+            match update_general_settings(request).await {
+                Ok(saved) => {
+                    timezone.set(saved.timezone);
+                    language.set(saved.language);
+                    date_format.set(saved.date_format);
+                    time_format.set(saved.time_format);
+                    notice.set(Some((true, "Preferences saved.".to_string())));
+                }
+                Err(error) => notice.set(Some((false, preference_error(&error.to_string())))),
+            }
+            saving.set(false);
+        });
+    };
 
-            h3 {
-                style: "font-size: 1.125rem; color: #1e293b; margin-bottom: 1.5rem; font-weight: 600;",
-                "{locale.t(\"school_manager.settings.general.title\")}"
+    rsx! {
+        div { class: "glass-card p-6 space-y-6",
+            div {
+                h3 { class: "text-lg font-semibold text-gray-900 dark:text-white",
+                    "{locale.t(\"school_manager.settings.general.title\")}"
+                }
+                p { class: "mt-1 text-sm text-gray-500 dark:text-gray-400",
+                    "Only preferences supported by this EduTalent release are available."
+                }
             }
 
-            if is_loading() {
-                div { "{locale.t(\"school_manager.settings.general.loading\")}" }
+            if loading() {
+                div { class: "et-state-panel", "{locale.t(\"school_manager.settings.general.loading\")}" }
+            } else if load_failed() {
+                div { class: "et-state-panel et-state-panel--error",
+                    p { "Preferences could not be loaded." }
+                    button { class: "et-inline-action mt-3", onclick: move |_| preferences.restart(), "Try again" }
+                }
             } else {
-                div {
-                    style: "display: flex; flex-direction: column; gap: 1.5rem;",
-
-                    // Timezone
-                    div {
-                        label {
-                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;",
-                            "{locale.t(\"school_manager.settings.general.timezone\")}"
-                        }
-                        select {
-                            style: "width: 100%; padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.875rem;",
-                            value: "{timezone}",
-                            onchange: move |evt| timezone.set(evt.value()),
-                            option { value: "UTC", "{locale.t(\"school_manager.settings.general.timezone.utc\")}" }
-                            option { value: "America/New_York", "{locale.t(\"school_manager.settings.general.timezone.et\")}" }
-                            option { value: "America/Chicago", "{locale.t(\"school_manager.settings.general.timezone.ct\")}" }
-                            option { value: "America/Denver", "{locale.t(\"school_manager.settings.general.timezone.mt\")}" }
-                            option { value: "America/Los_Angeles", "{locale.t(\"school_manager.settings.general.timezone.pt\")}" }
-                            option { value: "Europe/London", "{locale.t(\"school_manager.settings.general.timezone.gmt\")}" }
-                            option { value: "Europe/Paris", "{locale.t(\"school_manager.settings.general.timezone.cet\")}" }
-                            option { value: "Asia/Tokyo", "{locale.t(\"school_manager.settings.general.timezone.jst\")}" }
-                            option { value: "Asia/Dubai", "{locale.t(\"school_manager.settings.general.timezone.gst\")}" }
-                            option { value: "Australia/Sydney", "{locale.t(\"school_manager.settings.general.timezone.aedt\")}" }
-                        }
+                div { class: "space-y-5",
+                    SelectSetting {
+                        id: "settings-timezone",
+                        label: locale.t("school_manager.settings.general.timezone"),
+                        value: timezone,
+                        options: timezone_options(),
+                    }
+                    SelectSetting {
+                        id: "settings-language",
+                        label: locale.t("school_manager.settings.general.language"),
+                        value: language,
+                        options: locale_options(),
+                    }
+                    SelectSetting {
+                        id: "settings-date-format",
+                        label: locale.t("school_manager.settings.general.date_format"),
+                        value: date_format,
+                        options: vec![
+                            ("YYYY-MM-DD".to_string(), "YYYY-MM-DD (2026-08-22)".to_string()),
+                            ("MM/DD/YYYY".to_string(), "MM/DD/YYYY (08/22/2026)".to_string()),
+                            ("DD/MM/YYYY".to_string(), "DD/MM/YYYY (22/08/2026)".to_string()),
+                            ("DD.MM.YYYY".to_string(), "DD.MM.YYYY (22.08.2026)".to_string()),
+                        ],
+                    }
+                    SelectSetting {
+                        id: "settings-time-format",
+                        label: locale.t("school_manager.settings.general.time_format"),
+                        value: time_format,
+                        options: vec![
+                            ("24h".to_string(), locale.t("school_manager.settings.general.time_format.24h")),
+                            ("12h".to_string(), locale.t("school_manager.settings.general.time_format.12h")),
+                        ],
                     }
 
-                    // Language
-                    div {
-                        label {
-                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;",
-                            "{locale.t(\"school_manager.settings.general.language\")}"
-                        }
-                        select {
-                            style: "width: 100%; padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.875rem;",
-                            value: "{language}",
-                            onchange: move |evt| language.set(evt.value()),
-                            option { value: "en", "English" }
-                            option { value: "es", "Español" }
-                            option { value: "fr", "Français" }
-                            option { value: "de", "Deutsch" }
-                            option { value: "ar", "العربية" }
-                            option { value: "zh", "中文" }
-                        }
-                    }
-
-                    // Date Format
-                    div {
-                        label {
-                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;",
-                            "{locale.t(\"school_manager.settings.general.date_format\")}"
-                        }
-                        select {
-                            style: "width: 100%; padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.875rem;",
-                            value: "{date_format}",
-                            onchange: move |evt| date_format.set(evt.value()),
-                            option { value: "YYYY-MM-DD", "YYYY-MM-DD (2025-01-21)" }
-                            option { value: "MM/DD/YYYY", "MM/DD/YYYY (01/21/2025)" }
-                            option { value: "DD/MM/YYYY", "DD/MM/YYYY (21/01/2025)" }
-                            option { value: "DD.MM.YYYY", "DD.MM.YYYY (21.01.2025)" }
-                        }
-                    }
-
-                    // Time Format
-                    div {
-                        label {
-                            style: "display: block; font-weight: 500; color: #374151; margin-bottom: 0.5rem; font-size: 0.875rem;",
-                            "{locale.t(\"school_manager.settings.general.time_format\")}"
-                        }
-                        select {
-                            style: "width: 100%; padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.875rem;",
-                            value: "{time_format}",
-                            onchange: move |evt| time_format.set(evt.value()),
-                            option { value: "24h", "{locale.t(\"school_manager.settings.general.time_format.24h\")}" }
-                            option { value: "12h", "{locale.t(\"school_manager.settings.general.time_format.12h\")}" }
-                        }
-                    }
-
-                    // Save Status
-                    if !save_status().is_empty() {
+                    if let Some((success, message)) = notice() {
                         div {
-                            style: "padding: 0.75rem; border-radius: 8px; font-size: 0.875rem;",
-                            style: if is_success() {
-                                "background: #dcfce7; color: #166534;"
+                            class: if success {
+                                "rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-200"
                             } else {
-                                "background: #fee2e2; color: #991b1b;"
+                                "rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200"
                             },
-                            "{save_status}"
+                            role: "status",
+                            "{message}"
                         }
                     }
 
-                    // Save Button
-                    button {
-                        style: "background: #3b82f6; color: white; padding: 0.75rem 1.5rem; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; transition: all 0.2s;",
-                        onclick: move |_| {
-                            let locale_action = locale.clone();
-                            spawn(async move {
-                                let request = UpdateGeneralSettingsRequest {
-                                    timezone: Some(timezone()),
-                                    language: Some(language()),
-                                    date_format: Some(date_format()),
-                                    time_format: Some(time_format()),
-                                };
-
-                                match update_general_settings(request).await {
-                                    Ok(_) => {
-                                        save_status.set(locale_action.t("school_manager.settings.general.success"));
-                                        is_success.set(true);
-                                    }
-                                    Err(e) => {
-                                        save_status.set(
-                                            locale_action
-                                                .t("school_manager.settings.general.error")
-                                                .replace("{0}", &e.to_string()),
-                                        );
-                                        is_success.set(false);
-                                    }
-                                }
-                            });
-                        },
-                        "{locale.t(\"school_manager.settings.general.save_btn\")}"
+                    div { class: "flex justify-end",
+                        button {
+                            class: "rounded-lg bg-primary px-5 py-2.5 font-semibold text-white disabled:opacity-50",
+                            disabled: saving(),
+                            onclick: save,
+                            if saving() { "Saving…" } else { "{locale.t(\"school_manager.settings.general.save_btn\")}" }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+#[component]
+fn SelectSetting(
+    id: &'static str,
+    label: String,
+    value: Signal<String>,
+    options: Vec<(String, String)>,
+) -> Element {
+    rsx! {
+        div {
+            label { r#for: "{id}", class: "mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300", "{label}" }
+            select {
+                id: "{id}",
+                class: "w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-white",
+                value: "{value}",
+                onchange: move |event| value.set(event.value()),
+                for (option_value, option_label) in options {
+                    option { value: "{option_value}", "{option_label}" }
+                }
+            }
+        }
+    }
+}
+
+fn locale_options() -> Vec<(String, String)> {
+    Locale::all()
+        .iter()
+        .map(|locale| (locale.code().to_string(), locale.native_name().to_string()))
+        .collect()
+}
+
+fn timezone_options() -> Vec<(String, String)> {
+    [
+        "UTC",
+        "Asia/Tehran",
+        "Asia/Dubai",
+        "Asia/Tokyo",
+        "Europe/London",
+        "Europe/Paris",
+        "America/New_York",
+        "America/Chicago",
+        "America/Denver",
+        "America/Los_Angeles",
+        "Australia/Sydney",
+    ]
+    .into_iter()
+    .map(|value| (value.to_string(), value.to_string()))
+    .collect()
+}
+
+fn preference_error(raw: &str) -> String {
+    if raw.contains("language_unsupported") {
+        "That language is not supported by this release.".to_string()
+    } else if raw.contains("timezone_unsupported") {
+        "That timezone is not supported by this release.".to_string()
+    } else if raw.contains("date_format_unsupported") || raw.contains("time_format_unsupported") {
+        "That display format is not supported by this release.".to_string()
+    } else {
+        "Preferences could not be saved. Refresh and try again.".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_options_match_actual_locale_enum() {
+        let values = locale_options().into_iter().map(|item| item.0).collect::<Vec<_>>();
+        assert_eq!(values, Locale::all().iter().map(|locale| locale.code().to_string()).collect::<Vec<_>>());
+        assert!(!values.contains(&"es".to_string()));
+        assert!(!values.contains(&"ar".to_string()));
     }
 }

@@ -218,8 +218,8 @@ mod tests {
     }
 
     #[test]
-    fn school_user_provisioning_is_school_manager_only() {
-        let path = "/api/user_management/create";
+    fn school_user_provisioning_is_school_manager_only_and_legacy_create_is_retired() {
+        let path = "/api/user_management/provision";
         assert_eq!(
             authorize_path(path, None),
             EndpointAuthorizationDecision::Unauthorized
@@ -235,6 +235,16 @@ mod tests {
                 "{role} must not reach school user provisioning"
             );
         }
+
+        let retired_path = "/api/user_management/create";
+        assert_eq!(
+            authorize_path(retired_path, None),
+            EndpointAuthorizationDecision::NotFound
+        );
+        assert_eq!(
+            authorize_path(retired_path, Some("SchoolManager")),
+            EndpointAuthorizationDecision::NotFound
+        );
     }
 
     #[test]

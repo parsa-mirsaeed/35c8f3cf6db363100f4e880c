@@ -141,4 +141,77 @@ mod tests {
             "dashboard overrides must load after base styles"
         );
     }
+
+    #[test]
+    fn provisioning_ui_cannot_call_password_bearing_legacy_endpoint() {
+        let source = include_str!("views/role_based/school_manager/user_creation.rs");
+        assert!(source.contains("provision_school_user"));
+        assert!(!source.contains("CreateUserPayload"));
+        assert!(!source.contains("create_user("));
+        assert!(!source.contains("Uuid::new_v4"));
+        for fake_live_value in ["94%", "Recent activity", "new this week", "pending approval"] {
+            assert!(!source.to_ascii_lowercase().contains(&fake_live_value.to_ascii_lowercase()));
+        }
+    }
+
+    #[test]
+    fn teacher_publish_ui_uses_guided_domain_contract() {
+        let source = include_str!("views/role_based/teacher/assignments.rs");
+        assert!(source.contains("publish_assignment_guided"));
+        assert!(!source.contains("publish_assignment("));
+        assert!(source.contains("active enrolled students"));
+    }
+
+    #[test]
+    fn student_assignment_ui_never_invents_missing_points() {
+        let source = include_str!("views/role_based/student/assignments.rs");
+        assert!(source.contains("Points not specified"));
+        assert!(!source.contains("unwrap_or_else(|| \"100\""));
+    }
+
+    #[test]
+    fn password_ui_does_not_collect_unverified_current_password() {
+        let source = include_str!("views/role_based/school_manager/settings/security.rs");
+        assert!(!source.contains("change_admin_password"));
+        assert!(!source.contains("current_password"));
+    }
+
+    #[test]
+    fn general_settings_language_options_match_runtime_locales() {
+        let source = include_str!("views/role_based/school_manager/settings/general.rs");
+        assert!(source.contains("Locale::all()"));
+        for unsupported in ["Español", "Français", "Deutsch", "العربية", "中文"] {
+            assert!(!source.contains(unsupported));
+        }
+    }
+
+    #[test]
+    fn notification_settings_do_not_advertise_unavailable_delivery_channels() {
+        let source = include_str!("views/role_based/school_manager/settings/notifications.rs");
+        assert!(source.contains("email_notifications: Some(false)"));
+        assert!(source.contains("push_notifications: Some(false)"));
+        assert!(source.contains("notify_report_generated: Some(false)"));
+        assert!(source.contains("email_digest_frequency: Some(\"never\".to_string())"));
+        assert!(!source.contains("email_notifications.set"));
+        assert!(!source.contains("push_notifications.set"));
+    }
+
+    #[test]
+    fn knowledge_upload_ui_preflights_storage_without_echoing_provider_error_bodies() {
+        let source = include_str!("views/role_based/school_manager/knowledge_upload.rs");
+        assert!(source.contains("get_knowledge_storage_readiness"));
+        assert!(source.contains("Retry storage check"));
+        assert!(!source.contains("get(\"error\")"));
+        assert!(!source.contains("format!(\"Upload failed: {error}\")"));
+    }
+
+    #[test]
+    fn parent_ui_uses_parent_user_scoped_contract() {
+        let dashboard = include_str!("views/role_based/parent/dashboard.rs");
+        let children = include_str!("views/role_based/parent/children.rs");
+        assert!(dashboard.contains("get_parent_children_scoped"));
+        assert!(children.contains("ParentChildSummary"));
+        assert!(!dashboard.contains("get_parent_dashboard_stats"));
+        assert!(!children.contains("dashboard_functions::ChildInfo"));
+    }
 }

@@ -26,7 +26,7 @@ use {
     validator::Validate,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AssignmentResponse {
     pub id: String,
     pub title: String,
@@ -39,7 +39,7 @@ pub struct AssignmentResponse {
     pub published_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PersonalizedAssignmentResponse {
     pub id: String,
     pub assignment_id: String,
@@ -54,7 +54,7 @@ pub struct PersonalizedAssignmentResponse {
     pub assigned_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PersonalizationDetails {
     pub scope_type: String,
     pub estimated_hours: Option<f32>,

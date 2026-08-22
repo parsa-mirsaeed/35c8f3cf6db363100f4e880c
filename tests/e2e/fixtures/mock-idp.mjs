@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Local-only PR-12 identity fixture. It mirrors the production JWT verification
-// contract (ES256 + kid + issuer + audience + email) without bypassing auth.
+// Local-only PR-12 identity/storage fixture. It mirrors the production HTTP
+// contracts (ES256 JWT verification, Auth admin provisioning, and private
+// Storage APIs) without adding a production bypass.
 import http from 'node:http';
 import crypto from 'node:crypto';
 
@@ -8,6 +9,7 @@ const PORT = Number(process.env.MOCK_IDP_PORT ?? 9100);
 const ISSUER = `http://127.0.0.1:${PORT}/auth/v1`;
 const KID = 'e2e-local-es256';
 const FIXTURE_PASSWORD = 'e2e-password';
+const KNOWLEDGE_BUCKET = 'edutalent-knowledge-sources';
 
 const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const publicJwk = publicKey.export({ format: 'jwk' });
@@ -24,6 +26,10 @@ const USERS = new Map([
   ['e2e-parent-b@example.test', 'b0000000-0000-0000-0000-0000000000b4'],
   ['e2e-inactive@example.test', 'b0000000-0000-0000-0000-0000000000a9'],
 ]);
+const PASSWORDS = new Map([...USERS.keys()].map((email) => [email, FIXTURE_PASSWORD]));
+const BUCKETS = new Map();
+const OBJECTS = new Map();
+let storageMode = 'ready';
 
 const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
 function issueTokens(email, userId) {
@@ -60,26 +66,39 @@ function parseBody(body) {
   }
 }
 
+function json(res, status, payload) {
+  res.statusCode = status;
+  res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify(payload));
+}
+
+function storageUnavailable(res) {
+  if (storageMode !== 'ready') {
+    json(res, 503, { error: 'storage_unavailable' });
+    return true;
+  }
+  return false;
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
-  let body = '';
-  req.on('data', (chunk) => { body += chunk; });
+  const chunks = [];
+  req.on('data', (chunk) => { chunks.push(chunk); });
   req.on('end', () => {
-    res.setHeader('content-type', 'application/json');
+    const bodyBuffer = Buffer.concat(chunks);
+    const body = bodyBuffer.toString('utf8');
 
     if (url.pathname === '/auth/v1/token' && url.searchParams.get('grant_type') === 'password') {
       const payload = parseBody(body);
       if (!payload) {
-        res.statusCode = 400;
-        res.end(JSON.stringify({ error: 'invalid_request' }));
+        json(res, 400, { error: 'invalid_request' });
         return;
       }
       const userId = USERS.get(payload.email);
-      if (userId && payload.password === FIXTURE_PASSWORD) {
-        res.end(JSON.stringify(issueTokens(payload.email, userId)));
+      if (userId && payload.password === PASSWORDS.get(payload.email)) {
+        json(res, 200, issueTokens(payload.email, userId));
       } else {
-        res.statusCode = 400;
-        res.end(JSON.stringify({ error: 'invalid_grant', error_description: 'Invalid login credentials' }));
+        json(res, 400, { error: 'invalid_grant', error_description: 'Invalid login credentials' });
       }
       return;
     }
@@ -90,26 +109,145 @@ const server = http.createServer((req, res) => {
         `e2e-refresh-${userId}` === payload.refresh_token,
       );
       if (entry) {
-        res.end(JSON.stringify(issueTokens(entry[0], entry[1])));
+        json(res, 200, issueTokens(entry[0], entry[1]));
       } else {
-        res.statusCode = 400;
-        res.end(JSON.stringify({ error: 'invalid_grant' }));
+        json(res, 400, { error: 'invalid_grant' });
       }
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/auth/v1/admin/users') {
+      const payload = parseBody(body);
+      const email = payload?.email?.trim()?.toLowerCase();
+      const password = payload?.password;
+      if (!email || typeof password !== 'string' || password.length === 0) {
+        json(res, 400, { message: 'email and password are required' });
+        return;
+      }
+      if (USERS.has(email)) {
+        json(res, 422, { message: 'User already registered' });
+        return;
+      }
+
+      const id = crypto.randomUUID();
+      USERS.set(email, id);
+      PASSWORDS.set(email, password);
+      json(res, 200, {
+        id,
+        email,
+        created_at: new Date().toISOString(),
+        user_metadata: payload.user_metadata ?? {},
+        app_metadata: payload.app_metadata ?? null,
+      });
+      return;
+    }
+
+    if (req.method === 'DELETE' && url.pathname.startsWith('/auth/v1/admin/users/')) {
+      const userId = decodeURIComponent(url.pathname.slice('/auth/v1/admin/users/'.length));
+      const entry = [...USERS.entries()].find(([, id]) => id === userId);
+      if (!entry) {
+        json(res, 404, { message: 'User not found' });
+        return;
+      }
+      USERS.delete(entry[0]);
+      PASSWORDS.delete(entry[0]);
+      json(res, 200, { id: userId });
+      return;
+    }
+
     if (url.pathname === '/auth/v1/.well-known/jwks.json') {
-      res.end(JSON.stringify({
+      json(res, 200, {
         keys: [{
           kty: 'EC', crv: 'P-256', alg: 'ES256', use: 'sig', kid: KID,
           x: publicJwk.x, y: publicJwk.y,
         }],
-      }));
+      });
       return;
     }
 
-    res.statusCode = 404;
-    res.end(JSON.stringify({ error: 'not_found' }));
+    // Test-control endpoint is exposed only by this local fixture process. It
+    // lets Playwright exercise truthful retryable-storage states without a
+    // production-only flag or network fault injection in application code.
+    if (url.pathname === '/__e2e/storage-mode') {
+      if (req.method === 'POST') {
+        const payload = parseBody(body);
+        if (!payload || !['ready', 'unavailable'].includes(payload.mode)) {
+          json(res, 400, { error: 'invalid_storage_mode' });
+          return;
+        }
+        storageMode = payload.mode;
+      }
+      json(res, 200, { mode: storageMode });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/storage/v1/bucket/')) {
+      if (storageUnavailable(res)) return;
+      const bucketId = decodeURIComponent(url.pathname.slice('/storage/v1/bucket/'.length));
+      const bucket = BUCKETS.get(bucketId);
+      if (!bucket) {
+        json(res, 404, { error: 'not_found' });
+        return;
+      }
+      json(res, 200, bucket);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/storage/v1/bucket') {
+      if (storageUnavailable(res)) return;
+      const payload = parseBody(body);
+      const bucketId = payload?.id;
+      if (!bucketId || typeof bucketId !== 'string') {
+        json(res, 400, { error: 'invalid_bucket' });
+        return;
+      }
+      if (BUCKETS.has(bucketId)) {
+        json(res, 409, { error: 'already_exists' });
+        return;
+      }
+      const bucket = {
+        id: bucketId,
+        name: payload.name ?? bucketId,
+        public: payload.public === true,
+      };
+      BUCKETS.set(bucketId, bucket);
+      json(res, 200, bucket);
+      return;
+    }
+
+    const objectPrefix = `/storage/v1/object/${KNOWLEDGE_BUCKET}/`;
+    if (req.method === 'POST' && url.pathname.startsWith(objectPrefix)) {
+      if (storageUnavailable(res)) return;
+      if (!BUCKETS.has(KNOWLEDGE_BUCKET)) {
+        json(res, 404, { error: 'bucket_not_found' });
+        return;
+      }
+      const objectKey = decodeURIComponent(url.pathname.slice(objectPrefix.length));
+      if (!objectKey) {
+        json(res, 400, { error: 'invalid_object_key' });
+        return;
+      }
+      const storageKey = `${KNOWLEDGE_BUCKET}/${objectKey}`;
+      if (OBJECTS.has(storageKey) && req.headers['x-upsert'] !== 'true') {
+        json(res, 409, { error: 'already_exists' });
+        return;
+      }
+      OBJECTS.set(storageKey, Buffer.from(bodyBuffer));
+      json(res, 200, { key: storageKey });
+      return;
+    }
+
+    if (req.method === 'DELETE' && url.pathname === `/storage/v1/object/${KNOWLEDGE_BUCKET}`) {
+      if (storageUnavailable(res)) return;
+      const payload = parseBody(body);
+      for (const prefix of payload?.prefixes ?? []) {
+        OBJECTS.delete(`${KNOWLEDGE_BUCKET}/${prefix}`);
+      }
+      json(res, 200, { deleted: payload?.prefixes ?? [] });
+      return;
+    }
+
+    json(res, 404, { error: 'not_found' });
   });
 });
 

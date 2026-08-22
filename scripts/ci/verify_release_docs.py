@@ -35,7 +35,9 @@ REQUIRED_ENABLED_ENDPOINTS = {
     "submissions/submit": "StudentOnly",
     "teacher/submissions/grade": "TeacherOnly",
     "classes/student/grades": "StudentOnly",
-    "parent/child/grades": "ParentOnly",
+    # Parent reads are keyed directly by the authenticated parent user UUID.
+    # The legacy parent/child/* family is intentionally Disabled.
+    "parent/scoped/child/grades": "ParentOnly",
 }
 
 SECRET_PATTERNS = {

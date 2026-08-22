@@ -89,8 +89,11 @@ test('student cannot submit a School B assignment by tampering its object ID @sm
   await signIn(page, STUDENT.email, STUDENT.password);
   await actionWithIcon(page, 'assignment').click();
 
-  await page.getByText('E2E Submission Journey Desktop', { exact: true }).first().click();
-  await actionWithIcon(page, 'edit').click();
+  const assignmentTitle = page.getByText('E2E Submission Journey Desktop', { exact: true }).first();
+  await expect(assignmentTitle).toBeVisible();
+  const assignmentCard = assignmentTitle.locator('xpath=ancestor::article[1]');
+  await assignmentCard.getByRole('button', { name: /start assignment/i }).click();
+  await page.getByRole('button', { name: /open my submission/i }).click();
   await page.locator('textarea').first().fill('School A authorization probe');
 
   let tamperObserved = false;
@@ -109,11 +112,11 @@ test('student cannot submit a School B assignment by tampering its object ID @sm
     tamperObserved = true;
   });
 
-  await actionWithIcon(page, 'send').click();
+  await page.getByRole('button', { name: /submit work/i }).click();
   await expect.poll(() => tamperObserved).toBeTruthy();
   expect(denialStatus).toBe(404);
   expect(denialBody).toMatch(/assignment not found|forbidden|unauthorized/i);
-  await expect(page.locator('body')).toContainText(/not found|unauthorized|forbidden|failed|error|دسترسی|خطا/i);
+  await expect(page.locator('body')).toContainText(/not saved|try again|not found|unauthorized|forbidden|failed|error|دسترسی|خطا/i);
 });
 
 test('teacher cannot grade a School B submission by tampering its object ID @smoke @authorization', async ({ page }) => {

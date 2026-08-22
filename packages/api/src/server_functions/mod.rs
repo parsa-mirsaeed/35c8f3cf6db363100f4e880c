@@ -8,6 +8,7 @@ pub mod admin_functions;
 pub mod admin_knowledge_review_functions;
 pub mod assignment_functions;
 pub mod assignment_personalization_functions;
+pub mod assignment_workflow;
 pub mod auth_functions;
 pub mod class_functions;
 pub mod class_section_functions;
@@ -16,6 +17,7 @@ pub mod form_data;
 pub mod invite_functions;
 pub mod knowledge_audit_functions;
 pub mod knowledge_functions;
+pub mod knowledge_readiness;
 pub mod knowledge_selection_functions;
 pub mod notification_functions;
 pub mod parent_scoped_functions;
@@ -29,6 +31,7 @@ pub mod user_creation;
 pub mod user_functions;
 pub mod user_management;
 pub mod user_preferences_functions;
+pub mod user_provisioning;
 pub mod validation;
 
 // Keep these re-exports as they are types/models, not server functions

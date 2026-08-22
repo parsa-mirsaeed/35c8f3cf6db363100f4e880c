@@ -2,33 +2,44 @@
 //!
 //! `students.parent_id` references `users(id)` in the verified production schema.
 //! These endpoints therefore authorize children directly against the parent user
-//! id instead of incorrectly translating through the separate `parents.id` profile key.
+//! id instead of translating through the separate `parents.id` profile key.
 
 use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
-use crate::server_functions::dashboard_functions::{
-    ChildAssignmentInfo, ChildGradeInfo, ChildInfo,
-};
+use crate::server_functions::dashboard_functions::{ChildAssignmentInfo, ChildGradeInfo};
 #[cfg(feature = "server")]
 use sqlx::Row;
 #[cfg(feature = "server")]
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParentChildSummary {
+    /// Student-domain id used by child-scoped grade/assignment queries.
+    pub id: String,
+    pub name: String,
+    /// Grade level is optional because the production schema does not require a
+    /// normalized grade-level column. Provisioned metadata is shown only when
+    /// it was actually supplied.
+    pub grade_level: Option<String>,
+    pub enrolled_classes: i64,
+}
 
 #[cfg(feature = "server")]
 async fn parent_actor(
 ) -> Result<(Uuid, std::sync::Arc<crate::rls_context::AuthorizedPool>), ServerFnError> {
     let (user, pool) = crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
     if user.role != "Parent" {
-        return Err(ServerFnError::new("Forbidden: parent role required"));
+        return Err(ServerFnError::new("parent.forbidden"));
     }
-    let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("Invalid user ID"))?;
+    let user_id =
+        Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("parent.invalid_session"))?;
     Ok((user_id, pool))
 }
 
 #[server(endpoint = "parent/scoped/children")]
-pub async fn get_parent_children_scoped(
-) -> Result<Vec<crate::server_functions::dashboard_functions::ChildInfo>, ServerFnError> {
+pub async fn get_parent_children_scoped() -> Result<Vec<ParentChildSummary>, ServerFnError> {
     #[cfg(feature = "server")]
     {
         let (parent_user_id, pool) = parent_actor().await?;
@@ -37,46 +48,40 @@ pub async fn get_parent_children_scoped(
             SELECT
                 st.id,
                 u.name,
-                CAST(COALESCE(AVG(s.grade), 0.0) AS DOUBLE PRECISION) AS avg_grade,
+                NULLIF(BTRIM(COALESCE(u.metadata->>'grade_level', '')), '') AS grade_level,
                 COUNT(DISTINCT e.id) AS enrolled_classes
             FROM students st
             JOIN users u ON st.user_id = u.id
             LEFT JOIN enrollments e ON e.student_id = st.id
-            LEFT JOIN submissions s ON s.student_id = st.id
             WHERE st.parent_id = $1
-            GROUP BY st.id, u.name
+              AND st.school_id = u.school_id
+              AND u.is_active = TRUE
+            GROUP BY st.id, u.name, u.metadata
             ORDER BY u.name
             "#,
         )
         .bind(parent_user_id)
         .fetch_all(&*pool)
         .await
-        .map_err(|error| ServerFnError::new(format!("Unable to load children: {error}")))?;
+        .map_err(|error| {
+            tracing::error!(%error, parent_user_id = %parent_user_id, "parent child list failed");
+            ServerFnError::new("parent.children_unavailable")
+        })?;
 
         rows.into_iter()
             .map(|row| {
-                let avg_grade = row.try_get::<f64, _>("avg_grade")?;
-                let gpa = calculate_gpa_from_percentage(avg_grade);
-                let status = if gpa >= 3.5 {
-                    "Excellent Progress"
-                } else if gpa >= 2.5 {
-                    "Good Progress"
-                } else if gpa >= 1.5 {
-                    "Needs Improvement"
-                } else {
-                    "At Risk"
-                };
-                Ok(ChildInfo {
+                Ok(ParentChildSummary {
                     id: row.try_get::<Uuid, _>("id")?.to_string(),
                     name: row.try_get("name")?,
-                    grade_level: "Grade".to_string(),
-                    gpa,
-                    status: status.to_string(),
+                    grade_level: row.try_get("grade_level")?,
                     enrolled_classes: row.try_get("enrolled_classes")?,
                 })
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()
-            .map_err(|error| ServerFnError::new(format!("Unable to decode children: {error}")))
+            .map_err(|error| {
+                tracing::error!(%error, "parent child list decode failed");
+                ServerFnError::new("parent.children_unavailable")
+            })
     }
     #[cfg(not(feature = "server"))]
     Ok(Vec::new())
@@ -89,8 +94,8 @@ pub async fn get_child_grades_for_parent_scoped(
     #[cfg(feature = "server")]
     {
         let (parent_user_id, pool) = parent_actor().await?;
-        let child_id =
-            Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
+        let child_id = Uuid::parse_str(&child_id)
+            .map_err(|_| ServerFnError::new("parent.child_id_invalid"))?;
         require_child_owner(&pool, parent_user_id, child_id).await?;
 
         let rows = sqlx::query(
@@ -112,7 +117,10 @@ pub async fn get_child_grades_for_parent_scoped(
         .bind(child_id)
         .fetch_all(&*pool)
         .await
-        .map_err(|error| ServerFnError::new(format!("Unable to load recorded grades: {error}")))?;
+        .map_err(|error| {
+            tracing::error!(%error, child_id = %child_id, "parent child grade list failed");
+            ServerFnError::new("parent.grades_unavailable")
+        })?;
 
         rows.into_iter()
             .map(|row| {
@@ -131,7 +139,8 @@ pub async fn get_child_grades_for_parent_scoped(
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()
             .map_err(|error| {
-                ServerFnError::new(format!("Unable to decode recorded grades: {error}"))
+                tracing::error!(%error, "parent child grade decode failed");
+                ServerFnError::new("parent.grades_unavailable")
             })
     }
     #[cfg(not(feature = "server"))]
@@ -145,8 +154,8 @@ pub async fn get_child_assignments_for_parent_scoped(
     #[cfg(feature = "server")]
     {
         let (parent_user_id, pool) = parent_actor().await?;
-        let child_id =
-            Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("Invalid child ID"))?;
+        let child_id = Uuid::parse_str(&child_id)
+            .map_err(|_| ServerFnError::new("parent.child_id_invalid"))?;
         require_child_owner(&pool, parent_user_id, child_id).await?;
 
         let rows = sqlx::query(
@@ -170,7 +179,10 @@ pub async fn get_child_assignments_for_parent_scoped(
         .bind(child_id)
         .fetch_all(&*pool)
         .await
-        .map_err(|error| ServerFnError::new(format!("Unable to load assignments: {error}")))?;
+        .map_err(|error| {
+            tracing::error!(%error, child_id = %child_id, "parent child assignment list failed");
+            ServerFnError::new("parent.assignments_unavailable")
+        })?;
 
         rows.into_iter()
             .map(|row| {
@@ -188,7 +200,10 @@ pub async fn get_child_assignments_for_parent_scoped(
                 })
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()
-            .map_err(|error| ServerFnError::new(format!("Unable to decode assignments: {error}")))
+            .map_err(|error| {
+                tracing::error!(%error, "parent child assignment decode failed");
+                ServerFnError::new("parent.assignments_unavailable")
+            })
     }
     #[cfg(not(feature = "server"))]
     Ok(Vec::new())
@@ -200,35 +215,21 @@ async fn require_child_owner(
     parent_user_id: Uuid,
     child_id: Uuid,
 ) -> Result<(), ServerFnError> {
-    let owned =
-        sqlx::query_scalar::<_, i32>("SELECT 1 FROM students WHERE id = $1 AND parent_id = $2")
-            .bind(child_id)
-            .bind(parent_user_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|error| {
-                ServerFnError::new(format!("Unable to verify child access: {error}"))
-            })?;
+    let owned = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM students WHERE id = $1 AND parent_id = $2",
+    )
+    .bind(child_id)
+    .bind(parent_user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, child_id = %child_id, "parent child ownership check failed");
+        ServerFnError::new("parent.child_access_unavailable")
+    })?;
     if owned.is_none() {
-        return Err(ServerFnError::new(
-            "Access denied: child is not linked to this parent",
-        ));
+        return Err(ServerFnError::new("parent.child_not_linked"));
     }
     Ok(())
-}
-
-fn calculate_gpa_from_percentage(percentage: f64) -> f64 {
-    if percentage >= 90.0 {
-        4.0
-    } else if percentage >= 80.0 {
-        3.0 + (percentage - 80.0) / 10.0
-    } else if percentage >= 70.0 {
-        2.0 + (percentage - 70.0) / 10.0
-    } else if percentage >= 60.0 {
-        1.0 + (percentage - 60.0) / 10.0
-    } else {
-        0.0
-    }
 }
 
 fn percentage_to_letter_grade(percentage: f64) -> String {
@@ -258,4 +259,15 @@ fn percentage_to_letter_grade(percentage: f64) -> String {
         "F"
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parent_children_are_keyed_by_parent_user_id() {
+        let source = include_str!("parent_scoped_functions.rs");
+        assert!(source.contains("WHERE st.parent_id = $1"));
+        assert!(source.contains("SELECT 1 FROM students WHERE id = $1 AND parent_id = $2"));
+        assert!(!source.contains("grade_level: \"Grade\""));
+    }
 }

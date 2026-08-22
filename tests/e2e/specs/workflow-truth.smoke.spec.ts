@@ -17,8 +17,12 @@ const GUIDED_ASSIGNMENT = 'E2E Guided Publish Draft';
 const STUDENT_SUBMISSION = 'E2E PR1 persisted student submission';
 
 async function signIn(page: Page, email: string, password = FIXTURE_PASSWORD): Promise<void> {
-  await page.addInitScript(() => localStorage.setItem('edutalent_locale', 'en'));
   await page.goto('/');
+  const localeWrapper = page.locator('.locale-wrapper');
+  if ((await localeWrapper.getAttribute('lang')) !== 'en') {
+    await page.locator('button.language-switcher-toggle').click();
+    await expect(localeWrapper).toHaveAttribute('lang', 'en');
+  }
   await page.locator('input[type="email"]').fill(email);
   await page.locator('input[type="password"]').fill(password);
   await page.getByRole('button', { name: /sign in/i }).click();

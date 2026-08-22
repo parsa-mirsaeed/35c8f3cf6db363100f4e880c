@@ -16,17 +16,23 @@ const EMPTY_CLASS = 'E2E Empty Class A';
 const GUIDED_ASSIGNMENT = 'E2E Guided Publish Draft';
 const STUDENT_SUBMISSION = 'E2E PR1 persisted student submission';
 
-async function signIn(page: Page, email: string, password = FIXTURE_PASSWORD): Promise<void> {
-  await page.goto('/');
+async function ensureEnglish(page: Page): Promise<void> {
   const localeWrapper = page.locator('.locale-wrapper');
   if ((await localeWrapper.getAttribute('lang')) !== 'en') {
-    await page.locator('button.language-switcher-toggle').click();
+    const toggle = page.locator('button.language-switcher-toggle');
+    await expect(toggle).toBeVisible();
+    await toggle.click();
     await expect(localeWrapper).toHaveAttribute('lang', 'en');
   }
+}
+
+async function signIn(page: Page, email: string, password = FIXTURE_PASSWORD): Promise<void> {
+  await page.goto('/');
   await page.locator('input[type="email"]').fill(email);
   await page.locator('input[type="password"]').fill(password);
-  await page.getByRole('button', { name: /sign in/i }).click();
+  await page.getByRole('button', { name: /sign in|ورود/i }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
+  await ensureEnglish(page);
 }
 
 async function endSession(page: Page): Promise<void> {

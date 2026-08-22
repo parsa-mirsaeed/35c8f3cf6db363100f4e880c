@@ -14,6 +14,7 @@ const CREATED_TEACHER_EMAIL = 'e2e-pr1-teacher@example.test';
 const PARENT_EMAIL = 'e2e-pr1-parent@example.test';
 const EMPTY_CLASS = 'E2E Empty Class A';
 const GUIDED_ASSIGNMENT = 'E2E Guided Publish Draft';
+const STUDENT_SUBMISSION = 'E2E PR1 persisted student submission';
 
 async function signIn(page: Page, email: string, password = FIXTURE_PASSWORD): Promise<void> {
   await page.addInitScript(() => localStorage.setItem('edutalent_locale', 'en'));
@@ -107,6 +108,15 @@ async function openGuidedAssignment(page: Page): Promise<void> {
   await expect(page.getByRole('dialog')).toContainText(GUIDED_ASSIGNMENT);
 }
 
+async function openStudentAssignmentCard(page: Page) {
+  await actionWithIcon(page, 'assignment').click();
+  const card = page
+    .getByText(GUIDED_ASSIGNMENT, { exact: true })
+    .locator('xpath=ancestor::article[1]');
+  await expect(card).toBeVisible();
+  return card;
+}
+
 test.beforeEach(async ({ page }) => {
   await enforceOfflineAllowlist(page);
   watchConsole(page);
@@ -118,6 +128,8 @@ test.afterEach(() => {
 });
 
 test('manager provisions Student Teacher Parent and guided publish persists @smoke @workflow-truth', async ({ page }) => {
+  test.setTimeout(120_000);
+
   // The teacher first proves an empty class cannot be falsely published.
   await signIn(page, TEACHER_EMAIL);
   await openGuidedAssignment(page);
@@ -147,9 +159,24 @@ test('manager provisions Student Teacher Parent and guided publish persists @smo
   await expect(publishedCard).toContainText('Published');
   await endSession(page);
 
+  // The newly-created Student authenticates with the generated credential,
+  // submits real work, and sees the same persisted submission after a new login.
   await signIn(page, STUDENT_EMAIL, studentPassword);
-  await actionWithIcon(page, 'assignment').click();
-  await expect(page.getByText(GUIDED_ASSIGNMENT, { exact: true })).toBeVisible();
+  let studentCard = await openStudentAssignmentCard(page);
+  await studentCard.getByRole('button', { name: 'Start assignment', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Open my submission', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('My submission');
+  await page.getByRole('dialog').locator('textarea').fill(STUDENT_SUBMISSION);
+  await page.getByRole('dialog').getByRole('button', { name: 'Submit work', exact: true }).click();
+  await expect(studentCard).toContainText('submitted');
+  await endSession(page);
+
+  await signIn(page, STUDENT_EMAIL, studentPassword);
+  studentCard = await openStudentAssignmentCard(page);
+  await expect(studentCard).toContainText('submitted');
+  await studentCard.getByRole('button', { name: 'View submission', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Open my submission', exact: true }).click();
+  await expect(page.getByRole('dialog').locator('textarea')).toHaveValue(STUDENT_SUBMISSION);
   await endSession(page);
 
   // A newly-created Teacher can authenticate with the one-time credential and

@@ -16,6 +16,7 @@ pub mod form_data;
 pub mod invite_functions;
 pub mod knowledge_audit_functions;
 pub mod knowledge_functions;
+pub mod knowledge_readiness;
 pub mod knowledge_selection_functions;
 pub mod notification_functions;
 pub mod parent_scoped_functions;

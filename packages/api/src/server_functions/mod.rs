@@ -29,6 +29,7 @@ pub mod user_creation;
 pub mod user_functions;
 pub mod user_management;
 pub mod user_preferences_functions;
+pub mod user_provisioning;
 pub mod validation;
 
 // Keep these re-exports as they are types/models, not server functions

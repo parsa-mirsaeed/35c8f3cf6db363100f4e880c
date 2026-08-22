@@ -2,202 +2,154 @@ use api::models::user_preferences::UpdateNotificationPreferencesRequest;
 use api::server_functions::user_preferences_functions::{
     get_user_preferences, update_notification_preferences,
 };
-use dioxus::prelude::*;
-
 use crate::i18n::use_locale;
+use dioxus::prelude::*;
 
 #[component]
 pub fn NotificationSettings() -> Element {
-    // State for notification preferences
-    let mut email_notifications = use_signal(|| true);
-    let mut push_notifications = use_signal(|| true);
-    let mut in_app_notifications = use_signal(|| true);
-    let mut notify_user_registered = use_signal(|| true);
-    let mut notify_class_created = use_signal(|| true);
-    let mut notify_assignment_submitted = use_signal(|| true);
-    let mut notify_report_generated = use_signal(|| true);
-    let mut notify_profile_change = use_signal(|| true);
-    let mut notify_system_announcements = use_signal(|| true);
-    let mut email_digest_frequency = use_signal(|| "daily".to_string());
-    let mut is_loading = use_signal(|| true);
-    let mut save_status = use_signal(|| String::new());
-    let mut is_success = use_signal(|| false);
     let locale = use_locale();
+    let mut in_app = use_signal(|| true);
+    let mut user_registered = use_signal(|| true);
+    let mut class_created = use_signal(|| true);
+    let mut assignment_submitted = use_signal(|| true);
+    let mut profile_change = use_signal(|| true);
+    let mut announcements = use_signal(|| true);
+    let mut loading = use_signal(|| true);
+    let mut load_failed = use_signal(|| false);
+    let mut saving = use_signal(|| false);
+    let mut notice = use_signal(|| None::<(bool, String)>);
+    let mut preferences = use_resource(move || async move { get_user_preferences().await });
 
-    // Fetch current preferences using the canonical authenticated session.
-    let _prefs_resource = use_resource(move || async move {
-        if let Ok(prefs) = get_user_preferences().await {
-            email_notifications.set(prefs.email_notifications);
-            push_notifications.set(prefs.push_notifications);
-            in_app_notifications.set(prefs.in_app_notifications);
-            notify_user_registered.set(prefs.notify_user_registered);
-            notify_class_created.set(prefs.notify_class_created);
-            notify_assignment_submitted.set(prefs.notify_assignment_submitted);
-            notify_report_generated.set(prefs.notify_report_generated);
-            notify_profile_change.set(prefs.notify_profile_change);
-            notify_system_announcements.set(prefs.notify_system_announcements);
-            email_digest_frequency.set(prefs.email_digest_frequency);
+    use_effect(move || {
+        match preferences.read().as_ref() {
+            Some(Ok(value)) => {
+                in_app.set(value.in_app_notifications);
+                user_registered.set(value.notify_user_registered);
+                class_created.set(value.notify_class_created);
+                assignment_submitted.set(value.notify_assignment_submitted);
+                profile_change.set(value.notify_profile_change);
+                announcements.set(value.notify_system_announcements);
+                load_failed.set(false);
+                loading.set(false);
+            }
+            Some(Err(_)) => {
+                load_failed.set(true);
+                loading.set(false);
+            }
+            None => loading.set(true),
         }
-        is_loading.set(false);
     });
 
-    rsx! {
-        div {
-            style: "background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);",
+    let save = move |_| {
+        if saving() {
+            return;
+        }
+        saving.set(true);
+        notice.set(None);
+        let request = UpdateNotificationPreferencesRequest {
+            email_notifications: Some(false),
+            push_notifications: Some(false),
+            in_app_notifications: Some(in_app()),
+            notify_user_registered: Some(user_registered()),
+            notify_class_created: Some(class_created()),
+            notify_assignment_submitted: Some(assignment_submitted()),
+            notify_report_generated: Some(false),
+            notify_profile_change: Some(profile_change()),
+            notify_system_announcements: Some(announcements()),
+            email_digest_frequency: Some("never".to_string()),
+        };
+        spawn(async move {
+            match update_notification_preferences(request).await {
+                Ok(_) => notice.set(Some((true, "In-app notification preferences saved.".to_string()))),
+                Err(_) => notice.set(Some((false, "Notification preferences could not be saved. Refresh and try again.".to_string()))),
+            }
+            saving.set(false);
+        });
+    };
 
-            h3 {
-                style: "font-size: 1.125rem; color: #1e293b; margin-bottom: 1.5rem; font-weight: 600;",
-                "{locale.t(\"school_manager.settings.notifications.title\")}"
+    rsx! {
+        div { class: "glass-card p-6 space-y-6",
+            div {
+                h3 { class: "text-lg font-semibold text-gray-900 dark:text-white",
+                    "{locale.t(\"school_manager.settings.notifications.title\")}"
+                }
+                p { class: "mt-1 text-sm text-gray-500 dark:text-gray-400",
+                    "This release supports in-app notifications. Email, push delivery, email digests, and report-generated alerts are not enabled and therefore are not configurable here."
+                }
             }
 
-            if is_loading() {
-                div { "{locale.t(\"school_manager.settings.notifications.loading\")}" }
+            if loading() {
+                div { class: "et-state-panel", "{locale.t(\"school_manager.settings.notifications.loading\")}" }
+            } else if load_failed() {
+                div { class: "et-state-panel et-state-panel--error",
+                    p { "Notification preferences could not be loaded." }
+                    button { class: "et-inline-action mt-3", onclick: move |_| preferences.restart(), "Try again" }
+                }
             } else {
-                div {
-                    style: "display: flex; flex-direction: column; gap: 2rem;",
-
-                    // Notification Channels
-                    div {
-                        h4 {
-                            style: "font-size: 1rem; color: #1e293b; margin-bottom: 1rem; font-weight: 600;",
-                            "{locale.t(\"school_manager.settings.notifications.channels\")}"
-                        }
-                        div {
-                            style: "display: flex; flex-direction: column; gap: 0.75rem;",
-
-                            ToggleSwitch {
-                                label: locale.t("school_manager.settings.notifications.email"),
-                                checked: email_notifications(),
-                                on_toggle: move |checked| email_notifications.set(checked)
-                            }
-                            ToggleSwitch {
-                                label: locale.t("school_manager.settings.notifications.push"),
-                                checked: push_notifications(),
-                                on_toggle: move |checked| push_notifications.set(checked)
-                            }
-                            ToggleSwitch {
-                                label: locale.t("school_manager.settings.notifications.in_app"),
-                                checked: in_app_notifications(),
-                                on_toggle: move |checked| in_app_notifications.set(checked)
-                            }
+                div { class: "space-y-6",
+                    section { class: "space-y-3",
+                        h4 { class: "font-semibold text-gray-900 dark:text-white", "Notification channel" }
+                        PreferenceSwitch {
+                            id: "notifications-in-app",
+                            label: locale.t("school_manager.settings.notifications.in_app"),
+                            description: "Show supported EduTalent notifications in the application.".to_string(),
+                            checked: in_app,
                         }
                     }
 
-                    // Notification Types
-                    div {
-                        h4 {
-                            style: "font-size: 1rem; color: #1e293b; margin-bottom: 1rem; font-weight: 600;",
-                            "{locale.t(\"school_manager.settings.notifications.types\")}"
+                    section { class: "space-y-3",
+                        h4 { class: "font-semibold text-gray-900 dark:text-white", "In-app event types" }
+                        PreferenceSwitch {
+                            id: "notifications-user-registration",
+                            label: locale.t("school_manager.settings.notifications.user_reg"),
+                            description: locale.t("school_manager.settings.notifications.user_reg_desc"),
+                            checked: user_registered,
                         }
-                        div {
-                            style: "display: flex; flex-direction: column; gap: 0.75rem;",
-
-                            ToggleSwitch {
-                                label: locale.t("school_manager.settings.notifications.user_reg"),
-                                description: locale.t("school_manager.settings.notifications.user_reg_desc"),
-                                checked: notify_user_registered(),
-                                on_toggle: move |checked| notify_user_registered.set(checked)
-                            }
-                            ToggleSwitch {
-                                label: locale.t("school_manager.settings.notifications.class_created"),
-                                description: locale.t("school_manager.settings.notifications.class_created_desc"),
-                                checked: notify_class_created(),
-                                on_toggle: move |checked| notify_class_created.set(checked)
-                            }
-                            ToggleSwitch {
-                                label: locale.t("school_manager.settings.notifications.assignment"),
-                                description: locale.t("school_manager.settings.notifications.assignment_desc"),
-                                checked: notify_assignment_submitted(),
-                                on_toggle: move |checked| notify_assignment_submitted.set(checked)
-                            }
-                            ToggleSwitch {
-                                label: locale.t("school_manager.settings.notifications.report"),
-                                description: locale.t("school_manager.settings.notifications.report_desc"),
-                                checked: notify_report_generated(),
-                                on_toggle: move |checked| notify_report_generated.set(checked)
-                            }
-                            ToggleSwitch {
-                                label: locale.t("school_manager.settings.notifications.profile_change"),
-                                description: locale.t("school_manager.settings.notifications.profile_change_desc"),
-                                checked: notify_profile_change(),
-                                on_toggle: move |checked| notify_profile_change.set(checked)
-                            }
-                            ToggleSwitch {
-                                label: locale.t("school_manager.settings.notifications.announcements"),
-                                description: locale.t("school_manager.settings.notifications.announcements_desc"),
-                                checked: notify_system_announcements(),
-                                on_toggle: move |checked| notify_system_announcements.set(checked)
-                            }
+                        PreferenceSwitch {
+                            id: "notifications-class-created",
+                            label: locale.t("school_manager.settings.notifications.class_created"),
+                            description: locale.t("school_manager.settings.notifications.class_created_desc"),
+                            checked: class_created,
+                        }
+                        PreferenceSwitch {
+                            id: "notifications-assignment-submitted",
+                            label: locale.t("school_manager.settings.notifications.assignment"),
+                            description: locale.t("school_manager.settings.notifications.assignment_desc"),
+                            checked: assignment_submitted,
+                        }
+                        PreferenceSwitch {
+                            id: "notifications-profile-change",
+                            label: locale.t("school_manager.settings.notifications.profile_change"),
+                            description: locale.t("school_manager.settings.notifications.profile_change_desc"),
+                            checked: profile_change,
+                        }
+                        PreferenceSwitch {
+                            id: "notifications-announcements",
+                            label: locale.t("school_manager.settings.notifications.announcements"),
+                            description: locale.t("school_manager.settings.notifications.announcements_desc"),
+                            checked: announcements,
                         }
                     }
 
-                    // Email Digest
-                    div {
-                        h4 {
-                            style: "font-size: 1rem; color: #1e293b; margin-bottom: 1rem; font-weight: 600;",
-                            "{locale.t(\"school_manager.settings.notifications.digest\")}"
-                        }
-                        select {
-                            style: "width: 100%; max-width: 300px; padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.875rem;",
-                            value: "{email_digest_frequency}",
-                            onchange: move |evt| email_digest_frequency.set(evt.value()),
-                            option { value: "never", "{locale.t(\"school_manager.settings.notifications.digest.never\")}" }
-                            option { value: "daily", "{locale.t(\"school_manager.settings.notifications.digest.daily\")}" }
-                            option { value: "weekly", "{locale.t(\"school_manager.settings.notifications.digest.weekly\")}" }
-                        }
-                    }
-
-                    // Save Status
-                    if !save_status().is_empty() {
+                    if let Some((success, message)) = notice() {
                         div {
-                            style: "padding: 0.75rem; border-radius: 8px; font-size: 0.875rem;",
-                            style: if is_success() {
-                                "background: #dcfce7; color: #166534;"
+                            class: if success {
+                                "rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-200"
                             } else {
-                                "background: #fee2e2; color: #991b1b;"
+                                "rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200"
                             },
-                            "{save_status}"
+                            role: "status",
+                            "{message}"
                         }
                     }
 
-                    // Save Button
-                    button {
-                        style: "background: #3b82f6; color: white; padding: 0.75rem 1.5rem; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; transition: all 0.2s;",
-                        onclick: move |_| {
-                            let locale_action = locale.clone();
-                            spawn(async move {
-                                let request = UpdateNotificationPreferencesRequest {
-                                    email_notifications: Some(email_notifications()),
-                                    push_notifications: Some(push_notifications()),
-                                    in_app_notifications: Some(in_app_notifications()),
-                                    notify_user_registered: Some(notify_user_registered()),
-                                    notify_class_created: Some(notify_class_created()),
-                                    notify_assignment_submitted: Some(notify_assignment_submitted()),
-                                    notify_report_generated: Some(notify_report_generated()),
-                                    notify_profile_change: Some(notify_profile_change()),
-                                    notify_system_announcements: Some(notify_system_announcements()),
-                                    email_digest_frequency: Some(email_digest_frequency()),
-                                };
-
-                                match update_notification_preferences(request).await {
-                                    Ok(_) => {
-                                        save_status.set(locale_action.t(
-                                            "school_manager.settings.notifications.success",
-                                        ));
-                                        is_success.set(true);
-                                    }
-                                    Err(e) => {
-                                        save_status.set(
-                                            locale_action
-                                                .t("school_manager.settings.notifications.error")
-                                                .replace("{0}", &e.to_string()),
-                                        );
-                                        is_success.set(false);
-                                    }
-                                }
-                            });
-                        },
-                        "{locale.t(\"school_manager.settings.notifications.save_btn\")}"
+                    div { class: "flex justify-end",
+                        button {
+                            class: "rounded-lg bg-primary px-5 py-2.5 font-semibold text-white disabled:opacity-50",
+                            disabled: saving(),
+                            onclick: save,
+                            if saving() { "Saving…" } else { "{locale.t(\"school_manager.settings.notifications.save_btn\")}" }
+                        }
                     }
                 }
             }
@@ -205,48 +157,58 @@ pub fn NotificationSettings() -> Element {
     }
 }
 
-// Toggle Switch Component
 #[component]
-fn ToggleSwitch(
+fn PreferenceSwitch(
+    id: &'static str,
     label: String,
-    #[props(default = String::new())] description: String,
-    checked: bool,
-    on_toggle: EventHandler<bool>,
+    description: String,
+    checked: Signal<bool>,
 ) -> Element {
     rsx! {
-        div {
-            style: "display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 0;",
-
-            div {
-                style: "flex: 1;",
-                div {
-                    style: "font-weight: 500; color: #1e293b; font-size: 0.875rem;",
-                    "{label}"
-                }
+        div { class: "flex min-h-[56px] items-center justify-between gap-4 rounded-lg border border-gray-200 px-4 py-3 dark:border-gray-700",
+            div { class: "min-w-0",
+                label { r#for: "{id}", class: "block text-sm font-medium text-gray-900 dark:text-white", "{label}" }
                 if !description.is_empty() {
-                    div {
-                        style: "font-size: 0.75rem; color: #64748b; margin-top: 0.25rem;",
-                        "{description}"
-                    }
+                    p { id: "{id}-description", class: "mt-1 text-xs text-gray-500 dark:text-gray-400", "{description}" }
                 }
             }
-
             button {
-                style: if checked {
-                    "position: relative; width: 44px; height: 24px; border-radius: 12px; border: none; cursor: pointer; transition: all 0.2s; background: #3b82f6;"
+                id: "{id}",
+                r#type: "button",
+                role: "switch",
+                "aria-checked": checked(),
+                "aria-describedby": "{id}-description",
+                class: if checked() {
+                    "relative h-7 w-12 shrink-0 rounded-full bg-primary transition-colors"
                 } else {
-                    "position: relative; width: 44px; height: 24px; border-radius: 12px; border: none; cursor: pointer; transition: all 0.2s; background: #cbd5e1;"
+                    "relative h-7 w-12 shrink-0 rounded-full bg-gray-300 transition-colors dark:bg-gray-600"
                 },
-                onclick: move |_| on_toggle.call(!checked),
-
-                div {
-                    style: if checked {
-                        "position: absolute; top: 2px; left: 22px; width: 20px; height: 20px; background: white; border-radius: 50%; transition: all 0.2s;"
+                onclick: move |_| checked.set(!checked()),
+                span {
+                    class: if checked() {
+                        "absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-all start-6"
                     } else {
-                        "position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; background: white; border-radius: 50%; transition: all 0.2s;"
-                    }
+                        "absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-all start-1"
+                    },
+                    "aria-hidden": "true"
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unsupported_delivery_preferences_are_not_exposed() {
+        let source = include_str!("notifications.rs");
+        assert!(!source.contains("email_notifications.set"));
+        assert!(!source.contains("push_notifications.set"));
+        assert!(!source.contains("notify_report_generated.set"));
+        assert!(!source.contains("email_digest_frequency.set"));
+        assert!(source.contains("email_notifications: Some(false)"));
+        assert!(source.contains("push_notifications: Some(false)"));
+        assert!(source.contains("notify_report_generated: Some(false)"));
+        assert!(source.contains("email_digest_frequency: Some(\"never\".to_string())"));
     }
 }

@@ -276,6 +276,18 @@ fn ProvisioningForm(role: String) -> Element {
                             onclick: move |_| reveal_password.set(!reveal_password()),
                             if reveal_password() { "Hide" } else { "Reveal once" }
                         }
+                        {
+                            let temporary_password = result.temporary_password.clone();
+                            rsx! {
+                                button {
+                                    r#type: "button",
+                                    class: "rounded border border-amber-300 px-3 py-2 font-medium dark:border-amber-700",
+                                    "aria-label": "Copy temporary credential",
+                                    onclick: move |_| copy_temporary_credential(&temporary_password),
+                                    "Copy credential"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -352,6 +364,16 @@ fn ProvisioningForm(role: String) -> Element {
         }
     }
 }
+
+#[cfg(target_arch = "wasm32")]
+fn copy_temporary_credential(value: &str) {
+    if let Some(window) = web_sys::window() {
+        let _ = window.navigator().clipboard().write_text(value);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn copy_temporary_credential(_value: &str) {}
 
 #[component]
 fn TextField(

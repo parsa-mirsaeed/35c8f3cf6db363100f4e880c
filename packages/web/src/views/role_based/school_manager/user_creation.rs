@@ -576,14 +576,14 @@ mod tests {
     fn creation_hub_contains_no_fake_live_metrics() {
         let source = include_str!("user_creation.rs");
         for banned in [
-            "94%",
-            "new this week",
-            "pending approval",
-            "recent activity",
+            concat!("94", "%"),
+            concat!("new this", " week"),
+            concat!("pending", " approval"),
+            concat!("recent", " activity"),
         ] {
             assert!(!source.to_ascii_lowercase().contains(banned));
         }
-        assert!(!source.contains("CreateUserPayload"));
-        assert!(!source.contains("Uuid::new_v4().to_string()[..8]"));
+        assert!(!source.contains(concat!("CreateUser", "Payload")));
+        assert!(!source.contains(concat!("Uuid::new_v4().to_string()", "[..8]")));
     }
 }

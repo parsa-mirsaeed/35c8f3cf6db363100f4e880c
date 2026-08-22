@@ -8,7 +8,8 @@ use api::server_functions::assignment_functions::{
     CreateAssignmentPayload,
 };
 use api::server_functions::assignment_workflow::{
-    get_teacher_assignment_class_options, publish_assignment_guided, TeacherAssignmentClassOption,
+    get_teacher_assignment_class_options, publish_assignment_guided, PublishAssignmentOutcome,
+    TeacherAssignmentClassOption,
 };
 use api::server_functions::dashboard_functions::{
     get_class_materials_for_teacher, get_teacher_assignments, ClassMaterialInfo,
@@ -495,7 +496,11 @@ fn AssignmentDetailModal(
         let id = id_for_publish.clone();
         spawn(async move {
             match publish_assignment_guided(id).await {
-                Ok(_) => on_published.call(()),
+                Ok(PublishAssignmentOutcome::Published { .. }) => on_published.call(()),
+                Ok(PublishAssignmentOutcome::NeedsEnrollment { .. }) => {
+                    error.set(Some(no_eligible_students_message()));
+                    busy.set(false);
+                }
                 Err(err) => {
                     error.set(Some(publish_error_message(&err.to_string())));
                     busy.set(false);
@@ -552,10 +557,12 @@ fn AssignmentDetail(
     }
 }
 
+fn no_eligible_students_message() -> String {
+    "This assignment cannot be published because the class has no active enrolled students. Ask a School Manager to enroll at least one student, then try again.".to_string()
+}
+
 fn publish_error_message(raw: &str) -> String {
-    if raw.contains("assignment.no_eligible_students") {
-        "This assignment cannot be published because the class has no active enrolled students. Ask a School Manager to enroll at least one student, then try again.".to_string()
-    } else if raw.contains("assignment.publish_conflict") {
+    if raw.contains("assignment.publish_conflict") {
         "The assignment or class changed while publishing. Refresh the assignment and try again."
             .to_string()
     } else if raw.contains("assignment.not_found") || raw.contains("assignment.forbidden") {
@@ -571,7 +578,7 @@ mod tests {
 
     #[test]
     fn no_student_publish_state_is_actionable() {
-        let message = publish_error_message("assignment.no_eligible_students");
+        let message = no_eligible_students_message();
         assert!(message.contains("School Manager"));
         assert!(message.contains("active enrolled students"));
     }

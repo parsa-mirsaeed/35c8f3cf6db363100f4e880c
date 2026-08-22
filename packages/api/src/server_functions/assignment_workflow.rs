@@ -1,7 +1,7 @@
 //! UI-facing assignment workflow contracts.
 //!
 //! The existing authorized repository remains authoritative for mutation. This
-//! module adds stable domain precondition errors and a teacher-scoped class
+//! module adds stable domain precondition outcomes and a teacher-scoped class
 //! option query so the browser never depends on school-wide class data for an
 //! assignment form.
 
@@ -18,6 +18,12 @@ pub struct TeacherAssignmentClassOption {
     pub class_name: String,
     pub subject_id: String,
     pub subject_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PublishAssignmentOutcome {
+    Published { assignment: AssignmentResponse },
+    NeedsEnrollment { assignment_id: String },
 }
 
 #[server(endpoint = "assignments/form_classes")]
@@ -76,7 +82,7 @@ pub async fn get_teacher_assignment_class_options(
 #[server(endpoint = "assignments/publish_guided")]
 pub async fn publish_assignment_guided(
     assignment_id: String,
-) -> Result<AssignmentResponse, ServerFnError> {
+) -> Result<PublishAssignmentOutcome, ServerFnError> {
     #[cfg(feature = "server")]
     {
         let (user, pool) =
@@ -141,12 +147,12 @@ pub async fn publish_assignment_guided(
         })?;
 
         if eligible_count == 0 {
-            return Err(ServerFnError::new("assignment.no_eligible_students"));
+            return Ok(PublishAssignmentOutcome::NeedsEnrollment { assignment_id });
         }
 
         match crate::server_functions::assignment_functions::publish_assignment(assignment_id).await
         {
-            Ok(assignment) => Ok(assignment),
+            Ok(assignment) => Ok(PublishAssignmentOutcome::Published { assignment }),
             Err(error) => {
                 let text = error.to_string();
                 tracing::warn!(assignment_id = %assignment_uuid, error = %text, "guided assignment publish failed after preflight");
@@ -170,10 +176,12 @@ pub async fn publish_assignment_guided(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn publish_contract_uses_stable_domain_codes() {
+    fn publish_contract_uses_typed_expected_precondition_outcome() {
         let source = include_str!("assignment_workflow.rs");
-        assert!(source.contains("assignment.no_eligible_students"));
-        assert!(!source.contains("ServerFnError::new(\"Not found\")"));
+        let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+        assert!(production_source.contains("PublishAssignmentOutcome::NeedsEnrollment"));
+        assert!(!production_source.contains("ServerFnError::new(\"assignment.no_eligible_students\")"));
+        assert!(!production_source.contains("ServerFnError::new(\"Not found\")"));
     }
 
     #[test]

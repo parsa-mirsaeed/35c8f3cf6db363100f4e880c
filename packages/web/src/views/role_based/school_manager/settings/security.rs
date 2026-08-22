@@ -31,7 +31,7 @@ mod tests {
     #[test]
     fn security_ui_does_not_collect_an_unverified_current_password() {
         let source = include_str!("security.rs");
-        assert!(!source.contains("change_admin_password"));
-        assert!(!source.contains("current_password"));
+        assert!(!source.contains(concat!("change_admin", "_password")));
+        assert!(!source.contains(concat!("current", "_password")));
     }
 }

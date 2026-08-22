@@ -24,11 +24,8 @@ pub fn ParentDashboard() -> Element {
             {
                 rsx! { super::communication::CommunicationSection {} }
             }
-            _ => {
-                rsx! { ParentOverviewSection { on_navigate: move |next| active_section.set(next) } }
-            }
+            _ => rsx! { ParentOverviewSection { on_navigate: move |next| active_section.set(next) } },
         };
-
         rsx! {
             ResponsiveDashboardLayout {
                 user,
@@ -45,32 +42,12 @@ pub fn ParentDashboard() -> Element {
 #[component]
 pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
     let locale = use_locale();
-    let children = use_resource(move || async move { get_parent_children_scoped().await });
+    let mut children = use_resource(move || async move { get_parent_children_scoped().await });
     let is_fa = locale.current() == Locale::Fa;
     let intro = if is_fa {
-        "فرزندان و ثبت‌نام‌هایی را ببینید که این حساب مجاز به مشاهده آن‌هاست. قابلیت‌های تکمیل‌نشده تا زمان آماده‌شدن در این نما نمایش داده نمی‌شوند."
+        "فرزندان و ثبت‌نام‌هایی را ببینید که این حساب مجاز به مشاهده آن‌هاست. قابلیت‌های تکمیل‌نشده تا زمان آماده‌شدن نمایش داده نمی‌شوند."
     } else {
         "Review the children and enrollments this account is authorized to see. Incomplete capabilities remain hidden until they are ready."
-    };
-    let enrolled_classes_label = if is_fa {
-        "کلاس‌های ثبت‌نام‌شده"
-    } else {
-        "Enrolled classes"
-    };
-    let view_details = if is_fa {
-        "مشاهده جزئیات"
-    } else {
-        "View details"
-    };
-    let loading_family = if is_fa {
-        "در حال بارگذاری اطلاعات خانواده…"
-    } else {
-        "Loading family data…"
-    };
-    let failed_family = if is_fa {
-        "بارگذاری اطلاعات خانواده ناموفق بود."
-    } else {
-        "Unable to load family data."
     };
 
     rsx! {
@@ -80,11 +57,27 @@ pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                 p { class: "et-overview-copy", "{intro}" }
             }
 
-            match &*children.read() {
-                None => rsx! { div { class: "et-state-panel", "{loading_family}" } },
-                Some(Err(_)) => rsx! { div { class: "et-state-panel et-state-panel--error", "{failed_family}" } },
+            match children.read().as_ref() {
+                None => rsx! { div { class: "et-state-panel", if is_fa { "در حال بارگذاری اطلاعات خانواده…" } else { "Loading family data…" } } },
+                Some(Err(_)) => rsx! {
+                    div { class: "et-state-panel et-state-panel--error",
+                        p { if is_fa { "بارگذاری اطلاعات خانواده ناموفق بود." } else { "Family data could not be loaded." } }
+                        button { class: "et-inline-action mt-3", onclick: move |_| children.restart(), if is_fa { "تلاش دوباره" } else { "Try again" } }
+                    }
+                },
                 Some(Ok(items)) if items.is_empty() => rsx! {
-                    div { class: "et-state-panel", "{locale.t(\"parent.dashboard.empty.no_children\")}" }
+                    div { class: "et-state-panel",
+                        h3 { class: "font-semibold text-gray-900 dark:text-white",
+                            if is_fa { "هنوز دانش‌آموزی به این حساب والد متصل نشده است" } else { "No student is linked to this parent account yet" }
+                        }
+                        p { class: "mt-2",
+                            if is_fa {
+                                "مدیریت مدرسه باید یک دانش‌آموز را به این حساب متصل کند تا اطلاعات تحصیلی نمایش داده شود."
+                            } else {
+                                "School administration must link a student before academic information appears."
+                            }
+                        }
+                    }
                 },
                 Some(Ok(items)) => {
                     let total_classes: i64 = items.iter().map(|child| child.enrolled_classes).sum();
@@ -95,28 +88,26 @@ pub fn ParentOverviewSection(on_navigate: EventHandler<String>) -> Element {
                                 p { class: "et-stat-value", "{items.len()}" }
                             }
                             div { class: "et-stat",
-                                p { class: "et-stat-label", "{enrolled_classes_label}" }
+                                p { class: "et-stat-label", if is_fa { "کلاس‌های ثبت‌نام‌شده" } else { "Enrolled classes" } }
                                 p { class: "et-stat-value", "{total_classes}" }
                             }
                         }
-
                         section { class: "et-section",
                             div { class: "et-section-heading",
                                 h3 { class: "et-section-title", "{locale.t(\"nav.children\")}" }
-                                button {
-                                    class: "et-inline-action",
-                                    onclick: move |_| on_navigate.call("children".to_string()),
-                                    "{view_details}"
-                                }
+                                button { class: "et-inline-action", onclick: move |_| on_navigate.call("children".to_string()), if is_fa { "مشاهده جزئیات" } else { "View details" } }
                             }
                             div { class: "et-panel",
-                                for child in items.iter() {
+                                for child in items {
                                     div { key: "{child.id}", class: "et-list-row",
                                         div { class: "et-list-primary",
                                             h4 { class: "et-list-title", "{child.name}" }
-                                            p { class: "et-list-meta", "{child.grade_level}" }
+                                            p { class: "et-list-meta",
+                                                if let Some(grade) = child.grade_level.as_ref() { "{grade}" }
+                                                else if is_fa { "پایه ثبت نشده" } else { "Grade not recorded" }
+                                            }
                                         }
-                                        div { class: "et-list-aside", "{child.enrolled_classes} {enrolled_classes_label}" }
+                                        div { class: "et-list-aside", "{child.enrolled_classes}" }
                                     }
                                 }
                             }

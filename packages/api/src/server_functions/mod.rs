@@ -8,6 +8,7 @@ pub mod admin_functions;
 pub mod admin_knowledge_review_functions;
 pub mod assignment_functions;
 pub mod assignment_personalization_functions;
+pub mod assignment_workflow;
 pub mod auth_functions;
 pub mod class_functions;
 pub mod class_section_functions;

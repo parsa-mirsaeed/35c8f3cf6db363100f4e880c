@@ -207,10 +207,10 @@ mod tests {
     #[test]
     fn unsupported_delivery_preferences_are_not_exposed() {
         let source = include_str!("notifications.rs");
-        assert!(!source.contains("email_notifications.set"));
-        assert!(!source.contains("push_notifications.set"));
-        assert!(!source.contains("notify_report_generated.set"));
-        assert!(!source.contains("email_digest_frequency.set"));
+        assert!(!source.contains(concat!("email_notifications", ".set")));
+        assert!(!source.contains(concat!("push_notifications", ".set")));
+        assert!(!source.contains(concat!("notify_report_generated", ".set")));
+        assert!(!source.contains(concat!("email_digest_frequency", ".set")));
         assert!(source.contains("email_notifications: Some(false)"));
         assert!(source.contains("push_notifications: Some(false)"));
         assert!(source.contains("notify_report_generated: Some(false)"));

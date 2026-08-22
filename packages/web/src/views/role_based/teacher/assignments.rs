@@ -579,6 +579,6 @@ mod tests {
     #[test]
     fn assignment_cards_do_not_invent_points() {
         let source = include_str!("assignments.rs");
-        assert!(!source.contains("100{locale.t"));
+        assert!(!source.contains(concat!("100{", "locale.t")));
     }
 }

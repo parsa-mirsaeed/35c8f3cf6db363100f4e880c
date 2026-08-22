@@ -300,7 +300,7 @@ pub async fn provision_school_user(
             .bind(&email)
             .bind(role_id)
             .bind(school_id)
-            .bind(request.metadata.clone())
+            .bind(request.metadata.clone().map(sqlx::types::Json))
             .execute(&mut *tx)
             .await?;
 

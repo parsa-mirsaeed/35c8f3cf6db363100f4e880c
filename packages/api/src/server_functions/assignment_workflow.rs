@@ -180,7 +180,9 @@ mod tests {
         let source = include_str!("assignment_workflow.rs");
         let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
         assert!(production_source.contains("PublishAssignmentOutcome::NeedsEnrollment"));
-        assert!(!production_source.contains("ServerFnError::new(\"assignment.no_eligible_students\")"));
+        assert!(
+            !production_source.contains("ServerFnError::new(\"assignment.no_eligible_students\")")
+        );
         assert!(!production_source.contains("ServerFnError::new(\"Not found\")"));
     }
 

@@ -24,7 +24,9 @@ pub fn ParentDashboard() -> Element {
             {
                 rsx! { super::communication::CommunicationSection {} }
             }
-            _ => rsx! { ParentOverviewSection { on_navigate: move |next| active_section.set(next) } },
+            _ => {
+                rsx! { ParentOverviewSection { on_navigate: move |next| active_section.set(next) } }
+            }
         };
         rsx! {
             ResponsiveDashboardLayout {

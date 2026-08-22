@@ -91,7 +91,9 @@ fn normalize_notification_request(
         ));
     }
     if request.notify_report_generated == Some(true) {
-        return Err(ServerFnError::new("preferences.report_notification_unsupported"));
+        return Err(ServerFnError::new(
+            "preferences.report_notification_unsupported",
+        ));
     }
     if request
         .email_digest_frequency

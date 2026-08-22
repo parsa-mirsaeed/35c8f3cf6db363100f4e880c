@@ -33,7 +33,8 @@ async fn parent_actor(
     if user.role != "Parent" {
         return Err(ServerFnError::new("parent.forbidden"));
     }
-    let user_id = Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("parent.invalid_session"))?;
+    let user_id =
+        Uuid::parse_str(&user.id).map_err(|_| ServerFnError::new("parent.invalid_session"))?;
     Ok((user_id, pool))
 }
 
@@ -93,7 +94,8 @@ pub async fn get_child_grades_for_parent_scoped(
     #[cfg(feature = "server")]
     {
         let (parent_user_id, pool) = parent_actor().await?;
-        let child_id = Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("parent.child_id_invalid"))?;
+        let child_id = Uuid::parse_str(&child_id)
+            .map_err(|_| ServerFnError::new("parent.child_id_invalid"))?;
         require_child_owner(&pool, parent_user_id, child_id).await?;
 
         let rows = sqlx::query(
@@ -152,7 +154,8 @@ pub async fn get_child_assignments_for_parent_scoped(
     #[cfg(feature = "server")]
     {
         let (parent_user_id, pool) = parent_actor().await?;
-        let child_id = Uuid::parse_str(&child_id).map_err(|_| ServerFnError::new("parent.child_id_invalid"))?;
+        let child_id = Uuid::parse_str(&child_id)
+            .map_err(|_| ServerFnError::new("parent.child_id_invalid"))?;
         require_child_owner(&pool, parent_user_id, child_id).await?;
 
         let rows = sqlx::query(

@@ -20,11 +20,11 @@ pub enum KnowledgeStorageReadiness {
 }
 
 #[server(endpoint = "manager/knowledge-storage/readiness")]
-pub async fn get_knowledge_storage_readiness(
-) -> Result<KnowledgeStorageReadiness, ServerFnError> {
+pub async fn get_knowledge_storage_readiness() -> Result<KnowledgeStorageReadiness, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let (user, pool) = crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
+        let (user, pool) =
+            crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
         if user.role != "SchoolManager" {
             return Err(ServerFnError::new("knowledge.forbidden"));
         }

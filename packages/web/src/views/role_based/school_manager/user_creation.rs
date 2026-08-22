@@ -1,9 +1,9 @@
+use crate::i18n::use_locale;
 use api::server_functions::class_functions::{get_school_classes, get_subjects};
 use api::server_functions::user_management::{get_school_users, UserListItem};
 use api::server_functions::user_provisioning::{
     provision_school_user, ProvisionSchoolUserRequest, ProvisionSchoolUserResponse,
 };
-use crate::i18n::use_locale;
 use dioxus::prelude::*;
 use serde_json::json;
 
@@ -94,7 +94,12 @@ fn ProvisioningForm(role: String) -> Element {
     let classes = use_resource(move || async move { get_school_classes().await });
     let subjects = use_resource(move || async move { get_subjects().await });
     let students = use_resource(move || async move {
-        get_school_users(Some("Student".to_string()), Some("active".to_string()), None).await
+        get_school_users(
+            Some("Student".to_string()),
+            Some("active".to_string()),
+            None,
+        )
+        .await
     });
     let parents = use_resource(move || async move {
         get_school_users(Some("Parent".to_string()), Some("active".to_string()), None).await
@@ -174,19 +179,33 @@ fn ProvisioningForm(role: String) -> Element {
             role: role_value.clone(),
             metadata: Some(metadata),
             talent_profile_ref: None,
-            teacher_class_ids: if role_value == "Teacher" { teacher_class_ids() } else { vec![] },
-            teacher_subject_ids: if role_value == "Teacher" { teacher_subject_ids() } else { vec![] },
+            teacher_class_ids: if role_value == "Teacher" {
+                teacher_class_ids()
+            } else {
+                vec![]
+            },
+            teacher_subject_ids: if role_value == "Teacher" {
+                teacher_subject_ids()
+            } else {
+                vec![]
+            },
             student_class_id: if role_value == "Student" && !student_class_id().is_empty() {
                 Some(student_class_id())
             } else {
                 None
             },
-            student_parent_user_id: if role_value == "Student" && !student_parent_user_id().is_empty() {
+            student_parent_user_id: if role_value == "Student"
+                && !student_parent_user_id().is_empty()
+            {
                 Some(student_parent_user_id())
             } else {
                 None
             },
-            parent_student_user_ids: if role_value == "Parent" { parent_student_user_ids() } else { vec![] },
+            parent_student_user_ids: if role_value == "Parent" {
+                parent_student_user_ids()
+            } else {
+                vec![]
+            },
         };
 
         is_submitting.set(true);
@@ -467,27 +486,45 @@ fn GuidePanel(role: String) -> Element {
     }
 }
 
-fn class_options(resource: &Resource<Result<Vec<api::server_functions::class_functions::ClassSectionResponse>, ServerFnError>>) -> Vec<(String, String)> {
+fn class_options(
+    resource: &Resource<
+        Result<Vec<api::server_functions::class_functions::ClassSectionResponse>, ServerFnError>,
+    >,
+) -> Vec<(String, String)> {
     match resource.read().as_ref() {
         Some(Ok(items)) => items
             .iter()
-            .map(|item| (item.id.clone(), format!("{} · {}", item.name, item.subject_name)))
+            .map(|item| {
+                (
+                    item.id.clone(),
+                    format!("{} · {}", item.name, item.subject_name),
+                )
+            })
             .collect(),
         _ => Vec::new(),
     }
 }
 
-fn subject_options(resource: &Resource<Result<Vec<api::models::Subject>, ServerFnError>>) -> Vec<(String, String)> {
+fn subject_options(
+    resource: &Resource<Result<Vec<api::models::Subject>, ServerFnError>>,
+) -> Vec<(String, String)> {
     match resource.read().as_ref() {
         Some(Ok(items)) => items
             .iter()
-            .map(|item| (item.id.to_string(), format!("{} ({})", item.name, item.code)))
+            .map(|item| {
+                (
+                    item.id.to_string(),
+                    format!("{} ({})", item.name, item.code),
+                )
+            })
             .collect(),
         _ => Vec::new(),
     }
 }
 
-fn user_options(resource: &Resource<Result<Vec<UserListItem>, ServerFnError>>) -> Vec<(String, String)> {
+fn user_options(
+    resource: &Resource<Result<Vec<UserListItem>, ServerFnError>>,
+) -> Vec<(String, String)> {
     match resource.read().as_ref() {
         Some(Ok(items)) => items
             .iter()
@@ -517,7 +554,8 @@ fn user_error_message(raw: &str) -> String {
     if raw.contains("user.duplicate_email") {
         "That email is already in use.".to_string()
     } else if raw.contains("user.student_relationship_conflict") {
-        "One of the selected students is unavailable or is already linked to another parent.".to_string()
+        "One of the selected students is unavailable or is already linked to another parent."
+            .to_string()
     } else if raw.contains("user.class_outside_school")
         || raw.contains("user.parent_outside_school")
         || raw.contains("user.subject_invalid")
@@ -537,7 +575,12 @@ mod tests {
     #[test]
     fn creation_hub_contains_no_fake_live_metrics() {
         let source = include_str!("user_creation.rs");
-        for banned in ["94%", "new this week", "pending approval", "recent activity"] {
+        for banned in [
+            "94%",
+            "new this week",
+            "pending approval",
+            "recent activity",
+        ] {
             assert!(!source.to_ascii_lowercase().contains(banned));
         }
         assert!(!source.contains("CreateUserPayload"));

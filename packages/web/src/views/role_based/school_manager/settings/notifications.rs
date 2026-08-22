@@ -1,8 +1,8 @@
+use crate::i18n::use_locale;
 use api::models::user_preferences::UpdateNotificationPreferencesRequest;
 use api::server_functions::user_preferences_functions::{
     get_user_preferences, update_notification_preferences,
 };
-use crate::i18n::use_locale;
 use dioxus::prelude::*;
 
 #[component]
@@ -20,24 +20,22 @@ pub fn NotificationSettings() -> Element {
     let mut notice = use_signal(|| None::<(bool, String)>);
     let mut preferences = use_resource(move || async move { get_user_preferences().await });
 
-    use_effect(move || {
-        match preferences.read().as_ref() {
-            Some(Ok(value)) => {
-                in_app.set(value.in_app_notifications);
-                user_registered.set(value.notify_user_registered);
-                class_created.set(value.notify_class_created);
-                assignment_submitted.set(value.notify_assignment_submitted);
-                profile_change.set(value.notify_profile_change);
-                announcements.set(value.notify_system_announcements);
-                load_failed.set(false);
-                loading.set(false);
-            }
-            Some(Err(_)) => {
-                load_failed.set(true);
-                loading.set(false);
-            }
-            None => loading.set(true),
+    use_effect(move || match preferences.read().as_ref() {
+        Some(Ok(value)) => {
+            in_app.set(value.in_app_notifications);
+            user_registered.set(value.notify_user_registered);
+            class_created.set(value.notify_class_created);
+            assignment_submitted.set(value.notify_assignment_submitted);
+            profile_change.set(value.notify_profile_change);
+            announcements.set(value.notify_system_announcements);
+            load_failed.set(false);
+            loading.set(false);
         }
+        Some(Err(_)) => {
+            load_failed.set(true);
+            loading.set(false);
+        }
+        None => loading.set(true),
     });
 
     let save = move |_| {
@@ -60,8 +58,15 @@ pub fn NotificationSettings() -> Element {
         };
         spawn(async move {
             match update_notification_preferences(request).await {
-                Ok(_) => notice.set(Some((true, "In-app notification preferences saved.".to_string()))),
-                Err(_) => notice.set(Some((false, "Notification preferences could not be saved. Refresh and try again.".to_string()))),
+                Ok(_) => notice.set(Some((
+                    true,
+                    "In-app notification preferences saved.".to_string(),
+                ))),
+                Err(_) => notice.set(Some((
+                    false,
+                    "Notification preferences could not be saved. Refresh and try again."
+                        .to_string(),
+                ))),
             }
             saving.set(false);
         });

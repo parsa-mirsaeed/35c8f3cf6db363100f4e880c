@@ -1,20 +1,19 @@
 //! Teacher assignment workflow with truthful publish preconditions.
 
+use crate::i18n::use_locale;
+use crate::views::role_based::components::DashboardSection;
+use crate::views::role_based::shared::common::Modal;
 use api::server_functions::assignment_functions::{
     create_assignment, delete_assignment, get_assignment_by_id, AssignmentResponse,
     CreateAssignmentPayload,
 };
 use api::server_functions::assignment_workflow::{
-    get_teacher_assignment_class_options, publish_assignment_guided,
-    TeacherAssignmentClassOption,
+    get_teacher_assignment_class_options, publish_assignment_guided, TeacherAssignmentClassOption,
 };
 use api::server_functions::dashboard_functions::{
     get_class_materials_for_teacher, get_teacher_assignments, ClassMaterialInfo,
     TeacherAssignmentInfo,
 };
-use crate::i18n::use_locale;
-use crate::views::role_based::components::DashboardSection;
-use crate::views::role_based::shared::common::Modal;
 use dioxus::prelude::*;
 
 #[component]
@@ -298,7 +297,9 @@ fn CreateAssignmentModal(on_close: EventHandler, on_created: EventHandler) -> El
             || subject_id().is_empty()
             || due_date().is_empty()
         {
-            error.set(Some("Title, class, due date, and instructions are required.".to_string()));
+            error.set(Some(
+                "Title, class, due date, and instructions are required.".to_string(),
+            ));
             return;
         }
 
@@ -322,7 +323,11 @@ fn CreateAssignmentModal(on_close: EventHandler, on_created: EventHandler) -> El
             title: title().trim().to_string(),
             body: body().trim().to_string(),
             due_at,
-            material_ids: if material_ids().is_empty() { None } else { Some(material_ids()) },
+            material_ids: if material_ids().is_empty() {
+                None
+            } else {
+                Some(material_ids())
+            },
         };
 
         busy.set(true);
@@ -331,7 +336,10 @@ fn CreateAssignmentModal(on_close: EventHandler, on_created: EventHandler) -> El
             match create_assignment(payload).await {
                 Ok(_) => on_created.call(()),
                 Err(_) => {
-                    error.set(Some("The draft could not be created. Check the class and try again.".to_string()));
+                    error.set(Some(
+                        "The draft could not be created. Check the class and try again."
+                            .to_string(),
+                    ));
                     busy.set(false);
                 }
             }
@@ -519,7 +527,11 @@ fn AssignmentDetailModal(
 }
 
 #[component]
-fn AssignmentDetail(item: AssignmentResponse, busy: Signal<bool>, on_publish: EventHandler) -> Element {
+fn AssignmentDetail(
+    item: AssignmentResponse,
+    busy: Signal<bool>,
+    on_publish: EventHandler,
+) -> Element {
     rsx! {
         div { class: "space-y-5",
             div {
@@ -544,7 +556,8 @@ fn publish_error_message(raw: &str) -> String {
     if raw.contains("assignment.no_eligible_students") {
         "This assignment cannot be published because the class has no active enrolled students. Ask a School Manager to enroll at least one student, then try again.".to_string()
     } else if raw.contains("assignment.publish_conflict") {
-        "The assignment or class changed while publishing. Refresh the assignment and try again.".to_string()
+        "The assignment or class changed while publishing. Refresh the assignment and try again."
+            .to_string()
     } else if raw.contains("assignment.not_found") || raw.contains("assignment.forbidden") {
         "This assignment is no longer available to your teacher account.".to_string()
     } else {

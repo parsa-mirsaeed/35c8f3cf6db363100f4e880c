@@ -1,5 +1,8 @@
 //! Student assignments with truthful optional values and retry-safe submission UI.
 
+use crate::i18n::use_locale;
+use crate::views::role_based::components::DashboardSection;
+use crate::views::role_based::shared::common::Modal;
 use api::server_functions::assignment_functions::{
     get_personalized_assignment, PersonalizedAssignmentResponse,
 };
@@ -7,9 +10,6 @@ use api::server_functions::dashboard_functions::{get_student_assignments, Studen
 use api::server_functions::submission_functions::{
     get_submission_for_assignment, submit_student_assignment, StudentSubmission,
 };
-use crate::i18n::use_locale;
-use crate::views::role_based::components::DashboardSection;
-use crate::views::role_based::shared::common::Modal;
 use dioxus::prelude::*;
 
 #[component]
@@ -254,7 +254,11 @@ fn AssignmentWorkModal(
     });
 
     if !initialized() {
-        if let Some(Ok(Some(StudentSubmission { content: existing_content, .. }))) = existing.read().as_ref() {
+        if let Some(Ok(Some(StudentSubmission {
+            content: existing_content,
+            ..
+        }))) = existing.read().as_ref()
+        {
             content.set(existing_content.clone());
             initialized.set(true);
         } else if matches!(existing.read().as_ref(), Some(Ok(None))) {
@@ -278,7 +282,9 @@ fn AssignmentWorkModal(
             match submit_student_assignment(id, text).await {
                 Ok(_) => on_saved.call(()),
                 Err(_) => {
-                    error.set(Some("Your work was not saved. The text is still here; try again.".to_string()));
+                    error.set(Some(
+                        "Your work was not saved. The text is still here; try again.".to_string(),
+                    ));
                     busy.set(false);
                 }
             }

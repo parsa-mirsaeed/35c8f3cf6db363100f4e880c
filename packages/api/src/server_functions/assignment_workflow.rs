@@ -25,7 +25,8 @@ pub async fn get_teacher_assignment_class_options(
 ) -> Result<Vec<TeacherAssignmentClassOption>, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let (user, pool) = crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
+        let (user, pool) =
+            crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
         if user.role != "Teacher" {
             return Err(ServerFnError::new("assignment.forbidden"));
         }
@@ -78,7 +79,8 @@ pub async fn publish_assignment_guided(
 ) -> Result<AssignmentResponse, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let (user, pool) = crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
+        let (user, pool) =
+            crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
         if user.role != "Teacher" {
             return Err(ServerFnError::new("assignment.forbidden"));
         }
@@ -142,7 +144,8 @@ pub async fn publish_assignment_guided(
             return Err(ServerFnError::new("assignment.no_eligible_students"));
         }
 
-        match crate::server_functions::assignment_functions::publish_assignment(assignment_id).await {
+        match crate::server_functions::assignment_functions::publish_assignment(assignment_id).await
+        {
             Ok(assignment) => Ok(assignment),
             Err(error) => {
                 let text = error.to_string();

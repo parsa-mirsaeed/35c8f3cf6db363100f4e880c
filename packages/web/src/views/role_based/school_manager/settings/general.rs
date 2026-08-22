@@ -1,8 +1,8 @@
+use crate::i18n::{use_locale, Locale};
 use api::models::user_preferences::UpdateGeneralSettingsRequest;
 use api::server_functions::user_preferences_functions::{
     get_user_preferences, update_general_settings,
 };
-use crate::i18n::{use_locale, Locale};
 use dioxus::prelude::*;
 
 #[component]
@@ -19,22 +19,20 @@ pub fn GeneralSettings() -> Element {
 
     let mut preferences = use_resource(move || async move { get_user_preferences().await });
 
-    use_effect(move || {
-        match preferences.read().as_ref() {
-            Some(Ok(value)) => {
-                timezone.set(value.timezone.clone());
-                language.set(value.language.clone());
-                date_format.set(value.date_format.clone());
-                time_format.set(value.time_format.clone());
-                load_failed.set(false);
-                loading.set(false);
-            }
-            Some(Err(_)) => {
-                load_failed.set(true);
-                loading.set(false);
-            }
-            None => loading.set(true),
+    use_effect(move || match preferences.read().as_ref() {
+        Some(Ok(value)) => {
+            timezone.set(value.timezone.clone());
+            language.set(value.language.clone());
+            date_format.set(value.date_format.clone());
+            time_format.set(value.time_format.clone());
+            load_failed.set(false);
+            loading.set(false);
         }
+        Some(Err(_)) => {
+            load_failed.set(true);
+            loading.set(false);
+        }
+        None => loading.set(true),
     });
 
     let save = move |_| {
@@ -210,8 +208,17 @@ mod tests {
 
     #[test]
     fn language_options_match_actual_locale_enum() {
-        let values = locale_options().into_iter().map(|item| item.0).collect::<Vec<_>>();
-        assert_eq!(values, Locale::all().iter().map(|locale| locale.code().to_string()).collect::<Vec<_>>());
+        let values = locale_options()
+            .into_iter()
+            .map(|item| item.0)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            Locale::all()
+                .iter()
+                .map(|locale| locale.code().to_string())
+                .collect::<Vec<_>>()
+        );
         assert!(!values.contains(&"es".to_string()));
         assert!(!values.contains(&"ar".to_string()));
     }

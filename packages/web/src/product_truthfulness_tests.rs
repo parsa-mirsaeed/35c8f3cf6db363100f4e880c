@@ -149,8 +149,15 @@ mod tests {
         assert!(!source.contains("CreateUserPayload"));
         assert!(!source.contains("create_user("));
         assert!(!source.contains("Uuid::new_v4"));
-        for fake_live_value in ["94%", "Recent activity", "new this week", "pending approval"] {
-            assert!(!source.to_ascii_lowercase().contains(&fake_live_value.to_ascii_lowercase()));
+        for fake_live_value in [
+            "94%",
+            "Recent activity",
+            "new this week",
+            "pending approval",
+        ] {
+            assert!(!source
+                .to_ascii_lowercase()
+                .contains(&fake_live_value.to_ascii_lowercase()));
         }
     }
 

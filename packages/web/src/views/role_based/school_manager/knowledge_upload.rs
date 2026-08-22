@@ -60,13 +60,15 @@ pub fn ManagerKnowledgeUploadSection() -> Element {
                 busy.set(false);
                 notice.set(Some((
                     false,
-                    "The upload form could not be read. Refresh the page and try again.".to_string(),
+                    "The upload form could not be read. Refresh the page and try again."
+                        .to_string(),
                 )));
                 return;
             };
 
             spawn(async move {
-                let response = Request::post("/api/manager/knowledge-submissions/upload").body(form);
+                let response =
+                    Request::post("/api/manager/knowledge-submissions/upload").body(form);
                 let response = match response {
                     Ok(request) => request.send().await,
                     Err(_) => {
@@ -264,7 +266,9 @@ fn UploadTextField(
 
 #[component]
 fn SubmissionList(
-    resource: Resource<Result<Vec<api::server_functions::knowledge_functions::KnowledgeAssetDto>, ServerFnError>>,
+    resource: Resource<
+        Result<Vec<api::server_functions::knowledge_functions::KnowledgeAssetDto>, ServerFnError>,
+    >,
 ) -> Element {
     rsx! {
         div { class: "space-y-4",

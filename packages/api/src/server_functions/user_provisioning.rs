@@ -10,11 +10,8 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
 use {
-    crate::app_state::extract_server_state,
-    crate::domain::UserId,
-    crate::services::supabase_auth::SupabaseAdminService,
-    sqlx::Row,
-    uuid::Uuid,
+    crate::app_state::extract_server_state, crate::domain::UserId,
+    crate::services::supabase_auth::SupabaseAdminService, sqlx::Row, uuid::Uuid,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,7 +68,8 @@ pub async fn provision_school_user(
 ) -> Result<ProvisionSchoolUserResponse, ServerFnError> {
     #[cfg(feature = "server")]
     {
-        let (actor, pool) = crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
+        let (actor, pool) =
+            crate::server_functions::rls_helpers::extract_user_with_full_rls().await?;
         if actor.role != "SchoolManager" {
             return Err(ServerFnError::new("user.forbidden"));
         }
@@ -93,8 +91,8 @@ pub async fn provision_school_user(
             }
         }
 
-        let actor_id = Uuid::parse_str(&actor.id)
-            .map_err(|_| ServerFnError::new("user.invalid_session"))?;
+        let actor_id =
+            Uuid::parse_str(&actor.id).map_err(|_| ServerFnError::new("user.invalid_session"))?;
         let school_id = sqlx::query_scalar::<_, Uuid>(
             "SELECT school_id FROM users WHERE id = $1 AND is_active = TRUE",
         )
@@ -121,26 +119,24 @@ pub async fn provision_school_user(
             return Err(ServerFnError::new("user.duplicate_email"));
         }
 
-        let role_id = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM roles WHERE name::text = $1",
-        )
-        .bind(role.as_str())
-        .fetch_optional(&*pool)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, role = role.as_str(), "provisioning role lookup failed");
-            ServerFnError::new("user.role_unavailable")
-        })?
-        .ok_or_else(|| ServerFnError::new("user.role_unavailable"))?;
+        let role_id = sqlx::query_scalar::<_, Uuid>("SELECT id FROM roles WHERE name::text = $1")
+            .bind(role.as_str())
+            .fetch_optional(&*pool)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, role = role.as_str(), "provisioning role lookup failed");
+                ServerFnError::new("user.role_unavailable")
+            })?
+            .ok_or_else(|| ServerFnError::new("user.role_unavailable"))?;
 
-        let teacher_class_ids = parse_uuid_list(&request.teacher_class_ids, "user.class_id_invalid")?;
-        let teacher_subject_ids = parse_uuid_list(&request.teacher_subject_ids, "user.subject_id_invalid")?;
+        let teacher_class_ids =
+            parse_uuid_list(&request.teacher_class_ids, "user.class_id_invalid")?;
+        let teacher_subject_ids =
+            parse_uuid_list(&request.teacher_subject_ids, "user.subject_id_invalid")?;
         let parent_student_user_ids =
             parse_uuid_list(&request.parent_student_user_ids, "user.student_id_invalid")?;
-        let student_class_id = parse_optional_uuid(
-            request.student_class_id.as_deref(),
-            "user.class_id_invalid",
-        )?;
+        let student_class_id =
+            parse_optional_uuid(request.student_class_id.as_deref(), "user.class_id_invalid")?;
         let student_parent_user_id = parse_optional_uuid(
             request.student_parent_user_id.as_deref(),
             "user.parent_id_invalid",
@@ -495,9 +491,18 @@ mod tests {
 
     #[test]
     fn provisioning_role_allowlist_excludes_privileged_roles() {
-        assert_eq!(ProvisionableRole::parse("Teacher"), Some(ProvisionableRole::Teacher));
-        assert_eq!(ProvisionableRole::parse("Student"), Some(ProvisionableRole::Student));
-        assert_eq!(ProvisionableRole::parse("Parent"), Some(ProvisionableRole::Parent));
+        assert_eq!(
+            ProvisionableRole::parse("Teacher"),
+            Some(ProvisionableRole::Teacher)
+        );
+        assert_eq!(
+            ProvisionableRole::parse("Student"),
+            Some(ProvisionableRole::Student)
+        );
+        assert_eq!(
+            ProvisionableRole::parse("Parent"),
+            Some(ProvisionableRole::Parent)
+        );
         for value in ["SchoolManager", "PlatformAdmin", "admin", "system_job", ""] {
             assert_eq!(ProvisionableRole::parse(value), None);
         }
